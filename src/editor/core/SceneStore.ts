@@ -15,7 +15,7 @@ class SceneStore {
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color(0x222222);
         
-        // Инициализировать начальный куб
+        // Initialize initial cube
         this.createCube();
     }
 

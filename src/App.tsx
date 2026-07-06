@@ -9,7 +9,7 @@ export default function App() {
     const [, setTick] = useState(0);
 
     useEffect(() => {
-        // Подписка на изменения
+        // Subscribe to scene changes
         const unsubscribe = sceneStore.subscribe(() => {
             setTick((t) => t + 1);
         });

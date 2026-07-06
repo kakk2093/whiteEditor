@@ -116,7 +116,7 @@ export default function Viewport() {
         // STORE SUBSCRIPTION
         // =====================
         const unsubscribe = sceneStore.subscribe(() => {
-            // Синхронизация выделенного объекта
+            // Sync selected object with transform gizmo
             if (sceneStore.selected && ctx.transform) {
                 ctx.transform.attach(sceneStore.selected);
             } else if (ctx.transform) {
