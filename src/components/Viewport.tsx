@@ -52,7 +52,8 @@ export default function Viewport() {
         // =====================
         // LIGHTS
         // =====================
-        sceneStore.scene.add(new THREE.AmbientLight(0xffffff, 2));
+        const ambient = new THREE.AmbientLight(0xffffff, 2);
+        sceneStore.scene.add(ambient);
 
         const dir = new THREE.DirectionalLight(0xffffff, 3);
         dir.position.set(5, 5, 5);
@@ -68,6 +69,12 @@ export default function Viewport() {
         ctx.transform.addEventListener("dragging-changed", (e) => {
             if (ctx.controls) ctx.controls.enabled = !e.value;
         });
+        // Keep the Inspector in sync while dragging the gizmo
+        ctx.transform.addEventListener("objectChange", () => sceneStore.updateObject());
+
+        // TransformControls is not an Object3D, its gizmo has to be added separately
+        const gizmo = ctx.transform.getHelper();
+        sceneStore.scene.add(gizmo);
 
         ctx.raycaster = new THREE.Raycaster();
         ctx.mouse = new THREE.Vector2();
@@ -75,8 +82,22 @@ export default function Viewport() {
         // =====================
         // SELECTION
         // =====================
-        const onMouseDown = (e: MouseEvent) => {
+        // Select on click only, so orbiting the camera or dragging the gizmo keeps the selection
+        const CLICK_THRESHOLD = 4;
+        let downX = 0;
+        let downY = 0;
+        let downOnGizmo = false;
+
+        const onPointerDown = (e: PointerEvent) => {
+            downX = e.clientX;
+            downY = e.clientY;
+            downOnGizmo = !!ctx.transform?.axis;
+        };
+
+        const onPointerUp = (e: PointerEvent) => {
             if (!ctx.renderer || !ctx.raycaster || !ctx.mouse || !ctx.camera) return;
+            if (e.button !== 0 || downOnGizmo) return;
+            if (Math.hypot(e.clientX - downX, e.clientY - downY) > CLICK_THRESHOLD) return;
 
             const rect = ctx.renderer.domElement.getBoundingClientRect();
             ctx.mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
@@ -96,7 +117,8 @@ export default function Viewport() {
             }
         };
 
-        ctx.renderer.domElement.addEventListener("mousedown", onMouseDown);
+        ctx.renderer.domElement.addEventListener("pointerdown", onPointerDown);
+        ctx.renderer.domElement.addEventListener("pointerup", onPointerUp);
 
         // =====================
         // RESIZE
@@ -143,8 +165,11 @@ export default function Viewport() {
         // =====================
         return () => {
             resizeObserver.disconnect();
-            ctx.renderer?.domElement.removeEventListener("mousedown", onMouseDown);
+            ctx.renderer?.domElement.removeEventListener("pointerdown", onPointerDown);
+            ctx.renderer?.domElement.removeEventListener("pointerup", onPointerUp);
             unsubscribe();
+
+            sceneStore.scene.remove(ambient, dir, gizmo);
 
             if (ctx.animationId) {
                 cancelAnimationFrame(ctx.animationId);
