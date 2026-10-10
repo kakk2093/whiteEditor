@@ -618,6 +618,12 @@ kbd {
     padding: 0 7px;
 }
 
+.viewport-tools .sep {
+    width: 1px;
+    margin: 3px 3px;
+    background: var(--border);
+}
+
 .viewport-hint {
     position: absolute;
     left: 10px;

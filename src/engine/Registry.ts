@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import type { Input } from "./input";
 import { applyMaterialData, createSharedMaterial } from "./materials";
 import type { MaterialData } from "./materials";
 import type { EntityData, Params } from "./types";
@@ -55,6 +56,8 @@ export interface BehaviorSelf<P = Params, S = unknown> {
     // The root of the running scene, e.g. for root.getObjectByName("Door")
     root: THREE.Object3D;
     registry: Registry;
+    // Keyboard and mouse: self.input.key("KeyW"), self.input.keyPressed("Space"), self.input.mouseButton()
+    input: Input;
     // Seconds since Play started
     time: number;
 }

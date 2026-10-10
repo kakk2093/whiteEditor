@@ -23,10 +23,15 @@ function onKeyDown(e: KeyboardEvent) {
     if ((e.ctrlKey || e.metaKey) && e.code === "KeyP") {
         e.preventDefault();
         if (!sceneStore.project) return;
-        if (sceneStore.playing) sceneStore.requestStop();
+        if (e.shiftKey) sceneStore.togglePause();
+        else if (e.altKey) sceneStore.step();
+        else if (sceneStore.playing) sceneStore.requestStop();
         else sceneStore.play();
         return;
     }
+
+    // In the Game view the keys belong to the scripts of the running scene
+    if (sceneStore.gameView) return;
 
     const target = e.target as HTMLElement;
     if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;

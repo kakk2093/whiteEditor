@@ -141,6 +141,15 @@ class SceneStore {
     // true while Stop is asking whether to keep the edits made during Play
     confirmingStop = false;
 
+    // The two views of a running scene, like Unity's tabs. "game": through the camera of the scene, the
+    // keyboard and the mouse go to the scripts, it looks and plays as the built game. "editor" (Scene):
+    // the editor's free camera with selection and the gizmo. The scene runs in both, and the Hierarchy and
+    // the Inspector edit it in both.
+    playCamera: "editor" | "game" = "game";
+
+    // Play is on, but time stands still; step() moves it by one frame
+    paused = false;
+
     // Counts how often the scene data was put back by stop(); a field being typed in must then forget its text
     restores = 0;
 
@@ -252,6 +261,35 @@ class SceneStore {
         return this.game?.scene ?? this.scene;
     }
 
+    setPlayCamera(camera: "editor" | "game") {
+        this.playCamera = camera;
+        this.notify();
+    }
+
+    // true if the running scene has a camera to look through
+    get hasGameCamera() {
+        return !!this.game?.camera;
+    }
+
+    // true while the viewport shows the game exactly as its own camera sees it and the keyboard and the mouse
+    // go to its scripts; the editor camera, selection by click and the gizmo are then off.
+    // Pause leaves it: the viewport is the full editor again (orbit, fly, select, gizmo) until the game resumes.
+    get gameView() {
+        return this.playCamera === "game" && this.hasGameCamera && !this.paused;
+    }
+
+    // The input of the running scene while it is to hear the keyboard and the mouse
+    get gameInput() {
+        return this.game && this.gameView ? this.game.input : null;
+    }
+
+    // The camera of the running scene fitted to a viewport of this size, or null if the editor camera is in use
+    gameCamera(width: number, height: number) {
+        if (!this.game || !this.gameView) return null;
+        this.game.resize(width, height);
+        return this.game.camera;
+    }
+
     // The entity objects the viewport picks from
     get viewRoot() {
         return this.game?.root ?? this.root;
@@ -277,13 +315,15 @@ class SceneStore {
         if (this.playing || this.editingPrefab) return;
         this.playSnapshot = JSON.stringify(this.toJSON());
         this.status = "";
+        this.paused = false;
+        // Play starts the way the game does; the Scene view is one click away
+        this.playCamera = "game";
         this.startGame();
-        const count = this.game?.runtime.count ?? 0;
         // A script that failed in start() has already written its own message
         if (!this.status) {
-            this.status = count > 0
-                ? `Playing: ${count} script${count === 1 ? "" : "s"} running`
-                : "Playing, but no object has a script. Add one with Add Component in the Inspector.";
+            this.status = this.hasGameCamera
+                ? "Playing in the Game view: keys and mouse go to the game. Switch to Scene to select and move objects."
+                : "Playing in the Scene view: the scene has no active Camera, so there is no Game view.";
         }
         this.notify();
     }
@@ -318,6 +358,7 @@ class SceneStore {
         this.game = null;
         this.playSnapshot = null;
         this.confirmingStop = false;
+        this.paused = false;
 
         if (changed && !keep && snapshot) {
             const data = JSON.parse(snapshot) as SceneData;
@@ -334,7 +375,23 @@ class SceneStore {
 
     // Called by the Viewport every frame
     tick(dt: number) {
-        this.game?.update(dt);
+        if (!this.paused) this.game?.update(dt);
+    }
+
+    togglePause() {
+        if (!this.game) return;
+        this.paused = !this.paused;
+        this.status = this.paused ? "Paused: the viewport is the editor again, look around and edit; resume continues the game" : "Playing";
+        this.notify();
+    }
+
+    // Pauses and moves the scene by one frame
+    step() {
+        if (!this.game) return;
+        this.paused = true;
+        this.game.update(1 / 60);
+        this.status = "Paused, moved by one frame";
+        this.notify();
     }
 
     // Replaces the three.js object of one component after its data changed, here and in the running game

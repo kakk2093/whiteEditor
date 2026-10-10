@@ -55,7 +55,7 @@
     {
       "id": "86c31df2",
       "name": "Cube",
-      "position": [5.7884, 0.5, 0],
+      "position": [5.2585, 2.2216, -0.5304],
       "rotation": [0, 45, 0],
       "scale": [1, 1, 1],
       "components": [
@@ -97,6 +97,25 @@
       "children": []
     },
     {
+      "id": "74d406d4",
+      "name": "Player",
+      "position": [1.5324, 0.5, 0],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "sphere",
+          "material": "Stone"
+        },
+        {
+          "type": "script",
+          "script": "drive"
+        }
+      ],
+      "children": []
+    },
+    {
       "id": "d5905f16",
       "name": "Pillars",
       "prefab": "Pillars",
@@ -131,6 +150,50 @@
           "range": 8
         }
       ],
+      "children": []
+    },
+    {
+      "id": "f50ca1ed",
+      "name": "GameObject",
+      "position": [1.1091, 0.7243, 2.5157],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [],
+      "children": [
+        {
+          "id": "223d739a",
+          "name": "Capsule (1)",
+          "position": [0, 0.6922, 1.1485],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1],
+          "components": [
+            {
+              "type": "mesh",
+              "shape": "capsule"
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "81455c65",
+      "name": "Pillars (2)",
+      "prefab": "Pillars",
+      "position": [-5.9432, 0, -5.6908],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [],
+      "children": []
+    },
+    {
+      "id": "41b1cc0d",
+      "name": "Pillars (3)",
+      "prefab": "Pillars",
+      "position": [-5.6711, 1.4417, -0.3925],
+      "rotation": [31.7325, 44.8133, 90],
+      "scale": [1, 1.1775, 1.4],
+      "components": [],
       "children": []
     }
   ]

@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
+import type { Input } from "../engine";
 import { dropAsset, getDraggedAsset } from "../editor/core/dnd";
 import { sceneStore } from "../editor/core/SceneStore";
 import type { GizmoMode } from "../editor/core/SceneStore";
@@ -119,18 +120,22 @@ export default function Viewport() {
             if (!ctx.renderer || !ctx.raycaster || !ctx.mouse || !ctx.camera) return;
             if (e.button !== 0 || downOnGizmo) return;
             if (Math.hypot(e.clientX - downX, e.clientY - downY) > CLICK_THRESHOLD) return;
+            if (sceneStore.gameView) return;
 
             sceneStore.select(pickRef.current(e.clientX, e.clientY));
         };
 
         pickRef.current = (clientX, clientY) => {
             if (!ctx.renderer || !ctx.raycaster || !ctx.mouse || !ctx.camera) return null;
+            if (sceneStore.gameView) return null;
 
             const rect = ctx.renderer.domElement.getBoundingClientRect();
             ctx.mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
             ctx.mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
 
-            ctx.raycaster.setFromCamera(ctx.mouse, ctx.camera);
+            // The camera the viewport is looking through: in the Game view that is the camera of the scene
+            const camera = sceneStore.gameCamera(rect.width, rect.height) ?? ctx.camera;
+            ctx.raycaster.setFromCamera(ctx.mouse, camera);
 
             const hits = ctx.raycaster.intersectObjects(sceneStore.viewRoot.children, true);
 
@@ -160,7 +165,7 @@ export default function Viewport() {
         };
 
         const onFlyDown = (e: PointerEvent) => {
-            if (e.button !== 2) return;
+            if (e.button !== 2 || sceneStore.gameView) return;
             sceneStore.flying = true;
             domElement.setPointerCapture(e.pointerId);
         };
@@ -261,13 +266,29 @@ export default function Viewport() {
         // =====================
         // STORE SUBSCRIPTION
         // =====================
+        // The input of the running game the canvas is attached to now, and how to detach it
+        let gameInput: Input | null = null;
+        let detachInput = () => {};
+
         const unsubscribe = sceneStore.subscribe(() => {
             ctx.transform?.setMode(sceneStore.gizmoMode);
+
+            // Game view: the keyboard and the mouse go to the behaviors of the scene
+            if (sceneStore.gameInput !== gameInput) {
+                detachInput();
+                gameInput = sceneStore.gameInput;
+                detachInput = gameInput ? gameInput.attach(domElement) : () => {};
+                // The Play button or a field of the Inspector must not keep the keys: Space would press the button
+                if (gameInput) (document.activeElement as HTMLElement | null)?.blur?.();
+            }
 
             // Sync selected object with transform gizmo
             // During Play the viewport draws the running copy of the scene, and the gizmo goes there with it
             if (gizmo.parent !== sceneStore.viewScene) sceneStore.viewScene.add(gizmo);
-            const selected = sceneStore.selectedViewObject;
+            const selected = sceneStore.gameView ? null : sceneStore.selectedViewObject;
+            // Looking through the camera of the scene: the editor camera stays where it was
+            if (ctx.controls && !ctx.transform?.dragging) ctx.controls.enabled = !sceneStore.gameView;
+            if (sceneStore.gameView) stopFlying();
             if (selected && ctx.transform) {
                 ctx.transform.attach(selected);
             } else if (ctx.transform) {
@@ -299,7 +320,9 @@ export default function Viewport() {
 
             if (ctx.controls) ctx.controls.update();
             if (ctx.renderer && ctx.camera) {
-                ctx.renderer.render(sceneStore.viewScene, ctx.camera);
+                const canvas = ctx.renderer.domElement;
+                const camera = sceneStore.gameCamera(canvas.clientWidth, canvas.clientHeight) ?? ctx.camera;
+                ctx.renderer.render(sceneStore.viewScene, camera);
             }
         };
 
@@ -321,6 +344,7 @@ export default function Viewport() {
             window.removeEventListener("keyup", onFlyKey);
             window.removeEventListener("blur", stopFlying);
             stopFlying();
+            detachInput();
             sceneStore.focusHandler = null;
             gizmo.removeFromParent();
             sceneStore.scene.remove(grid);
@@ -355,7 +379,7 @@ export default function Viewport() {
             onContextMenu={(e) => {
                 e.preventDefault();
                 if ((e.target as HTMLElement).tagName !== "CANVAS") return;
-                if (downRef.current.moved) return;
+                if (downRef.current.moved || store.gameView) return;
                 if (Math.hypot(e.clientX - downRef.current.x, e.clientY - downRef.current.y) > 4) return;
 
                 const entityId = pickRef.current(e.clientX, e.clientY);
@@ -367,7 +391,7 @@ export default function Viewport() {
             <div ref={ref} style={{ width: "100%", height: "100%" }} />
 
             <div className="viewport-tools">
-                {GIZMO_MODES.map(({ mode, icon, title }) => (
+                {!store.gameView && GIZMO_MODES.map(({ mode, icon, title }) => (
                     <button
                         key={mode}
                         className={`btn ghost ${store.gizmoMode === mode ? "active" : ""}`}
@@ -377,17 +401,43 @@ export default function Viewport() {
                         <Icon name={icon} />
                     </button>
                 ))}
+                {store.playing && (
+                    <>
+                        {!store.gameView && <span className="sep" />}
+                        <button
+                            className={`btn ghost ${store.playCamera === "game" && store.hasGameCamera ? "" : "active"}`}
+                            title="Scene view: the editor camera; select and move objects while the scene runs"
+                            onClick={() => store.setPlayCamera("editor")}
+                        >
+                            Scene
+                        </button>
+                        <button
+                            className={`btn ghost ${store.playCamera === "game" && store.hasGameCamera ? "active" : ""}`}
+                            title={store.hasGameCamera
+                                ? "Game view: the camera of the scene, keys and mouse go to the game. On pause the viewport is the editor"
+                                    + " until the game resumes"
+                                : "The scene has no active object with a Camera component"}
+                            disabled={!store.hasGameCamera}
+                            onClick={() => store.setPlayCamera("game")}
+                        >
+                            <Icon name="camera" /> Game
+                        </button>
+                    </>
+                )}
             </div>
 
             {(store.editingPrefab || store.playing) && (
                 <div className={`viewport-badge ${store.playing ? "playing" : ""}`}>
-                    {store.playing ? "Playing" : `Editing prefab: ${store.editingPrefab}`}
+                    {store.paused ? "Paused" : store.playing ? "Playing" : `Editing prefab: ${store.editingPrefab}`}
                 </div>
             )}
 
             <div className="viewport-hint">
-                Click — select · drag — orbit · hold right button — look around, W A S D fly, Q E down/up, Shift faster ·
-                middle-drag — pan · wheel — zoom · right-click — menu
+                {store.gameView
+                    ? "Game view: the camera of the scene, keys and mouse go to the game · " +
+                        "switch to Scene to look around, select and move objects"
+                    : "Click — select · drag — orbit · hold right button — look around, W A S D fly, Q E down/up, Shift faster · " +
+                        "middle-drag — pan · wheel — zoom · right-click — menu"}
             </div>
         </div>
     );

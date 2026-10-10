@@ -17,6 +17,28 @@ export const spin = defineBehavior({
     },
 });
 
+// Moves the object over the ground with W A S D or the arrow keys; Shift is faster.
+// In the editor the keys reach the scripts in the Game view of Play, not in the Scene view.
+export const drive = defineBehavior({
+    name: "drive",
+    label: "Drive",
+    params: {
+        // Meters per second
+        speed: { type: "number", default: 3, min: 0, step: 0.5 },
+    },
+    update: (self, dt) => {
+        const { input } = self;
+        const x = input.axis("KeyA", "KeyD") + input.axis("ArrowLeft", "ArrowRight");
+        const z = input.axis("KeyW", "KeyS") + input.axis("ArrowUp", "ArrowDown");
+        if (x === 0 && z === 0) return;
+
+        const fast = input.key("ShiftLeft") || input.key("ShiftRight");
+        const step = (self.params.speed * (fast ? 2 : 1) * dt) / Math.hypot(x, z);
+        self.object.position.x += x * step;
+        self.object.position.z += z * step;
+    },
+});
+
 export const bob = defineBehavior({
     name: "bob",
     label: "Bob",

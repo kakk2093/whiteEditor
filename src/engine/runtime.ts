@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { Input } from "./input";
 import { paramDefaults } from "./Registry";
 import type { BehaviorDef, BehaviorSelf, Registry } from "./Registry";
 import type { ComponentData, Params } from "./types";
@@ -19,7 +20,7 @@ interface Instance {
 // Game side:
 //   const level = loadScene(registry, json); scene.add(level);
 //   const runtime = new Runtime(registry, level); runtime.start();
-//   every frame: runtime.update(dt);
+//   every frame: runtime.update(dt); runtime.input.endFrame();
 export class Runtime {
     // Seconds since start()
     time = 0;
@@ -33,9 +34,13 @@ export class Runtime {
 
     private root: THREE.Object3D;
 
-    constructor(registry: Registry, root: THREE.Object3D) {
+    // What the behaviors read the keyboard and the mouse from
+    readonly input: Input;
+
+    constructor(registry: Registry, root: THREE.Object3D, input = new Input()) {
         this.registry = registry;
         this.root = root;
+        this.input = input;
         root.traverse((obj) => this.attach(obj));
     }
 
@@ -55,7 +60,7 @@ export class Runtime {
                 console.warn(`Unknown behavior "${name}"`);
                 continue;
             }
-            const self: BehaviorSelf = { object: obj, params: {}, state: undefined, root: this.root, registry: this.registry, time: this.time };
+            const self: BehaviorSelf = { object: obj, params: {}, state: undefined, root: this.root, registry: this.registry, input: this.input, time: this.time };
             // `source` differs from any component.params, so the first step fills self.params
             this.instances.push({ def, component, source: null, self, started: false, failed: false });
         }

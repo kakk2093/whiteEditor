@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { disposeObject, rebuildComponentObject } from "./components";
 import { applyEnvironment } from "./environment";
+import { Input } from "./input";
 import type { EnvironmentData } from "./environment";
 import { applyTransform, loadScene } from "./loadScene";
 import type { Registry } from "./Registry";
@@ -21,7 +22,7 @@ function findCamera(obj: THREE.Object3D): THREE.PerspectiveCamera | null {
 // A running scene: its three.js objects, environment, camera and behaviors.
 // Play in the editor and the built game both go through this class, so they cannot drift apart.
 //   const game = new Game(registry, parseScene(json));
-//   game.resize(width, height); game.start();
+//   game.input.attach(canvas); game.resize(width, height); game.start();
 //   every frame: game.update(dt); if (game.camera) renderer.render(game.scene, game.camera);
 export class Game {
     readonly scene = new THREE.Scene();
@@ -30,6 +31,9 @@ export class Game {
     readonly root: THREE.Group;
 
     readonly runtime: Runtime;
+
+    // Keyboard and mouse for the behaviors; it hears nothing until input.attach(canvas) is called
+    readonly input = new Input();
 
     // The camera of the scene, null if no active entity has a camera component
     camera: THREE.PerspectiveCamera | null;
@@ -49,7 +53,7 @@ export class Game {
             if (obj.userData.entityId) this.objects.set(obj.userData.entityId, obj);
         });
         this.camera = findCamera(this.root);
-        this.runtime = new Runtime(registry, this.root);
+        this.runtime = new Runtime(registry, this.root, this.input);
     }
 
     start() {
@@ -59,11 +63,12 @@ export class Game {
     // dt is in seconds
     update(dt: number) {
         this.runtime.update(dt);
+        this.input.endFrame();
     }
 
     // Call when the size of the canvas changes
     resize(width: number, height: number) {
-        if (!this.camera || height === 0) return;
+        if (!this.camera || height === 0 || this.camera.aspect === width / height) return;
         this.camera.aspect = width / height;
         this.camera.updateProjectionMatrix();
     }

@@ -4,6 +4,7 @@ export * from "./components";
 export * from "./materials";
 export * from "./environment";
 export * from "./loadScene";
+export * from "./input";
 export * from "./runtime";
 export * from "./game";
 export * from "./game";

@@ -89,6 +89,22 @@ export default function Toolbar() {
                     >
                         <Icon name={store.playing ? "stop" : "play"} /> {store.playing ? "Stop" : "Play"}
                     </button>
+                    <button
+                        className={`btn ${store.paused ? "playing" : ""}`}
+                        onClick={() => store.togglePause()}
+                        disabled={!store.playing}
+                        title={store.paused ? "Resume (Ctrl+Shift+P)" : "Pause: freeze the scene to look at it and edit it (Ctrl+Shift+P)"}
+                    >
+                        <Icon name="pause" />
+                    </button>
+                    <button
+                        className="btn"
+                        onClick={() => store.step()}
+                        disabled={!store.playing}
+                        title="Pause and move by one frame (Ctrl+Alt+P)"
+                    >
+                        <Icon name="step" />
+                    </button>
                 </>
             )}
 

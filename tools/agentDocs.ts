@@ -236,7 +236,30 @@ export const bob = defineBehavior({
 | \`state\` | то, что вернул \`start\` |
 | \`root\` | корень запущенной сцены, например \`self.root.getObjectByName("Door")\` |
 | \`registry\` | материалы, модели и префабы проекта |
+| \`input\` | клавиатура и мышь, см. ниже |
 | \`time\` | секунды с момента запуска |
+
+Ввод (\`self.input\`). Клавиши называются по \`KeyboardEvent.code\`: \`"KeyW"\`, \`"Space"\`, \`"ArrowLeft"\`,
+\`"ShiftLeft"\`, \`"Digit1"\`. Кнопки мыши: 0 — левая, 1 — средняя, 2 — правая.
+
+| Вызов | Что возвращает |
+|---|---|
+| \`key(code)\` | \`true\`, пока клавиша зажата |
+| \`keyPressed(code)\` / \`keyReleased(code)\` | \`true\` только в том кадре, когда клавишу нажали / отпустили |
+| \`axis(minus, plus)\` | \`-1\`, \`0\` или \`1\` по двум клавишам: \`axis("KeyA", "KeyD")\` |
+| \`mouseButton(n)\`, \`mousePressed(n)\`, \`mouseReleased(n)\` | то же для кнопок мыши, по умолчанию левая |
+| \`mouseX\`, \`mouseY\` | положение мыши на экране игры: от −1 до 1 слева направо и снизу вверх |
+| \`mouseDX\`, \`mouseDY\` | сдвиг мыши с прошлого кадра в пикселях |
+
+\`\`\`ts
+update: (self, dt) => {
+    self.object.position.x += self.input.axis("KeyA", "KeyD") * self.params.speed * dt;
+    if (self.input.keyPressed("Space")) self.state.jumping = true;
+},
+\`\`\`
+
+В редакторе Play стартует в виде Game: камера сцены, ввод идёт поведениям. В виде Scene (камера редактора,
+выбор и гизмо) клавиши и мышь управляют редактором и до поведений не доходят.
 
 \`start\` и \`update\` можно не писать. Углы в three.js — в радианах (\`THREE.MathUtils.degToRad\`). Поведения
 неактивных объектов (\`active: false\`) не запускаются. Если поведение бросило исключение, оно останавливается,
