@@ -79,14 +79,30 @@ export default function Toolbar() {
                     <span className="sep" />
                     <button
                         className={`btn ${store.playing ? "playing" : ""}`}
-                        onClick={() => (store.playing ? store.stop() : store.play())}
-                        title={store.playing
-                            ? "Stop the scripts and bring the scene back (Ctrl+P)"
-                            : "Run the scripts of the scene (Ctrl+P)"}
+                        onClick={() => (store.playing ? store.requestStop() : store.play())}
+                        disabled={editingPrefab !== null}
+                        title={editingPrefab
+                            ? "Go back to the scene to play it"
+                            : store.playing
+                                ? "Stop the scene (Ctrl+P)"
+                                : "Run the scene with its scripts (Ctrl+P)"}
                     >
                         <Icon name={store.playing ? "stop" : "play"} /> {store.playing ? "Stop" : "Play"}
                     </button>
                 </>
+            )}
+
+            {store.confirmingStop && (
+                <div className="backdrop" onMouseDown={(e) => e.target === e.currentTarget && store.cancelStop()}>
+                    <div className="dialog">
+                        <h3>Keep the changes made during Play?</h3>
+                        <div className="buttons">
+                            <button className="btn" onClick={() => store.cancelStop()}>Continue playing</button>
+                            <button className="btn" onClick={() => store.stop(false)}>Discard</button>
+                            <button className="btn primary" autoFocus onClick={() => store.stop(true)}>Keep</button>
+                        </div>
+                    </div>
+                </div>
             )}
 
             {dialog === "project" && (

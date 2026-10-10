@@ -1,15 +1,16 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
-import { componentDefs, environmentFields, materialFields, paramDefaults } from "../engine";
+import { componentDefs, componentKey, environmentFields, materialFields, paramDefaults } from "../engine";
 import type { ComponentData, EntityData, EnvironmentData, MaterialData, ParamDef, ParamValue, Params } from "../engine";
 import { createPrefab, deleteMaterial, deletePrefab, deleteScene, openPrefab, openScene, updateMaterial } from "./core/actions";
 import { instantiateModel, instantiatePrefab } from "./core/dnd";
-import { getScript, sceneStore } from "./core/SceneStore";
+import { getComponent, sceneStore } from "./core/SceneStore";
 import type { AssetRef, TransformProperty } from "./core/SceneStore";
 import { useSceneStore } from "./core/useSceneStore";
 import { entityIcon } from "./entityIcon";
 import { humanize } from "./humanize";
 import { Icon, Menu } from "./ui";
+import type { MenuSection } from "./ui";
 
 const TRANSFORMS: { property: TransformProperty; title: string }[] = [
     { property: "position", title: "Position" },
@@ -153,67 +154,58 @@ function TransformSection({ entity }: { entity: EntityData }) {
 function ComponentSection({ entity, component }: { entity: EntityData; component: ComponentData }) {
     const store = useSceneStore();
     const def = componentDefs[component.type];
-    const isModel = component.type === "model";
+    const key = componentKey(component);
 
-    // A model that is saved in the scene but missing from the scripts stays selectable
-    const modelNames = store.registry.models().map((m) => m.name);
-    const modelName = (component.model as string | undefined) ?? "";
-    if (isModel && modelName && !modelNames.includes(modelName)) modelNames.push(modelName);
+    // A model or a behavior from the project scripts, with its own params
+    const source = def?.source;
+    const sourceName = source ? (component[source.key] as string | undefined) ?? "" : "";
+    const sourceDef = source?.get(store.registry, sourceName);
+
+    // A name that is saved in the scene but missing from the scripts stays selectable
+    const names = source?.list(store.registry).map((d) => d.name) ?? [];
+    if (sourceName && !names.includes(sourceName)) names.push(sourceName);
+
+    // Components an entity has several of are told apart by what they run: "Spin (Script)"
+    const title = def?.multiple ? `${sourceDef?.label ?? sourceName} (${def.label})` : def?.label ?? component.type;
 
     return (
-        <Section title={def?.label ?? component.type} onRemove={() => store.removeComponent(entity.id, component.type)}>
+        <Section title={title} onRemove={() => store.removeComponent(entity.id, key)}>
             {def && (
                 <Fields
                     defs={def.fields}
                     values={component as Params}
-                    onChange={(key, value) => store.setComponentField(entity.id, component.type, key, value)}
+                    onChange={(field, value) => store.setComponentField(entity.id, key, field, value)}
                 />
             )}
 
-            {isModel && (
-                <>
-                    <div className="field">
-                        <label>Model</label>
-                        <div className="control">
-                            <select
-                                className="select"
-                                value={modelName}
-                                onChange={(e) => store.setComponentField(entity.id, "model", "model", e.target.value)}
-                            >
-                                <option value="">(none)</option>
-                                {modelNames.map((name) => (
-                                    <option key={name} value={name}>{name}</option>
-                                ))}
-                            </select>
-                        </div>
+            {source && !def.multiple && (
+                <div className="field">
+                    <label>{humanize(source.key)}</label>
+                    <div className="control">
+                        <select
+                            className="select"
+                            value={sourceName}
+                            onChange={(e) => store.setComponentField(entity.id, key, source.key, e.target.value)}
+                        >
+                            <option value="">(none)</option>
+                            {names.map((name) => (
+                                <option key={name} value={name}>{name}</option>
+                            ))}
+                        </select>
                     </div>
-                    <Fields
-                        defs={store.registry.getModel(modelName)?.params ?? {}}
-                        values={(component.params as Params | undefined) ?? {}}
-                        onChange={(key, value) => store.setModelParam(entity.id, key, value)}
-                    />
-                </>
+                </div>
             )}
-        </Section>
-    );
-}
-
-// A behavior from the project scripts attached to the entity
-function ScriptSection({ entity, component }: { entity: EntityData; component: ComponentData }) {
-    const store = useSceneStore();
-    const name = component.script as string;
-    const behavior = store.registry.getBehavior(name);
-
-    return (
-        <Section title={`${behavior?.label ?? name} (Script)`} onRemove={() => store.removeScript(entity.id, name)}>
-            {behavior ? (
+            {sourceDef && (
                 <Fields
-                    defs={behavior.params ?? {}}
+                    defs={sourceDef.params ?? {}}
                     values={(component.params as Params | undefined) ?? {}}
-                    onChange={(key, value) => store.setScriptParam(entity.id, name, key, value)}
+                    onChange={(param, value) => store.setComponentParam(entity.id, key, param, value)}
                 />
-            ) : (
-                <div className="note">Behavior <b>{name}</b> is not defined in the project's scripts/ folder.</div>
+            )}
+            {source && sourceName && !sourceDef && (
+                <div className="note">
+                    The {source.what} <b>{sourceName}</b> is not defined in the project's scripts/ folder.
+                </div>
             )}
         </Section>
     );
@@ -222,10 +214,23 @@ function ScriptSection({ entity, component }: { entity: EntityData; component: C
 function EntityInspector({ entity }: { entity: EntityData }) {
     const store = useSceneStore();
     const isPrefabRoot = store.editingPrefab !== null && store.entities[0] === entity;
-    const missing = Object.keys(componentDefs)
-        .filter((type) => type !== "script" && !entity.components.some((c) => c.type === type));
-    // Any number of scripts, but each behavior once
-    const scripts = store.registry.behaviors().filter((b) => !getScript(entity, b.name));
+
+    // Add Component: the types the entity does not have yet, then, for the types it can have several of
+    // (scripts), what is not attached yet
+    const types = Object.keys(componentDefs);
+    const addSections: MenuSection[] = [
+        {
+            items: types
+                .filter((type) => !componentDefs[type].multiple && !getComponent(entity, type))
+                .map((type) => ({ key: type, label: componentDefs[type].label }))
+        },
+        ...types.filter((type) => componentDefs[type].multiple).map((type) => ({
+            title: `${componentDefs[type].label}s`,
+            items: (componentDefs[type].source?.list(store.registry) ?? [])
+                .filter((d) => !getComponent(entity, `${type}:${d.name}`))
+                .map((d) => ({ key: `${type}:${d.name}`, label: d.label ?? d.name, icon: "script" as const }))
+        }))
+    ];
 
     const duplicate = () => {
         const copy = store.duplicate(entity.id);
@@ -274,25 +279,18 @@ function EntityInspector({ entity }: { entity: EntityData }) {
             {!entity.prefab && (
                 <>
                     {entity.components.map((component) => (
-                        component.type === "script"
-                            ? <ScriptSection key={`script:${component.script}`} entity={entity} component={component} />
-                            : <ComponentSection key={component.type} entity={entity} component={component} />
+                        <ComponentSection key={componentKey(component)} entity={entity} component={component} />
                     ))}
 
-                    {(missing.length > 0 || scripts.length > 0) && (
+                    {addSections.some((section) => section.items.length > 0) && (
                         <div className="add-component">
                             <Menu
                                 up={entity.components.length > 1}
-                                sections={[
-                                    { items: missing.map((type) => ({ key: type, label: componentDefs[type].label })) },
-                                    {
-                                        title: "Scripts",
-                                        items: scripts.map((b) => ({ key: `script:${b.name}`, label: b.label ?? b.name, icon: "script" as const }))
-                                    }
-                                ]}
-                                onPick={(key) => (key.startsWith("script:")
-                                    ? store.addScript(entity.id, key.slice("script:".length))
-                                    : store.addComponent(entity.id, key))}
+                                sections={addSections}
+                                onPick={(key) => {
+                                    const [type, ...source] = key.split(":");
+                                    store.addComponent(entity.id, type, source.join(":") || undefined);
+                                }}
                                 trigger={(toggle) => (
                                     <button className="btn" onClick={toggle}>
                                         <Icon name="plus" /> Add Component
@@ -412,7 +410,7 @@ export default function Inspector() {
                 {asset ? (
                     <AssetInspector asset={asset} />
                 ) : selected ? (
-                    <EntityInspector key={selected.id} entity={selected} />
+                    <EntityInspector key={`${selected.id}:${store.restores}`} entity={selected} />
                 ) : store.editingPrefab ? (
                     <div className="empty">Select an object of the prefab to edit it.</div>
                 ) : (

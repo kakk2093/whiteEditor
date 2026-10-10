@@ -1,4 +1,4 @@
-import { componentDefs } from "./components";
+import { componentDefs, componentKey } from "./components";
 import { environmentFields } from "./environment";
 import type { ParamDef, Registry } from "./Registry";
 import type { EntityData, ParamValue, PrefabData, SceneData } from "./types";
@@ -68,44 +68,34 @@ function checkEntity(entity: EntityData, path: string, registry: Registry, ids: 
         return;
     }
 
-    const types = new Set<string>();
+    const keys = new Set<string>();
     for (const component of entity.components) {
-        const isScript = component.type === "script";
-        const at = isScript ? `${where} [script ${component.script}]` : `${where} [${component.type}]`;
-        // Scripts are told apart by the behavior they run
-        const key = isScript ? `script ${component.script}` : component.type;
-        if (types.has(key)) problems.push(`${at}: ${isScript ? "this script is attached twice" : "more than one component of this type"}`);
-        types.add(key);
-
         const def = componentDefs[component.type];
+        const key = componentKey(component);
+        const at = `${where} [${key}]`;
+        if (keys.has(key)) {
+            problems.push(`${at}: ${def?.multiple ? "attached more than once" : "more than one component of this type"}`);
+        }
+        keys.add(key);
+
         if (!def) {
             problems.push(`${at}: unknown component (known: ${Object.keys(componentDefs).join(", ")})`);
             continue;
         }
 
-        if (component.type === "model") {
-            const model = registry.getModel(component.model as string);
-            if (!model) {
-                const known = registry.models().map((m) => m.name).join(", ") || "none";
-                problems.push(`${at}: model "${component.model}" is not defined in scripts/ (known: ${known})`);
+        const { source } = def;
+        if (source) {
+            const name = component[source.key] as string;
+            const found = source.get(registry, name);
+            if (!found) {
+                const known = source.list(registry).map((d) => d.name).join(", ") || "none";
+                problems.push(`${at}: ${source.what} "${name}" is not defined in scripts/ (known: ${known})`);
             } else {
                 const params = (component.params ?? {}) as Record<string, unknown>;
-                checkFields(model.params ?? {}, params, `${at}.params`, registry, problems);
+                checkFields(found.params ?? {}, params, `${at}.params`, registry, problems);
             }
-            checkFields({}, component, at, registry, problems, ["type", "model", "params"]);
-        } else if (isScript) {
-            const behavior = registry.getBehavior(component.script as string);
-            if (!behavior) {
-                const known = registry.behaviors().map((b) => b.name).join(", ") || "none";
-                problems.push(`${at}: behavior "${component.script}" is not defined in scripts/ (known: ${known})`);
-            } else {
-                const params = (component.params ?? {}) as Record<string, unknown>;
-                checkFields(behavior.params ?? {}, params, `${at}.params`, registry, problems);
-            }
-            checkFields({}, component, at, registry, problems, ["type", "script", "params"]);
-        } else {
-            checkFields(def.fields, component, at, registry, problems, ["type"]);
         }
+        checkFields(def.fields, component, at, registry, problems, ["type", ...(source ? [source.key, "params"] : [])]);
     }
 
     for (const child of entity.children) checkEntity(child, where, registry, ids, problems);

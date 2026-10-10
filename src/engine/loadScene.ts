@@ -1,8 +1,14 @@
 import * as THREE from "three";
-import { createComponentObject, createPlaceholder } from "./components";
+import { createComponentObject, createPlaceholder, setScripts } from "./components";
 import type { Registry } from "./Registry";
 import { generateId } from "./types";
 import type { ComponentData, EntityData, SceneData, Vec3 } from "./types";
+
+// Copies one part of the entity transform to its three.js object; the data keeps rotation in degrees
+export function applyTransform(obj: THREE.Object3D, entity: EntityData, property: "position" | "rotation" | "scale") {
+    if (property === "rotation") obj.rotation.set(...(entity.rotation.map(THREE.MathUtils.degToRad) as Vec3));
+    else obj[property].fromArray(entity[property]);
+}
 
 // An entity is a Group: the objects of its components and its child entities are children of that group.
 // `prefabStack` lists the prefabs being expanded: objects that come from inside a prefab carry no entityId,
@@ -12,9 +18,9 @@ export function createEntityObject(registry: Registry, entity: EntityData, prefa
     group.name = entity.name;
     group.visible = entity.active ?? true;
     if (prefabStack.length === 0) group.userData.entityId = entity.id;
-    group.position.fromArray(entity.position);
-    group.rotation.set(...(entity.rotation.map(THREE.MathUtils.degToRad) as Vec3));
-    group.scale.fromArray(entity.scale);
+    applyTransform(group, entity, "position");
+    applyTransform(group, entity, "rotation");
+    applyTransform(group, entity, "scale");
 
     // A prefab instance takes its components and children from the prefab
     let source = entity;
@@ -31,10 +37,7 @@ export function createEntityObject(registry: Registry, entity: EntityData, prefa
         stack = [...prefabStack, entity.prefab];
     }
 
-    // Behaviors are started from here by the Runtime
-    const scripts = source.components.filter((c) => c.type === "script");
-    if (scripts.length > 0) group.userData.scripts = scripts;
-
+    setScripts(group, source.components);
     for (const component of source.components) {
         const obj = createComponentObject(registry, component);
         if (obj) group.add(obj);

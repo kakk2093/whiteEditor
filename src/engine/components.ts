@@ -1,12 +1,33 @@
 import * as THREE from "three";
 import { paramDefaults } from "./Registry";
 import type { ParamDef, Registry } from "./Registry";
-import type { ComponentData, Params } from "./types";
+import type { ComponentData, EntityData, Params } from "./types";
+
+// What a component can take from the project's scripts/: a code model, a behavior
+export interface SourceDef {
+    name: string;
+    label?: string;
+    params?: Record<string, ParamDef>;
+}
+
+// For components whose content is defined in scripts/ and picked by name
+export interface ComponentSource {
+    // The component field that holds the name; the params of the picked definition live in component.params
+    key: string;
+    // What it is called in messages: "model", "behavior"
+    what: string;
+    get: (registry: Registry, name: string) => SourceDef | undefined;
+    list: (registry: Registry) => SourceDef[];
+}
 
 export interface ComponentDef {
     label: string;
     fields: Record<string, ParamDef>;
-    create: (fields: Params, registry: Registry) => THREE.Object3D;
+    // Builds the three.js object from the fields (defaults filled in); missing if the component draws nothing
+    create?: (fields: Params, registry: Registry, component: ComponentData) => THREE.Object3D;
+    source?: ComponentSource;
+    // An entity may have several, one per source name; every other type is allowed once
+    multiple?: boolean;
 }
 
 function createGeometry(shape: string): THREE.BufferGeometry {
@@ -97,20 +118,62 @@ export const componentDefs: Record<string, ComponentDef> = {
         },
         create: (f) => new THREE.PerspectiveCamera(f.fov as number, 1, f.near as number, f.far as number),
     },
-    // A model built by a project script (defineModel); its own params live in component.params
+    // A model built by a project script (defineModel)
     model: {
         label: "Model",
         fields: {},
-        create: () => new THREE.Group(),
+        create: (_fields, registry, component) => createModelObject(registry, component),
+        source: {
+            key: "model",
+            what: "model",
+            get: (registry, name) => registry.getModel(name),
+            list: (registry) => registry.models(),
+        },
     },
-    // A behavior from a project script (defineBehavior); it draws nothing and runs in Play, see runtime.ts.
-    // The only type an entity may have several of, one per behavior.
+    // A behavior from a project script (defineBehavior); it draws nothing and runs in Play, see runtime.ts
     script: {
         label: "Script",
         fields: {},
-        create: () => new THREE.Group(),
+        source: {
+            key: "script",
+            what: "behavior",
+            get: (registry, name) => registry.getBehavior(name),
+            list: (registry) => registry.behaviors(),
+        },
+        multiple: true,
     },
 };
+
+// Tells the components of one entity apart: "mesh", "light", "script:spin"
+export function componentKey(component: ComponentData) {
+    const def = componentDefs[component.type];
+    return def?.multiple && def.source ? `${component.type}:${component[def.source.key]}` : component.type;
+}
+
+export function findComponent(entity: EntityData, key: string) {
+    return entity.components.find((c) => componentKey(c) === key) ?? null;
+}
+
+// Behaviors have no three.js object of their own; the Runtime starts them from the group of their entity
+export function setScripts(group: THREE.Object3D, components: ComponentData[]) {
+    const scripts = components.filter((c) => c.type === "script");
+    if (scripts.length > 0) group.userData.scripts = scripts;
+    else delete group.userData.scripts;
+}
+
+// Frees the GPU resources of an object that was removed from the scene
+export function disposeObject(obj: THREE.Object3D) {
+    obj.traverse((child) => {
+        const mesh = child as THREE.Mesh;
+        if (!mesh.geometry) return;
+        mesh.geometry.dispose();
+        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        // Material assets are shared between meshes and owned by the registry
+        materials.forEach((m) => {
+            if (!m.userData.shared) m.dispose();
+        });
+    });
+}
 
 // Shown instead of a model or prefab that does not exist, so the scene still loads
 export function createPlaceholder() {
@@ -137,12 +200,23 @@ export function createComponentObject(registry: Registry, component: ComponentDa
         console.warn(`Unknown component "${component.type}"`);
         return null;
     }
-    if (component.type === "script") return null;
+    if (!def.create) return null;
 
-    const obj = component.type === "model"
-        ? createModelObject(registry, component)
-        : def.create({ ...paramDefaults(def.fields), ...component } as Params, registry);
-
-    obj.userData.component = component.type;
+    const obj = def.create({ ...paramDefaults(def.fields), ...component } as Params, registry, component);
+    obj.userData.component = componentKey(component);
     return obj;
+}
+
+// Replaces the three.js object of one component of the entity after the component was added, removed or changed.
+// `group` is the object of the entity, `key` is the componentKey() of the component.
+export function rebuildComponentObject(registry: Registry, group: THREE.Object3D, entity: EntityData, key: string) {
+    const old = group.children.find((c) => c.userData.component === key);
+    if (old) {
+        group.remove(old);
+        disposeObject(old);
+    }
+    setScripts(group, entity.components);
+    const component = findComponent(entity, key);
+    const created = component && createComponentObject(registry, component);
+    if (created) group.add(created);
 }

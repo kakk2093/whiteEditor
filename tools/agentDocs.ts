@@ -36,7 +36,7 @@ function table(defs: Record<string, ParamDef>) {
 
 export function agentDocs(project: string) {
   const components = Object.entries(componentDefs)
-    .filter(([type]) => type !== 'model' && type !== 'script')
+    .filter(([, def]) => !def.source)
     .map(([type, def]) => `### \`${type}\` — ${def.label}\n\n${table(def.fields)}`)
     .join('\n\n')
 
@@ -241,7 +241,8 @@ export const bob = defineBehavior({
 \`start\` и \`update\` можно не писать. Углы в three.js — в радианах (\`THREE.MathUtils.degToRad\`). Поведения
 неактивных объектов (\`active: false\`) не запускаются. Если поведение бросило исключение, оно останавливается,
 остальные продолжают работать; сообщение видно в строке статуса редактора.
-Всё, что поведения изменили в Play, после Stop возвращается к состоянию из файла сцены.
+Поведения работают на копии сцены: то, что они сделали с объектами в Play, после Stop исчезает.
+Параметры поведения можно менять в Inspector прямо во время Play; при Stop редактор спросит, оставить ли правки.
 
 ## Как работать
 

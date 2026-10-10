@@ -1,14 +1,18 @@
 import * as THREE from "three";
 import {
     applyEnvironment,
-    createComponentObject,
+    componentDefs,
+    componentKey,
     createDefaultScene,
     createEntity,
     createEntityObject,
     defaultEnvironment,
+    disposeObject,
+    findComponent,
+    Game,
     generateId,
-    Registry,
-    Runtime
+    rebuildComponentObject,
+    Registry
 } from "../../engine";
 import type { ComponentData, EntityData, EnvironmentData, ParamValue, Params, PrefabData, SceneData } from "../../engine";
 
@@ -27,19 +31,6 @@ const AXES = ["x", "y", "z"] as const;
 
 // Keeps gizmo results free of float noise, so scene files stay readable and diff well
 const round = (value: number) => Math.round(value * 10000) / 10000;
-
-function disposeObject(obj: THREE.Object3D) {
-    obj.traverse((child) => {
-        const mesh = child as THREE.Mesh;
-        if (!mesh.geometry) return;
-        mesh.geometry.dispose();
-        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-        // Material assets are shared between meshes and owned by the registry
-        materials.forEach((m) => {
-            if (!m.userData.shared) m.dispose();
-        });
-    });
-}
 
 function findEntity(
     list: EntityData[],
@@ -63,14 +54,8 @@ function cloneWithNewIds(entity: EntityData): EntityData {
     };
 }
 
-export function getComponent(entity: EntityData, type: string) {
-    return entity.components.find((c) => c.type === type) ?? null;
-}
-
-// An entity can have several script components, one per behavior
-export function getScript(entity: EntityData, script: string) {
-    return entity.components.find((c) => c.type === "script" && c.script === script) ?? null;
-}
+// `key` is what componentKey() gives: the type, or "script:<behavior>" for the types an entity can have several of
+export const getComponent = findComponent;
 
 // Lights and cameras draw nothing, so the editor gives them a clickable marker
 function createHelper(entity: EntityData): THREE.Object3D | null {
@@ -146,11 +131,18 @@ class SceneStore {
     // What is on disk, to tell whether there are unsaved changes
     private savedSnapshot = "";
 
-    // Play mode: the behaviors of the scene are running
-    private runtime: Runtime | null = null;
+    // Play mode: a running copy of the scene, built by the same engine code as the game.
+    // Edits made during Play go both to the scene data and to that copy.
+    private game: Game | null = null;
 
-    // The scene as it was when Play was pressed; stop() brings it back
-    private playSnapshot: { json: string; selectedId: string | null } | null = null;
+    // The scene as it was when Play was pressed: tells whether it was edited since, and brings it back
+    private playSnapshot: string | null = null;
+
+    // true while Stop is asking whether to keep the edits made during Play
+    confirmingStop = false;
+
+    // Counts how often the scene data was put back by stop(); a field being typed in must then forget its text
+    restores = 0;
 
     // Bumped on every change, lets React treat the store as an external store
     version = 0;
@@ -249,81 +241,109 @@ class SceneStore {
             this.root.add(obj);
             this.adopt(entity, obj);
         }
-
-        // The running behaviors held the old objects, e.g. after a script was edited during Play
-        if (this.playing) this.startRuntime();
     }
 
     get playing() {
-        return this.playSnapshot !== null;
+        return this.game !== null;
     }
 
-    private startRuntime() {
-        const runtime = new Runtime(this.registry, this.root);
-        runtime.onError = (message) => this.update({ status: message });
-        this.runtime = runtime;
-        runtime.start();
+    // What the viewport draws: the running game during Play, otherwise the scene being edited
+    get viewScene() {
+        return this.game?.scene ?? this.scene;
     }
 
-    // Starts the behaviors. Whatever happens to the scene until stop(), by scripts or by hand, is not kept.
+    // The entity objects the viewport picks from
+    get viewRoot() {
+        return this.game?.root ?? this.root;
+    }
+
+    // The game reads the scene data without copying it, so script params edited during Play apply at once
+    private startGame() {
+        this.game?.dispose();
+        const game = new Game(this.registry, this.toJSON());
+        game.runtime.onError = (message) => this.update({ status: message });
+        this.game = game;
+        game.start();
+    }
+
+    // Objects were added, removed or moved in the tree during Play: the running copy is built again
+    private restartGame() {
+        if (this.game) this.startGame();
+    }
+
+    // Runs a copy of the scene with its behaviors. The scene can still be edited; stop() decides what
+    // happens to those edits.
     play() {
-        if (this.playing) return;
-        this.playSnapshot = { json: JSON.stringify(this.toJSON()), selectedId: this.selectedId };
+        if (this.playing || this.editingPrefab) return;
+        this.playSnapshot = JSON.stringify(this.toJSON());
         this.status = "";
-        this.startRuntime();
-        const count = this.runtime?.count ?? 0;
+        this.startGame();
+        const count = this.game?.runtime.count ?? 0;
         // A script that failed in start() has already written its own message
         if (!this.status) {
             this.status = count > 0
-                ? `Playing: ${count} script${count === 1 ? "" : "s"} running. Changes made now are dropped on Stop.`
+                ? `Playing: ${count} script${count === 1 ? "" : "s"} running`
                 : "Playing, but no object has a script. Add one with Add Component in the Inspector.";
         }
         this.notify();
     }
 
-    stop() {
-        if (!this.playSnapshot) return;
-        const { json, selectedId } = this.playSnapshot;
-        this.playSnapshot = null;
-        this.runtime = null;
+    // true if the scene was edited since Play was pressed
+    get playChanged() {
+        return this.playSnapshot !== null && JSON.stringify(this.toJSON()) !== this.playSnapshot;
+    }
 
-        const data = JSON.parse(json) as SceneData;
-        this.entities = data.entities;
-        this.environment = { ...defaultEnvironment, ...data.environment };
-        applyEnvironment(this.scene, this.environment);
-        this.rebuild();
-        this.selectedId = selectedId && this.objects.has(selectedId) ? selectedId : null;
-        this.status = "Stopped";
+    // The Stop button: asks first if there are edits made during Play
+    requestStop() {
+        if (!this.playing) return;
+        if (this.playChanged) {
+            this.confirmingStop = true;
+            this.notify();
+        } else {
+            this.stop();
+        }
+    }
+
+    cancelStop() {
+        this.confirmingStop = false;
+        this.notify();
+    }
+
+    // keep = true leaves the edits made during Play in the scene, otherwise it goes back to what it was
+    stop(keep = false) {
+        if (!this.game) return;
+        const changed = this.playChanged;
+        const snapshot = this.playSnapshot;
+        this.game.dispose();
+        this.game = null;
+        this.playSnapshot = null;
+        this.confirmingStop = false;
+
+        if (changed && !keep && snapshot) {
+            const data = JSON.parse(snapshot) as SceneData;
+            this.entities = data.entities;
+            this.environment = { ...defaultEnvironment, ...data.environment };
+            applyEnvironment(this.scene, this.environment);
+            this.rebuild();
+            if (this.selectedId && !this.objects.has(this.selectedId)) this.selectedId = null;
+            this.restores++;
+        }
+        this.status = !changed ? "Stopped" : keep ? "Stopped, the changes made during Play are kept" : "Stopped, the changes made during Play are dropped";
         this.notify();
     }
 
     // Called by the Viewport every frame
     tick(dt: number) {
-        this.runtime?.update(dt);
+        this.game?.update(dt);
     }
 
-    private syncScripts(entity: EntityData) {
+    // Replaces the three.js object of one component after its data changed, here and in the running game
+    private rebuildComponent(entity: EntityData, key: string) {
         const obj = this.objects.get(entity.id);
         if (!obj) return;
-        const scripts = entity.components.filter((c) => c.type === "script");
-        if (scripts.length > 0) obj.userData.scripts = scripts;
-        else delete obj.userData.scripts;
-    }
-
-    // Replaces the three.js object of one component after its data changed
-    private rebuildComponent(entity: EntityData, type: string) {
-        const obj = this.objects.get(entity.id);
-        if (!obj) return;
-
-        const old = obj.children.find((c) => c.userData.component === type);
-        if (old) {
-            obj.remove(old);
-            disposeObject(old);
-        }
-        const component = getComponent(entity, type);
-        const created = component && createComponentObject(this.registry, component);
-        if (created) obj.add(created);
+        rebuildComponentObject(this.registry, obj, entity, key);
         this.updateHelper(entity);
+        this.game?.syncComponent(entity, key);
     }
 
     private uniqueName(base: string) {
@@ -358,6 +378,7 @@ class SceneStore {
         const obj = createEntityObject(this.registry, entity);
         (parent ? this.objects.get(parent.id)! : this.root).add(obj);
         this.adopt(entity, obj);
+        this.restartGame();
         this.notify();
         return entity;
     }
@@ -386,6 +407,7 @@ class SceneStore {
         if (this.selectedId && !this.objects.has(this.selectedId)) {
             this.selectedId = null;
         }
+        this.restartGame();
         this.notify();
     }
 
@@ -406,6 +428,7 @@ class SceneStore {
 
         (parent ? this.objects.get(parent.id)! : this.root).attach(obj);
         this.syncFromObject(id);
+        this.restartGame();
     }
 
     // Selects the entity (the selected one by default) and brings the editor camera to it
@@ -413,7 +436,7 @@ class SceneStore {
         const obj = id ? this.objects.get(id) : null;
         if (!id || !obj) return;
         if (id !== this.selectedId) this.select(id);
-        this.focusHandler?.(obj);
+        this.focusHandler?.(this.game?.getObject(id) ?? obj);
     }
 
     select(id: string | null) {
@@ -451,10 +474,11 @@ class SceneStore {
         entity[property][axis] = value;
         // The data keeps rotation in degrees
         obj[property][AXES[axis]] = property === "rotation" ? THREE.MathUtils.degToRad(value) : value;
+        this.game?.syncEntity(entity, property);
         this.notify();
     }
 
-    // Copies the transform changed by the gizmo back into the entity data
+    // Copies the transform of the entity's three.js object back into the entity data
     syncFromObject(id: string) {
         const entity = findEntity(this.entities, id)?.entity;
         const obj = this.objects.get(id);
@@ -469,12 +493,36 @@ class SceneStore {
         this.notify();
     }
 
+    // The gizmo moved the selected object. During Play it holds the object of the running copy: only what the
+    // gizmo changes is taken from it, so moving an object does not save the rotation its script has given it.
+    syncFromGizmo() {
+        const id = this.selectedId;
+        const source = id ? this.game?.getObject(id) : null;
+        const obj = id ? this.objects.get(id) : null;
+        if (!id || !source || !obj) {
+            if (id) this.syncFromObject(id);
+            return;
+        }
+        if (this.gizmoMode === "translate") obj.position.copy(source.position);
+        else if (this.gizmoMode === "rotate") obj.rotation.copy(source.rotation);
+        else obj.scale.copy(source.scale);
+        this.syncFromObject(id);
+    }
+
+    // What the gizmo holds and the camera focuses on: during Play the object of the running copy
+    get selectedViewObject() {
+        const id = this.selectedId;
+        if (!id) return null;
+        return this.game ? this.game.getObject(id) : this.objects.get(id) ?? null;
+    }
+
     rename(id: string, name: string) {
         const entity = findEntity(this.entities, id)?.entity;
         const obj = this.objects.get(id);
         if (!entity || !obj) return;
         entity.name = name;
         obj.name = name;
+        this.game?.syncEntity(entity);
         this.notify();
     }
 
@@ -485,73 +533,58 @@ class SceneStore {
         if (active) delete entity.active;
         else entity.active = false;
         obj.visible = active;
+        this.game?.syncEntity(entity);
         this.notify();
     }
 
-    addComponent(id: string, type: string) {
+    // `source` names the model or behavior, for the components that take one from scripts/
+    addComponent(id: string, type: string, source?: string) {
+        const def = componentDefs[type];
         const entity = findEntity(this.entities, id)?.entity;
-        if (!entity || entity.prefab || getComponent(entity, type)) return;
-        entity.components.push({ type });
-        this.rebuildComponent(entity, type);
+        if (!def || !entity || entity.prefab) return;
+
+        const component: ComponentData = { type, ...(def.source && source ? { [def.source.key]: source } : {}) };
+        const key = componentKey(component);
+        if (getComponent(entity, key)) return;
+        entity.components.push(component);
+        this.rebuildComponent(entity, key);
         this.notify();
     }
 
-    removeComponent(id: string, type: string) {
-        const entity = findEntity(this.entities, id)?.entity;
-        if (!entity) return;
-        entity.components = entity.components.filter((c) => c.type !== type);
-        this.rebuildComponent(entity, type);
-        this.notify();
-    }
-
-    setComponentField(id: string, type: string, key: string, value: ParamValue) {
-        const entity = findEntity(this.entities, id)?.entity;
-        const component = entity && getComponent(entity, type);
-        if (!entity || !component) return;
-        component[key] = value;
-        // Another code model has other params
-        if (type === "model" && key === "model") component.params = {};
-        this.rebuildComponent(entity, type);
-        this.notify();
-    }
-
-    setModelParam(id: string, key: string, value: ParamValue) {
-        const entity = findEntity(this.entities, id)?.entity;
-        const component = entity && getComponent(entity, "model");
-        if (!entity || !component) return;
-        component.params = { ...(component.params as Params | undefined), [key]: value };
-        this.rebuildComponent(entity, "model");
-        this.notify();
-    }
-
-    addScript(id: string, script: string) {
-        const entity = findEntity(this.entities, id)?.entity;
-        if (!entity || entity.prefab || getScript(entity, script)) return;
-        entity.components.push({ type: "script", script });
-        this.syncScripts(entity);
-        this.notify();
-    }
-
-    removeScript(id: string, script: string) {
+    removeComponent(id: string, key: string) {
         const entity = findEntity(this.entities, id)?.entity;
         if (!entity) return;
-        entity.components = entity.components.filter((c) => !(c.type === "script" && c.script === script));
-        this.syncScripts(entity);
+        entity.components = entity.components.filter((c) => componentKey(c) !== key);
+        this.rebuildComponent(entity, key);
         this.notify();
     }
 
-    // Takes effect the next time Play is pressed
-    setScriptParam(id: string, script: string, key: string, value: ParamValue) {
+    setComponentField(id: string, key: string, field: string, value: ParamValue) {
         const entity = findEntity(this.entities, id)?.entity;
-        const component = entity && getScript(entity, script);
-        if (!component) return;
-        component.params = { ...(component.params as Params | undefined), [key]: value };
+        const component = entity && getComponent(entity, key);
+        if (!entity || !component) return;
+        component[field] = value;
+        // Another model or behavior has other params
+        if (field === componentDefs[component.type]?.source?.key) component.params = {};
+        this.rebuildComponent(entity, key);
+        this.notify();
+    }
+
+    // A param of the model or behavior the component takes from scripts/.
+    // A behavior reads its params when Play starts, so for it the change shows on the next Play.
+    setComponentParam(id: string, key: string, param: string, value: ParamValue) {
+        const entity = findEntity(this.entities, id)?.entity;
+        const component = entity && getComponent(entity, key);
+        if (!entity || !component) return;
+        component.params = { ...(component.params as Params | undefined), [param]: value };
+        this.rebuildComponent(entity, key);
         this.notify();
     }
 
     setEnvironment<K extends keyof EnvironmentData>(key: K, value: EnvironmentData[K]) {
         this.environment[key] = value;
         applyEnvironment(this.scene, this.environment);
+        this.game?.setEnvironment(this.environment);
         this.notify();
     }
 
@@ -563,6 +596,7 @@ class SceneStore {
         entity.components = [];
         entity.children = [];
         this.rebuild();
+        this.restartGame();
         this.notify();
     }
 
@@ -576,6 +610,7 @@ class SceneStore {
         entity.components = copy.components;
         entity.children = copy.children;
         this.rebuild();
+        this.restartGame();
         this.notify();
     }
 
@@ -583,6 +618,8 @@ class SceneStore {
     setRegistry(registry: Registry) {
         this.registry = registry;
         this.rebuild();
+        // A script, material or prefab changed during Play: run the scene again with it
+        this.restartGame();
         this.notify();
     }
 
@@ -596,8 +633,7 @@ class SceneStore {
     }
 
     get dirty() {
-        // What changes during Play is not going to be kept
-        return (this.playSnapshot?.json ?? JSON.stringify(this.toJSON())) !== this.savedSnapshot;
+        return JSON.stringify(this.toJSON()) !== this.savedSnapshot;
     }
 
     // Call after the scene (or the prefab being edited) was written to disk

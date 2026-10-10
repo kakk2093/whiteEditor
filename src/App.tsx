@@ -23,7 +23,7 @@ function onKeyDown(e: KeyboardEvent) {
     if ((e.ctrlKey || e.metaKey) && e.code === "KeyP") {
         e.preventDefault();
         if (!sceneStore.project) return;
-        if (sceneStore.playing) sceneStore.stop();
+        if (sceneStore.playing) sceneStore.requestStop();
         else sceneStore.play();
         return;
     }

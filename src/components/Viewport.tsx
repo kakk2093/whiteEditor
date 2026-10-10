@@ -83,7 +83,7 @@ export default function Viewport() {
         });
         // Keep the Inspector in sync while dragging the gizmo
         ctx.transform.addEventListener("objectChange", () => {
-            if (sceneStore.selectedId) sceneStore.syncFromObject(sceneStore.selectedId);
+            sceneStore.syncFromGizmo();
         });
 
         // TransformControls is not an Object3D, its gizmo has to be added separately
@@ -132,7 +132,7 @@ export default function Viewport() {
 
             ctx.raycaster.setFromCamera(ctx.mouse, ctx.camera);
 
-            const hits = ctx.raycaster.intersectObjects(sceneStore.root.children, true);
+            const hits = ctx.raycaster.intersectObjects(sceneStore.viewRoot.children, true);
 
             // The hit mesh is a part of a model, so walk up to the entity that owns it
             let obj: THREE.Object3D | null = hits.length > 0 ? hits[0].object : null;
@@ -265,7 +265,9 @@ export default function Viewport() {
             ctx.transform?.setMode(sceneStore.gizmoMode);
 
             // Sync selected object with transform gizmo
-            const selected = sceneStore.selectedObject;
+            // During Play the viewport draws the running copy of the scene, and the gizmo goes there with it
+            if (gizmo.parent !== sceneStore.viewScene) sceneStore.viewScene.add(gizmo);
+            const selected = sceneStore.selectedViewObject;
             if (selected && ctx.transform) {
                 ctx.transform.attach(selected);
             } else if (ctx.transform) {
@@ -297,7 +299,7 @@ export default function Viewport() {
 
             if (ctx.controls) ctx.controls.update();
             if (ctx.renderer && ctx.camera) {
-                ctx.renderer.render(sceneStore.scene, ctx.camera);
+                ctx.renderer.render(sceneStore.viewScene, ctx.camera);
             }
         };
 
@@ -320,7 +322,8 @@ export default function Viewport() {
             window.removeEventListener("blur", stopFlying);
             stopFlying();
             sceneStore.focusHandler = null;
-            sceneStore.scene.remove(gizmo, grid);
+            gizmo.removeFromParent();
+            sceneStore.scene.remove(grid);
             grid.dispose();
 
             if (ctx.animationId) {
