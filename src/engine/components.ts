@@ -103,6 +103,13 @@ export const componentDefs: Record<string, ComponentDef> = {
         fields: {},
         create: () => new THREE.Group(),
     },
+    // A behavior from a project script (defineBehavior); it draws nothing and runs in Play, see runtime.ts.
+    // The only type an entity may have several of, one per behavior.
+    script: {
+        label: "Script",
+        fields: {},
+        create: () => new THREE.Group(),
+    },
 };
 
 // Shown instead of a model or prefab that does not exist, so the scene still loads
@@ -130,6 +137,7 @@ export function createComponentObject(registry: Registry, component: ComponentDa
         console.warn(`Unknown component "${component.type}"`);
         return null;
     }
+    if (component.type === "script") return null;
 
     const obj = component.type === "model"
         ? createModelObject(registry, component)

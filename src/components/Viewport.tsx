@@ -284,6 +284,8 @@ export default function Viewport() {
             lastTime = now;
 
             fly(Math.min(dt, 0.1));
+            // Play mode: runs the behaviors; a long pause (hidden tab) must not become one huge step
+            sceneStore.tick(Math.min(dt, 0.1));
 
             if (flight && ctx.camera && ctx.controls) {
                 flight.t = Math.min(1, flight.t + dt / FOCUS_TIME);
@@ -374,7 +376,11 @@ export default function Viewport() {
                 ))}
             </div>
 
-            {store.editingPrefab && <div className="viewport-badge">Editing prefab: {store.editingPrefab}</div>}
+            {(store.editingPrefab || store.playing) && (
+                <div className={`viewport-badge ${store.playing ? "playing" : ""}`}>
+                    {store.playing ? "Playing" : `Editing prefab: ${store.editingPrefab}`}
+                </div>
+            )}
 
             <div className="viewport-hint">
                 Click — select · drag — orbit · hold right button — look around, W A S D fly, Q E down/up, Shift faster ·

@@ -4,7 +4,7 @@ import { componentDefs, environmentFields, materialFields, paramDefaults } from 
 import type { ComponentData, EntityData, EnvironmentData, MaterialData, ParamDef, ParamValue, Params } from "../engine";
 import { createPrefab, deleteMaterial, deletePrefab, deleteScene, openPrefab, openScene, updateMaterial } from "./core/actions";
 import { instantiateModel, instantiatePrefab } from "./core/dnd";
-import { sceneStore } from "./core/SceneStore";
+import { getScript, sceneStore } from "./core/SceneStore";
 import type { AssetRef, TransformProperty } from "./core/SceneStore";
 import { useSceneStore } from "./core/useSceneStore";
 import { entityIcon } from "./entityIcon";
@@ -198,10 +198,34 @@ function ComponentSection({ entity, component }: { entity: EntityData; component
     );
 }
 
+// A behavior from the project scripts attached to the entity
+function ScriptSection({ entity, component }: { entity: EntityData; component: ComponentData }) {
+    const store = useSceneStore();
+    const name = component.script as string;
+    const behavior = store.registry.getBehavior(name);
+
+    return (
+        <Section title={`${behavior?.label ?? name} (Script)`} onRemove={() => store.removeScript(entity.id, name)}>
+            {behavior ? (
+                <Fields
+                    defs={behavior.params ?? {}}
+                    values={(component.params as Params | undefined) ?? {}}
+                    onChange={(key, value) => store.setScriptParam(entity.id, name, key, value)}
+                />
+            ) : (
+                <div className="note">Behavior <b>{name}</b> is not defined in the project's scripts/ folder.</div>
+            )}
+        </Section>
+    );
+}
+
 function EntityInspector({ entity }: { entity: EntityData }) {
     const store = useSceneStore();
     const isPrefabRoot = store.editingPrefab !== null && store.entities[0] === entity;
-    const missing = Object.keys(componentDefs).filter((type) => !entity.components.some((c) => c.type === type));
+    const missing = Object.keys(componentDefs)
+        .filter((type) => type !== "script" && !entity.components.some((c) => c.type === type));
+    // Any number of scripts, but each behavior once
+    const scripts = store.registry.behaviors().filter((b) => !getScript(entity, b.name));
 
     const duplicate = () => {
         const copy = store.duplicate(entity.id);
@@ -250,15 +274,25 @@ function EntityInspector({ entity }: { entity: EntityData }) {
             {!entity.prefab && (
                 <>
                     {entity.components.map((component) => (
-                        <ComponentSection key={component.type} entity={entity} component={component} />
+                        component.type === "script"
+                            ? <ScriptSection key={`script:${component.script}`} entity={entity} component={component} />
+                            : <ComponentSection key={component.type} entity={entity} component={component} />
                     ))}
 
-                    {missing.length > 0 && (
+                    {(missing.length > 0 || scripts.length > 0) && (
                         <div className="add-component">
                             <Menu
                                 up={entity.components.length > 1}
-                                sections={[{ items: missing.map((type) => ({ key: type, label: componentDefs[type].label })) }]}
-                                onPick={(type) => store.addComponent(entity.id, type)}
+                                sections={[
+                                    { items: missing.map((type) => ({ key: type, label: componentDefs[type].label })) },
+                                    {
+                                        title: "Scripts",
+                                        items: scripts.map((b) => ({ key: `script:${b.name}`, label: b.label ?? b.name, icon: "script" as const }))
+                                    }
+                                ]}
+                                onPick={(key) => (key.startsWith("script:")
+                                    ? store.addScript(entity.id, key.slice("script:".length))
+                                    : store.addComponent(entity.id, key))}
                                 trigger={(toggle) => (
                                     <button className="btn" onClick={toggle}>
                                         <Icon name="plus" /> Add Component

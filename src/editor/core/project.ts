@@ -1,4 +1,4 @@
-import { isModelDef, parsePrefab, Registry } from "../../engine";
+import { parsePrefab, Registry } from "../../engine";
 
 // Talks to the dev-server API from vite-plugin-projects.ts
 const API = "/__api/projects";
@@ -47,9 +47,7 @@ export async function loadRegistry(project: string) {
         try {
             // The timestamp makes the browser fetch the module again after an edit
             const module = await import(/* @vite-ignore */ `${url}?t=${Date.now()}`);
-            for (const value of Object.values(module)) {
-                if (isModelDef(value)) registry.registerModel(value);
-            }
+            registry.registerExports(module);
         } catch (e) {
             console.error(e);
             errors.push(`${url.split("/").pop()}: ${e instanceof Error ? e.message : String(e)}`);

@@ -13,21 +13,9 @@
     {
       "id": "52519386",
       "name": "Main Camera",
-      "position": [
-        0,
-        1.6,
-        5
-      ],
-      "rotation": [
-        0,
-        0,
-        0
-      ],
-      "scale": [
-        1,
-        1,
-        1
-      ],
+      "position": [0, 1.6, 5],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
       "components": [
         {
           "type": "camera"
@@ -38,21 +26,9 @@
     {
       "id": "81312a90",
       "name": "Directional Light",
-      "position": [
-        3,
-        6,
-        4
-      ],
-      "rotation": [
-        -50.19,
-        30.96,
-        0
-      ],
-      "scale": [
-        1,
-        1,
-        1
-      ],
+      "position": [3, 6, 4],
+      "rotation": [-50.19, 30.96, 0],
+      "scale": [1, 1, 1],
       "components": [
         {
           "type": "light",
@@ -65,21 +41,9 @@
     {
       "id": "ab752fc2",
       "name": "Seabed",
-      "position": [
-        0,
-        0,
-        0
-      ],
-      "rotation": [
-        0,
-        0,
-        0
-      ],
-      "scale": [
-        20,
-        1,
-        20
-      ],
+      "position": [0, 0, 0],
+      "rotation": [0, 0, 0],
+      "scale": [20, 1, 20],
       "components": [
         {
           "type": "mesh",
@@ -91,26 +55,21 @@
     {
       "id": "86c31df2",
       "name": "Cube",
-      "position": [
-        0,
-        0.5,
-        0
-      ],
-      "rotation": [
-        0,
-        45,
-        0
-      ],
-      "scale": [
-        1,
-        1,
-        1
-      ],
+      "position": [0, 0.5, 0],
+      "rotation": [0, 45, 0],
+      "scale": [1, 1, 1],
       "components": [
         {
           "type": "mesh",
           "shape": "box",
           "material": "Material"
+        },
+        {
+          "type": "script",
+          "script": "spin",
+          "params": {
+            "axis": "z"
+          }
         }
       ],
       "children": []
@@ -118,71 +77,51 @@
     {
       "id": "56bb037e",
       "name": "Capsule",
-      "position": [
-        2,
-        1,
-        0
-      ],
-      "rotation": [
-        0,
-        0,
-        0
-      ],
-      "scale": [
-        1,
-        1,
-        1
-      ],
+      "position": [2, 1, 0],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
       "components": [
         {
           "type": "mesh",
           "shape": "capsule",
           "material": "Material_1"
+        },
+        {
+          "type": "script",
+          "script": "spin",
+          "params": {
+            "axis": "z"
+          }
         }
       ],
       "children": []
     },
     {
+      "id": "d5905f16",
       "name": "Pillars",
       "prefab": "Pillars",
-      "position": [
-        -3,
-        0,
-        -2
-      ]
+      "position": [-3, 0, -2],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [],
+      "children": []
     },
     {
+      "id": "f035be1c",
       "name": "Pillars (1)",
       "prefab": "Pillars",
-      "position": [
-        3.5,
-        0,
-        -3
-      ],
-      "rotation": [
-        0,
-        90,
-        0
-      ]
+      "position": [3.5, 0, -3],
+      "rotation": [0, 90, 0],
+      "scale": [1, 1, 1],
+      "components": [],
+      "children": []
     },
     {
       "id": "a2ae44bc",
       "name": "Glow",
-      "position": [
-        -1.5,
-        1,
-        1
-      ],
-      "rotation": [
-        0,
-        0,
-        0
-      ],
-      "scale": [
-        1,
-        1,
-        1
-      ],
+      "position": [-1.5, 1, 1],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
       "components": [
         {
           "type": "light",

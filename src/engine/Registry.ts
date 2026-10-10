@@ -45,9 +45,52 @@ export function isModelDef(value: unknown): value is ModelDef {
     return typeof value === "object" && value !== null && (value as ModelDef).kind === "model";
 }
 
-// Everything a scene can refer to by name: code models from scripts, material and prefab assets
+// What a behavior gets about the entity it is attached to
+export interface BehaviorSelf<P = Params, S = unknown> {
+    // The three.js group of the entity: move, rotate and scale it here
+    object: THREE.Object3D;
+    params: P;
+    // Whatever start() returned
+    state: S;
+    // The root of the running scene, e.g. for root.getObjectByName("Door")
+    root: THREE.Object3D;
+    registry: Registry;
+    // Seconds since Play started
+    time: number;
+}
+
+export interface BehaviorDef {
+    kind: "behavior";
+    name: string;
+    label?: string;
+    params?: Record<string, ParamDef>;
+    // Called once when the game starts; the returned value becomes self.state
+    start?: (self: BehaviorSelf) => unknown;
+    // Called every frame, dt is in seconds
+    update?: (self: BehaviorSelf, dt: number) => void;
+}
+
+// Used by project scripts:
+// export const spin = defineBehavior({ name: "spin", params: {...}, update: (self, dt) => { self.object.rotation.y += dt; } })
+export function defineBehavior<P extends Record<string, ParamDef> = Record<string, never>, S = undefined>(def: {
+    name: string;
+    label?: string;
+    params?: P;
+    start?: (self: BehaviorSelf<{ [K in keyof P]: ParamType<P[K]> }, undefined>) => S;
+    update?: (self: BehaviorSelf<{ [K in keyof P]: ParamType<P[K]> }, S>, dt: number) => void;
+}): BehaviorDef {
+    return { kind: "behavior", ...def } as BehaviorDef;
+}
+
+export function isBehaviorDef(value: unknown): value is BehaviorDef {
+    return typeof value === "object" && value !== null && (value as BehaviorDef).kind === "behavior";
+}
+
+// Everything a scene can refer to by name: code models and behaviors from scripts, material and prefab assets
 export class Registry {
     private modelDefs = new Map<string, ModelDef>();
+
+    private behaviorDefs = new Map<string, BehaviorDef>();
 
     private materialData = new Map<string, Partial<MaterialData>>();
 
@@ -74,6 +117,28 @@ export class Registry {
 
     modelDefaults(name: string): Params {
         return paramDefaults(this.modelDefs.get(name)?.params ?? {});
+    }
+
+    registerBehavior(def: BehaviorDef) {
+        this.behaviorDefs.set(def.name, def);
+        return this;
+    }
+
+    getBehavior(name: string) {
+        return this.behaviorDefs.get(name);
+    }
+
+    behaviors() {
+        return [...this.behaviorDefs.values()];
+    }
+
+    // Registers every defineModel() and defineBehavior() exported from a script module
+    registerExports(module: object) {
+        for (const value of Object.values(module)) {
+            if (isModelDef(value)) this.registerModel(value);
+            if (isBehaviorDef(value)) this.registerBehavior(value);
+        }
+        return this;
     }
 
     // Adds the material or updates it in place, so meshes already using it change at once

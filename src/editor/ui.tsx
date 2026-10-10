@@ -24,6 +24,8 @@ const ICON_PATHS = {
     back: "M9.5 3.5 5 8l4.5 4.5",
     unlink: "M6.5 9.5 9.5 6.5 M7 4.5l1-1a2.8 2.8 0 0 1 4 4l-1 1 M9 11.5l-1 1a2.8 2.8 0 0 1-4-4l1-1",
     folder: "M1.5 4h5l1.5 1.5h6.5v7.5h-13z",
+    play: "M4.5 3v10l8.5-5z",
+    stop: "M4 4h8v8H4z",
 } as const;
 
 export type IconName = keyof typeof ICON_PATHS | "prefab";

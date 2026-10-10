@@ -130,9 +130,15 @@ async function savePrefab() {
     sceneStore.update({ status: `Saved prefabs/${name}.json` });
 }
 
+// During Play the scene is in a state that is thrown away on Stop, so it must not reach the disk
+function blockedByPlay() {
+    if (sceneStore.playing) sceneStore.update({ status: "Stop Play before saving" });
+    return sceneStore.playing;
+}
+
 // Ctrl+S: saves what is open, the scene or the prefab being edited
 export async function save() {
-    if (!sceneStore.project) return;
+    if (!sceneStore.project || blockedByPlay()) return;
     try {
         if (sceneStore.editingPrefab) await savePrefab();
         else await saveScene();
@@ -142,6 +148,7 @@ export async function save() {
 }
 
 export async function saveSceneAs(name: string) {
+    if (blockedByPlay()) return;
     try {
         await saveScene(name);
     } catch (e) {
@@ -185,6 +192,7 @@ export async function deleteScene(name: string) {
 // Saves the entity with its children as a prefab asset and turns the entity into an instance of it
 export async function createPrefab(entityId: string) {
     const { project, registry } = sceneStore;
+    sceneStore.stop();
     const entity = sceneStore.findEntity(entityId);
     if (!entity || entity.prefab || sceneStore.editingPrefab) return;
     try {
@@ -210,6 +218,7 @@ export function openPrefab(name: string) {
 // Leaves prefab editing; unsaved changes of the prefab are saved, like Unity's auto save
 export async function closePrefab() {
     if (!sceneStore.editingPrefab) return;
+    sceneStore.stop();
     try {
         if (sceneStore.dirty) await savePrefab();
     } catch (e) {

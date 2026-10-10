@@ -70,9 +70,12 @@ function checkEntity(entity: EntityData, path: string, registry: Registry, ids: 
 
     const types = new Set<string>();
     for (const component of entity.components) {
-        const at = `${where} [${component.type}]`;
-        if (types.has(component.type)) problems.push(`${at}: more than one component of this type`);
-        types.add(component.type);
+        const isScript = component.type === "script";
+        const at = isScript ? `${where} [script ${component.script}]` : `${where} [${component.type}]`;
+        // Scripts are told apart by the behavior they run
+        const key = isScript ? `script ${component.script}` : component.type;
+        if (types.has(key)) problems.push(`${at}: ${isScript ? "this script is attached twice" : "more than one component of this type"}`);
+        types.add(key);
 
         const def = componentDefs[component.type];
         if (!def) {
@@ -90,6 +93,16 @@ function checkEntity(entity: EntityData, path: string, registry: Registry, ids: 
                 checkFields(model.params ?? {}, params, `${at}.params`, registry, problems);
             }
             checkFields({}, component, at, registry, problems, ["type", "model", "params"]);
+        } else if (isScript) {
+            const behavior = registry.getBehavior(component.script as string);
+            if (!behavior) {
+                const known = registry.behaviors().map((b) => b.name).join(", ") || "none";
+                problems.push(`${at}: behavior "${component.script}" is not defined in scripts/ (known: ${known})`);
+            } else {
+                const params = (component.params ?? {}) as Record<string, unknown>;
+                checkFields(behavior.params ?? {}, params, `${at}.params`, registry, problems);
+            }
+            checkFields({}, component, at, registry, problems, ["type", "script", "params"]);
         } else {
             checkFields(def.fields, component, at, registry, problems, ["type"]);
         }

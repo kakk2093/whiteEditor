@@ -8,7 +8,7 @@ export type Params = Record<string, ParamValue>;
 
 // { type: "mesh", shape: "box", material: "Wood" }, { type: "light", kind: "point" }, ...
 // Fields are described in components.ts; a missing field means its default value.
-// The "model" component additionally keeps the params of the code-defined model.
+// The "model" and "script" components additionally keep the params of the code-defined model or behavior.
 export interface ComponentData {
     type: string;
     [field: string]: ParamValue | Params;
@@ -29,7 +29,7 @@ export interface EntityData {
     // Euler XYZ, degrees
     rotation: Vec3;
     scale: Vec3;
-    // At most one component of each type
+    // At most one component of each type, except "script": any number, each with another behavior
     components: ComponentData[];
     children: EntityData[];
 }

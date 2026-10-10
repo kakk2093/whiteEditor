@@ -20,6 +20,14 @@ function onKeyDown(e: KeyboardEvent) {
         return;
     }
 
+    if ((e.ctrlKey || e.metaKey) && e.code === "KeyP") {
+        e.preventDefault();
+        if (!sceneStore.project) return;
+        if (sceneStore.playing) sceneStore.stop();
+        else sceneStore.play();
+        return;
+    }
+
     const target = e.target as HTMLElement;
     if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
 
@@ -92,6 +100,7 @@ export default function App() {
                 <span><kbd>Del</kbd> delete</span>
                 <span><kbd>Ctrl</kbd>+<kbd>D</kbd> duplicate</span>
                 <span><kbd>Ctrl</kbd>+<kbd>S</kbd> save</span>
+                <span><kbd>Ctrl</kbd>+<kbd>P</kbd> play</span>
             </div>
             <ContextMenuHost />
         </div>

@@ -7,7 +7,8 @@ import {
     createEntityObject,
     defaultEnvironment,
     generateId,
-    Registry
+    Registry,
+    Runtime
 } from "../../engine";
 import type { ComponentData, EntityData, EnvironmentData, ParamValue, Params, PrefabData, SceneData } from "../../engine";
 
@@ -64,6 +65,11 @@ function cloneWithNewIds(entity: EntityData): EntityData {
 
 export function getComponent(entity: EntityData, type: string) {
     return entity.components.find((c) => c.type === type) ?? null;
+}
+
+// An entity can have several script components, one per behavior
+export function getScript(entity: EntityData, script: string) {
+    return entity.components.find((c) => c.type === "script" && c.script === script) ?? null;
 }
 
 // Lights and cameras draw nothing, so the editor gives them a clickable marker
@@ -139,6 +145,12 @@ class SceneStore {
 
     // What is on disk, to tell whether there are unsaved changes
     private savedSnapshot = "";
+
+    // Play mode: the behaviors of the scene are running
+    private runtime: Runtime | null = null;
+
+    // The scene as it was when Play was pressed; stop() brings it back
+    private playSnapshot: { json: string; selectedId: string | null } | null = null;
 
     // Bumped on every change, lets React treat the store as an external store
     version = 0;
@@ -237,6 +249,65 @@ class SceneStore {
             this.root.add(obj);
             this.adopt(entity, obj);
         }
+
+        // The running behaviors held the old objects, e.g. after a script was edited during Play
+        if (this.playing) this.startRuntime();
+    }
+
+    get playing() {
+        return this.playSnapshot !== null;
+    }
+
+    private startRuntime() {
+        const runtime = new Runtime(this.registry, this.root);
+        runtime.onError = (message) => this.update({ status: message });
+        this.runtime = runtime;
+        runtime.start();
+    }
+
+    // Starts the behaviors. Whatever happens to the scene until stop(), by scripts or by hand, is not kept.
+    play() {
+        if (this.playing) return;
+        this.playSnapshot = { json: JSON.stringify(this.toJSON()), selectedId: this.selectedId };
+        this.status = "";
+        this.startRuntime();
+        const count = this.runtime?.count ?? 0;
+        // A script that failed in start() has already written its own message
+        if (!this.status) {
+            this.status = count > 0
+                ? `Playing: ${count} script${count === 1 ? "" : "s"} running. Changes made now are dropped on Stop.`
+                : "Playing, but no object has a script. Add one with Add Component in the Inspector.";
+        }
+        this.notify();
+    }
+
+    stop() {
+        if (!this.playSnapshot) return;
+        const { json, selectedId } = this.playSnapshot;
+        this.playSnapshot = null;
+        this.runtime = null;
+
+        const data = JSON.parse(json) as SceneData;
+        this.entities = data.entities;
+        this.environment = { ...defaultEnvironment, ...data.environment };
+        applyEnvironment(this.scene, this.environment);
+        this.rebuild();
+        this.selectedId = selectedId && this.objects.has(selectedId) ? selectedId : null;
+        this.status = "Stopped";
+        this.notify();
+    }
+
+    // Called by the Viewport every frame
+    tick(dt: number) {
+        this.runtime?.update(dt);
+    }
+
+    private syncScripts(entity: EntityData) {
+        const obj = this.objects.get(entity.id);
+        if (!obj) return;
+        const scripts = entity.components.filter((c) => c.type === "script");
+        if (scripts.length > 0) obj.userData.scripts = scripts;
+        else delete obj.userData.scripts;
     }
 
     // Replaces the three.js object of one component after its data changed
@@ -453,6 +524,31 @@ class SceneStore {
         this.notify();
     }
 
+    addScript(id: string, script: string) {
+        const entity = findEntity(this.entities, id)?.entity;
+        if (!entity || entity.prefab || getScript(entity, script)) return;
+        entity.components.push({ type: "script", script });
+        this.syncScripts(entity);
+        this.notify();
+    }
+
+    removeScript(id: string, script: string) {
+        const entity = findEntity(this.entities, id)?.entity;
+        if (!entity) return;
+        entity.components = entity.components.filter((c) => !(c.type === "script" && c.script === script));
+        this.syncScripts(entity);
+        this.notify();
+    }
+
+    // Takes effect the next time Play is pressed
+    setScriptParam(id: string, script: string, key: string, value: ParamValue) {
+        const entity = findEntity(this.entities, id)?.entity;
+        const component = entity && getScript(entity, script);
+        if (!component) return;
+        component.params = { ...(component.params as Params | undefined), [key]: value };
+        this.notify();
+    }
+
     setEnvironment<K extends keyof EnvironmentData>(key: K, value: EnvironmentData[K]) {
         this.environment[key] = value;
         applyEnvironment(this.scene, this.environment);
@@ -500,7 +596,8 @@ class SceneStore {
     }
 
     get dirty() {
-        return JSON.stringify(this.toJSON()) !== this.savedSnapshot;
+        // What changes during Play is not going to be kept
+        return (this.playSnapshot?.json ?? JSON.stringify(this.toJSON())) !== this.savedSnapshot;
     }
 
     // Call after the scene (or the prefab being edited) was written to disk
@@ -519,6 +616,7 @@ class SceneStore {
     }
 
     load(data: SceneData) {
+        this.stop();
         this.show(structuredClone(data.entities), { ...defaultEnvironment, ...data.environment });
         this.savedSnapshot = JSON.stringify(this.toJSON());
         this.notify();
@@ -532,6 +630,7 @@ class SceneStore {
     openPrefab(name: string) {
         const root = this.registry.getPrefab(name);
         if (!root) return;
+        this.stop();
         if (!this.editingPrefab) {
             this.stash = { entities: this.entities, environment: this.environment, savedSnapshot: this.savedSnapshot };
         }
@@ -545,6 +644,7 @@ class SceneStore {
 
     closePrefab() {
         if (!this.editingPrefab || !this.stash) return;
+        this.stop();
         this.scene.remove(this.prefabLight);
         this.editingPrefab = null;
         this.show(this.stash.entities, this.stash.environment);

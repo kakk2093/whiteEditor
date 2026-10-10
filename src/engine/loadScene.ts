@@ -31,6 +31,10 @@ export function createEntityObject(registry: Registry, entity: EntityData, prefa
         stack = [...prefabStack, entity.prefab];
     }
 
+    // Behaviors are started from here by the Runtime
+    const scripts = source.components.filter((c) => c.type === "script");
+    if (scripts.length > 0) group.userData.scripts = scripts;
+
     for (const component of source.components) {
         const obj = createComponentObject(registry, component);
         if (obj) group.add(obj);

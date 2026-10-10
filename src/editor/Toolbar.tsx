@@ -74,6 +74,21 @@ export default function Toolbar() {
                 </>
             )}
 
+            {project && (
+                <>
+                    <span className="sep" />
+                    <button
+                        className={`btn ${store.playing ? "playing" : ""}`}
+                        onClick={() => (store.playing ? store.stop() : store.play())}
+                        title={store.playing
+                            ? "Stop the scripts and bring the scene back (Ctrl+P)"
+                            : "Run the scripts of the scene (Ctrl+P)"}
+                    >
+                        <Icon name={store.playing ? "stop" : "play"} /> {store.playing ? "Stop" : "Play"}
+                    </button>
+                </>
+            )}
+
             {dialog === "project" && (
                 <NameDialog
                     title="New project"

@@ -38,10 +38,7 @@ try {
   for (const file of scripts) {
     const url = `/projects/${project}/scripts/${file.split(path.sep).join('/')}`
     try {
-      const module = await server.ssrLoadModule(url)
-      for (const value of Object.values(module)) {
-        if (engine.isModelDef(value)) registry.registerModel(value)
-      }
+      registry.registerExports(await server.ssrLoadModule(url))
     } catch (e) {
       problems.push(`scripts/${file}: ${e.message}`)
     }
