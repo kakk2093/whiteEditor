@@ -1,0 +1,57 @@
+{
+  "version": 3,
+  "root": {
+    "id": "f05ca951",
+    "name": "Pillars",
+    "position": [0, 0, 0],
+    "rotation": [0, 0, 0],
+    "scale": [1, 1, 1],
+    "components": [],
+    "children": [
+      {
+        "id": "88735445",
+        "name": "Pillar A",
+        "position": [0, 1, 0],
+        "rotation": [0, 0, 0],
+        "scale": [0.4, 2, 0.4],
+        "components": [
+          {
+            "type": "mesh",
+            "shape": "cylinder",
+            "material": "Stone"
+          }
+        ],
+        "children": []
+      },
+      {
+        "id": "31a77082",
+        "name": "Pillar B",
+        "position": [1.5, 1, 0],
+        "rotation": [0, 0, 12],
+        "scale": [0.4, 2, 0.4],
+        "components": [
+          {
+            "type": "mesh",
+            "shape": "cylinder",
+            "material": "Stone"
+          }
+        ],
+        "children": []
+      },
+      {
+        "id": "c848289e",
+        "name": "Sphere",
+        "position": [0, 0, 0],
+        "rotation": [0, 0, 0],
+        "scale": [1, 1, 1],
+        "components": [
+          {
+            "type": "mesh",
+            "shape": "sphere"
+          }
+        ],
+        "children": []
+      }
+    ]
+  }
+}

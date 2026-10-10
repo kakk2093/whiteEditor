@@ -1,0 +1,205 @@
+import { componentDefs } from '../src/engine/components'
+import { environmentFields } from '../src/engine/environment'
+import { materialFields } from '../src/engine/materials'
+import type { ParamDef } from '../src/engine/Registry'
+
+// Text of AGENTS.md that is written into every project: how an AI agent (or a human) edits the project
+// as files. The field tables come from the engine definitions, so they cannot drift from the editor.
+
+function describe(def: ParamDef) {
+  switch (def.type) {
+    case 'number': {
+      const range = [def.min !== undefined ? `от ${def.min}` : '', def.max !== undefined ? `до ${def.max}` : '']
+        .filter(Boolean)
+        .join(' ')
+      return `число${range ? ` (${range})` : ''}`
+    }
+    case 'color':
+      return 'цвет `"#rrggbb"`'
+    case 'boolean':
+      return '`true` / `false`'
+    case 'string':
+      return 'строка'
+    case 'select':
+      return def.options.map((o) => `\`"${o}"\``).join(' \\| ')
+    case 'asset':
+      return `имя ассета (${def.kind}) или \`""\``
+  }
+}
+
+function table(defs: Record<string, ParamDef>) {
+  const rows = Object.entries(defs).map(
+    ([key, def]) => `| \`${key}\` | ${describe(def)} | \`${JSON.stringify(def.default)}\` |`
+  )
+  return ['| Поле | Значение | По умолчанию |', '|---|---|---|', ...rows].join('\n')
+}
+
+export function agentDocs(project: string) {
+  const components = Object.entries(componentDefs)
+    .filter(([type]) => type !== 'model')
+    .map(([type, def]) => `### \`${type}\` — ${def.label}\n\n${table(def.fields)}`)
+    .join('\n\n')
+
+  return `<!-- Этот файл генерирует редактор whiteEditor и перезаписывает при запуске. Свои заметки пишите в CLAUDE.md. -->
+
+# Проект ${project} (whiteEditor)
+
+Игра на three.js, которая собирается в редакторе whiteEditor. Весь проект — текстовые файлы в этой папке;
+их можно править руками или агентом, редактор подхватывает изменения с диска без перезагрузки.
+
+## Структура
+
+| Путь | Что это |
+|---|---|
+| \`scenes/<имя>.json\` | Сцены (уровни) |
+| \`materials/<имя>.json\` | Материалы |
+| \`prefabs/<имя>.json\` | Префабы |
+| \`scripts/**/*.ts\` | Код: модели, собранные кодом |
+| \`assets/\` | Файлы: модели, текстуры, звук |
+
+Имена файлов сцен, материалов и префабов — только латиница, цифры, \`_\` и \`-\`.
+
+## Проверка
+
+Из корня whiteEditor (на две папки выше):
+
+\`\`\`bash
+npm run check -- ${project}
+\`\`\`
+
+Команда проверяет все сцены и префабы (неизвестные компоненты и поля, типы значений, ссылки на материалы,
+модели и префабы) и типы скриптов. Браузер для этого не нужен. Запускайте её после каждой правки файлов.
+
+## Сцена
+
+\`\`\`json
+{
+  "version": 3,
+  "environment": { "fog": true, "fogColor": "#0b4a5c" },
+  "entities": [
+    {
+      "name": "Floor",
+      "scale": [20, 1, 20],
+      "components": [{ "type": "mesh", "shape": "plane", "material": "Concrete" }]
+    },
+    {
+      "name": "Lamp",
+      "position": [0, 3, 0],
+      "components": [{ "type": "light", "kind": "point", "intensity": 10 }],
+      "children": [
+        { "name": "Shade", "components": [{ "type": "mesh", "shape": "cylinder" }] }
+      ]
+    }
+  ]
+}
+\`\`\`
+
+Объект сцены (entity) — пустой контейнер, как GameObject в Unity; всё, что он рисует и делает, дают компоненты.
+
+| Поле | Значение | По умолчанию |
+|---|---|---|
+| \`name\` | имя, по нему объект ищут в коде | \`"GameObject"\` |
+| \`id\` | любая строка, уникальная в сцене; можно не писать — редактор создаст | — |
+| \`active\` | \`false\` скрывает объект вместе с детьми | \`true\` |
+| \`prefab\` | имя префаба: объект — его экземпляр (см. «Префаб») | — |
+| \`position\` | \`[x, y, z]\`, метры, относительно родителя | \`[0, 0, 0]\` |
+| \`rotation\` | \`[x, y, z]\`, градусы, углы Эйлера XYZ | \`[0, 0, 0]\` |
+| \`scale\` | \`[x, y, z]\` | \`[1, 1, 1]\` |
+| \`components\` | список компонентов, не больше одного каждого типа | \`[]\` |
+| \`children\` | дочерние объекты | \`[]\` |
+
+Любое поле со значением по умолчанию можно не писать. Ось Y — вверх. Свет и камера смотрят вдоль своей
+локальной оси −Z, направление задаётся поворотом объекта.
+
+### \`environment\` — настройки сцены
+
+${table(environmentFields)}
+
+## Компоненты
+
+Компонент — объект с полем \`type\` и своими полями.
+
+${components}
+
+### \`model\` — модель, собранная кодом
+
+\`\`\`json
+{ "type": "model", "model": "stairs", "params": { "steps": 8 } }
+\`\`\`
+
+\`model\` — имя из \`defineModel\` в \`scripts/\`; \`params\` — параметры этой модели (можно не писать).
+
+## Материал
+
+\`materials/Wood.json\`; имя файла без расширения — это имя материала, на которое ссылается \`mesh.material\`.
+
+${table(materialFields)}
+
+## Префаб
+
+Префаб — объект вместе с детьми, сохранённый для повторного использования: \`prefabs/Workplace.json\`.
+
+\`\`\`json
+{
+  "version": 3,
+  "root": {
+    "name": "Workplace",
+    "children": [
+      { "name": "Desk", "scale": [1.6, 0.05, 0.7], "position": [0, 0.75, 0], "components": [{ "type": "mesh" }] },
+      { "name": "Lamp", "position": [0.6, 0.8, 0], "components": [{ "type": "light", "kind": "point" }] }
+    ]
+  }
+}
+\`\`\`
+
+\`root\` — обычный объект сцены. Его \`position\` не используется, а \`rotation\` и \`scale\` получает новый
+экземпляр при создании в редакторе.
+
+Экземпляр в сцене — объект с полем \`prefab\`. У него свои \`name\`, \`active\`, \`position\`, \`rotation\` и \`scale\`;
+компоненты и дети берутся из файла префаба, собственных \`components\` и \`children\` у экземпляра быть не должно:
+
+\`\`\`json
+{ "name": "Workplace (2)", "prefab": "Workplace", "position": [3, 0, 0], "rotation": [0, 90, 0] }
+\`\`\`
+
+Правка файла префаба меняет все его экземпляры во всех сценах. Внутри префаба могут стоять экземпляры
+других префабов, но префаб не может содержать сам себя.
+
+## Скрипты
+
+Каждый \`defineModel\`, экспортированный из любого файла в \`scripts/\`, появляется в редакторе в панели Project.
+
+\`\`\`ts
+import * as THREE from "three";
+import { defineModel } from "white-engine";
+
+export const pillar = defineModel({
+    name: "pillar",
+    label: "Pillar",
+    params: {
+        height: { type: "number", default: 3, min: 0.1, step: 0.1 },
+        color: { type: "color", default: "#bbbbbb" },
+    },
+    create: (p) => {
+        const mesh = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.2, 0.2, p.height, 16),
+            new THREE.MeshStandardMaterial({ color: p.color })
+        );
+        mesh.position.y = p.height / 2;
+        return mesh;
+    },
+});
+\`\`\`
+
+Типы параметров: \`number\`, \`color\`, \`boolean\`, \`string\`, \`select\` (с \`options\`). \`create\` вызывается заново
+при каждом изменении параметра и должен вернуть \`THREE.Object3D\`.
+
+## Как работать
+
+- Расстановку объектов, свет и материалы меняйте в файлах \`scenes/\` и \`materials/\`; открытый редактор
+  покажет результат сразу. Если в редакторе есть несохранённые правки той же сцены, он не станет
+  перезагружать её сам, а сообщит об этом в строке статуса.
+- Формы, которые проще вычислить, чем собрать из примитивов, описывайте кодом через \`defineModel\`.
+- После правок запускайте \`npm run check -- ${project}\`.
+`
+}

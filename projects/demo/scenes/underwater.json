@@ -1,0 +1,198 @@
+{
+  "version": 3,
+  "environment": {
+    "background": "#0b4a5c",
+    "ambientColor": "#4fb6c9",
+    "ambientIntensity": 1,
+    "fog": true,
+    "fogColor": "#0b4a5c",
+    "fogNear": 1,
+    "fogFar": 20
+  },
+  "entities": [
+    {
+      "id": "52519386",
+      "name": "Main Camera",
+      "position": [
+        0,
+        1.6,
+        5
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "components": [
+        {
+          "type": "camera"
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "81312a90",
+      "name": "Directional Light",
+      "position": [
+        3,
+        6,
+        4
+      ],
+      "rotation": [
+        -50.19,
+        30.96,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "components": [
+        {
+          "type": "light",
+          "kind": "directional",
+          "castShadow": true
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "ab752fc2",
+      "name": "Seabed",
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        20,
+        1,
+        20
+      ],
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "plane"
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "86c31df2",
+      "name": "Cube",
+      "position": [
+        0,
+        0.5,
+        0
+      ],
+      "rotation": [
+        0,
+        45,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "box",
+          "material": "Material"
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "56bb037e",
+      "name": "Capsule",
+      "position": [
+        2,
+        1,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "capsule",
+          "material": "Material_1"
+        }
+      ],
+      "children": []
+    },
+    {
+      "name": "Pillars",
+      "prefab": "Pillars",
+      "position": [
+        -3,
+        0,
+        -2
+      ]
+    },
+    {
+      "name": "Pillars (1)",
+      "prefab": "Pillars",
+      "position": [
+        3.5,
+        0,
+        -3
+      ],
+      "rotation": [
+        0,
+        90,
+        0
+      ]
+    },
+    {
+      "id": "a2ae44bc",
+      "name": "Glow",
+      "position": [
+        -1.5,
+        1,
+        1
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "components": [
+        {
+          "type": "light",
+          "kind": "point",
+          "intensity": 10,
+          "color": "#66aaff",
+          "range": 8
+        }
+      ],
+      "children": []
+    }
+  ]
+}
