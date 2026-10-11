@@ -1074,30 +1074,42 @@ class SceneStore {
     }
 
     // Several entities are selected and the gizmo has changed the main one: the others get the same change.
-    // They move by the same distance in the world; a turn or a scale each one makes about its own middle.
+    // They move by the same distance in the world; a turn or a scale goes around the main one, where the
+    // gizmo stands, so the group turns and grows as one thing.
     private moveOthers(id: string, obj: THREE.Object3D) {
         const main = findEntity(this.entities, id)?.entity;
         const others = this.selectedRoots.filter((entity) => entity.id !== id);
         if (!main || others.length === 0 || !this.selectedRoots.includes(main)) return;
 
-        // The data still has what the main one was before the gizmo moved it
+        // The data still has what the main one was before the gizmo changed it
+        const parentTurn = obj.parent ? obj.parent.getWorldQuaternion(new THREE.Quaternion()) : new THREE.Quaternion();
         const before = new THREE.Vector3(...main.position);
         if (obj.parent) obj.parent.localToWorld(before);
-        const shift = obj.getWorldPosition(new THREE.Vector3()).sub(before);
-        const turn = AXES.map((axis, i) => obj.rotation[axis] - THREE.MathUtils.degToRad(main.rotation[i]));
-        const grow = AXES.map((axis, i) => (main.scale[i] !== 0 ? obj.scale[axis] / main.scale[i] : 1));
+        const pivot = obj.getWorldPosition(new THREE.Vector3());
+        const shift = pivot.clone().sub(before);
+        const turnedBefore = parentTurn.clone().multiply(
+            new THREE.Quaternion().setFromEuler(new THREE.Euler(...(main.rotation.map(THREE.MathUtils.degToRad) as [number, number, number])))
+        );
+        // The turn that leads from how the main one stood to how it stands now
+        const turn = obj.getWorldQuaternion(new THREE.Quaternion()).multiply(turnedBefore.invert());
+        const grow = new THREE.Vector3(...AXES.map((axis, i) => (main.scale[i] !== 0 ? obj.scale[axis] / main.scale[i] : 1)));
 
         for (const entity of others) {
             const other = this.objects.get(entity.id);
             if (!other) continue;
+            const world = other.getWorldPosition(new THREE.Vector3());
             if (this.gizmoMode === "translate") {
-                const world = other.getWorldPosition(new THREE.Vector3()).add(shift);
-                other.position.copy(other.parent ? other.parent.worldToLocal(world) : world);
+                world.add(shift);
             } else if (this.gizmoMode === "rotate") {
-                AXES.forEach((axis, i) => { other.rotation[axis] += turn[i]; });
+                world.sub(pivot).applyQuaternion(turn).add(pivot);
+                const facing = turn.clone().multiply(other.getWorldQuaternion(new THREE.Quaternion()));
+                const otherParent = other.parent ? other.parent.getWorldQuaternion(new THREE.Quaternion()) : new THREE.Quaternion();
+                other.quaternion.copy(otherParent.invert().multiply(facing));
             } else {
-                AXES.forEach((axis, i) => { other.scale[axis] *= grow[i]; });
+                world.sub(pivot).multiply(grow).add(pivot);
+                other.scale.multiply(grow);
             }
+            other.position.copy(other.parent ? other.parent.worldToLocal(world) : world);
             this.syncFromObject(entity.id);
         }
     }
