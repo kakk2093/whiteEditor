@@ -183,6 +183,14 @@ export default function SettingsWindow() {
                                         </div>
                                     </div>
                                 </Section>
+                                <Section title="Play">
+                                    <div className="field">
+                                        <label title="Play in the editor makes no sound. The built game always has its sound">Mute sound</label>
+                                        <div className="control">
+                                            <input className="checkbox" type="checkbox" checked={store.muted} onChange={(e) => store.setMuted(e.target.checked)} />
+                                        </div>
+                                    </div>
+                                </Section>
                                 <Section title="Panels">
                                     <div className="field">
                                         <label>Sizes</label>

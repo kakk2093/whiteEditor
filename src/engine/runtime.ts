@@ -3,8 +3,10 @@ import { disposeObject } from "./components";
 import { Input } from "./input";
 import { createEntityObject, createPrefabInstance } from "./loadScene";
 import { paramDefaults } from "./Registry";
-import type { BehaviorDef, BehaviorSelf, FindQuery, RayHit, RayOptions, Registry, VectorLike } from "./Registry";
+import type { BehaviorDef, BehaviorSelf, FindQuery, RayHit, RayOptions, Registry, SoundSource, VectorLike } from "./Registry";
 import { layerOf } from "./settings";
+import { SoundPlayer } from "./sound";
+import type { SoundHandle } from "./sound";
 import type { ComponentData, Params, Vec3 } from "./types";
 
 interface Instance {
@@ -154,6 +156,12 @@ export class Runtime {
     // What the behaviors read the keyboard and the mouse from
     readonly input: Input;
 
+    // What the sounds are played with
+    readonly sound: SoundPlayer;
+
+    // The Sound components that were noticed, by their marker objects, with what each of them plays now
+    private sources = new Map<THREE.Object3D, SoundHandle | null>();
+
     // The camera the scene is seen through, for screenRay(); whoever runs the scene keeps it up to date
     camera: THREE.Camera | null = null;
 
@@ -168,10 +176,11 @@ export class Runtime {
     // The vertical speed of the objects that fall(), meters per second
     private speeds = new WeakMap<THREE.Object3D, number>();
 
-    constructor(registry: Registry, root: THREE.Object3D, input = new Input()) {
+    constructor(registry: Registry, root: THREE.Object3D, input = new Input(), sound = new SoundPlayer(registry)) {
         this.registry = registry;
         this.root = root;
         this.input = input;
+        this.sound = sound;
         root.traverse((obj) => this.attach(obj));
     }
 
@@ -215,6 +224,8 @@ export class Runtime {
                 jump: (speed) => this.speeds.set(obj, speed),
                 grounded: () => this.grounded(obj),
                 loadScene: (scene) => this.loadScene(scene),
+                playSound: (sound, options) => this.sound.play(sound, options),
+                sound: (object = obj) => this.soundOf(object),
                 // Read through the runtime: the object is given after the behaviors are attached
                 get globals() {
                     return runtime.globals;
@@ -386,6 +397,46 @@ export class Runtime {
         this.requestedScene = name;
     }
 
+    // Starts the Sound component whose marker object this is, from the beginning
+    private playSource(marker: THREE.Object3D) {
+        const f = marker.userData.sound as { sound: string; volume: number; pitch: number; loop: boolean; spatial: boolean; range: number };
+        this.sources.get(marker)?.stop();
+        const { volume, pitch, loop, range } = f;
+        this.sources.set(marker, f.sound ? this.sound.play(f.sound, { volume, pitch, loop, range, at: f.spatial ? marker : undefined }) : null);
+    }
+
+    // What a behavior calls as self.sound(): the Sound component of the object
+    soundOf(object: THREE.Object3D): SoundSource | null {
+        const marker = object.children.find((child) => child.userData.sound);
+        if (!marker) return null;
+        const { sources } = this;
+        return {
+            play: () => this.playSource(marker),
+            stop: () => sources.get(marker)?.stop(),
+            get playing() {
+                return sources.get(marker)?.playing ?? false;
+            },
+        };
+    }
+
+    // Starts the Sound components that have appeared (those set to play on start) and stops the ones whose
+    // entities are gone or switched off; switched on again, such a sound starts anew
+    private sounds() {
+        const present = new Set<THREE.Object3D>();
+        this.root.traverse((obj) => {
+            if (!obj.userData.sound || !obj.parent || !this.isActive(obj.parent)) return;
+            present.add(obj);
+            if (this.sources.has(obj)) return;
+            this.sources.set(obj, null);
+            if (obj.userData.sound.autoplay) this.playSource(obj);
+        });
+        for (const [marker, playing] of this.sources) {
+            if (present.has(marker)) continue;
+            playing?.stop();
+            this.sources.delete(marker);
+        }
+    }
+
     // What a behavior calls as self.raycast(): the nearest collider on the way of a ray
     raycast(origin: VectorLike, direction: VectorLike, options: RayOptions = {}): RayHit | null {
         const from = toVector(origin);
@@ -537,6 +588,7 @@ export class Runtime {
         // A plain loop: a behavior may add objects, and with them instances, while this runs
         for (let i = 0; i < this.instances.length; i++) this.step(this.instances[i]);
         this.sweep();
+        this.sounds();
     }
 
     update(dt: number) {
@@ -548,6 +600,7 @@ export class Runtime {
         }
         this.collide();
         this.sweep();
+        this.sounds();
     }
 
     // The scene stops: every behavior gets its destroy()
@@ -556,5 +609,7 @@ export class Runtime {
         this.instances = [];
         this.doomed.clear();
         this.contacts.clear();
+        this.sources.forEach((playing) => playing?.stop());
+        this.sources.clear();
     }
 }

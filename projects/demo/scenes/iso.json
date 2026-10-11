@@ -1,14 +1,14 @@
 {
   "version": 3,
   "environment": {
-    "background": "#1b2330",
+    "background": "#2a62bb",
     "ambientColor": "#8fa4c8",
-    "ambientIntensity": 0.6,
+    "ambientIntensity": 0.8,
     "fog": false,
     "fogColor": "#222222",
     "fogNear": 5,
     "fogFar": 50,
-    "look": "PixelArt"
+    "look": ""
   },
   "entities": [
     {

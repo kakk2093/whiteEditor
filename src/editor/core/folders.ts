@@ -3,7 +3,7 @@
 // which folder is kept in one file of the project, folders.json:
 //   { "materials": { "Walls": ["Bricks", "Stone"] }, "scenes": { "Levels": [] } }
 
-export const FOLDER_SECTIONS = ["scenes", "materials", "prefabs", "looks", "textures"] as const;
+export const FOLDER_SECTIONS = ["scenes", "materials", "prefabs", "looks", "textures", "sounds"] as const;
 
 export type FolderSection = (typeof FOLDER_SECTIONS)[number];
 

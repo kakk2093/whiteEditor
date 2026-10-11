@@ -11,6 +11,7 @@ export * from "./prefab";
 export * from "./settings";
 export * from "./loadScene";
 export * from "./input";
+export * from "./sound";
 export * from "./runtime";
 export * from "./game";
 export * from "./runGame";

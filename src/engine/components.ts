@@ -159,6 +159,40 @@ export const componentDefs: Record<string, ComponentDef> = {
             return marker;
         },
     },
+    // What the entity sounds like in the running game: an audio file of assets/. It draws nothing; the Runtime
+    // starts it (see runtime.ts), a behavior can do it too with self.sound().play().
+    sound: {
+        label: "Sound",
+        fields: {
+            sound: { type: "asset", kind: "sound", default: "" },
+            volume: { type: "number", default: 1, min: 0, step: 0.05 },
+            // Speed of playing: 2 is twice as fast and an octave higher
+            pitch: { type: "number", default: 1, min: 0.1, max: 4, step: 0.05 },
+            loop: { type: "boolean", default: false },
+            // Starts with the scene (or when the entity appears); off, it waits for self.sound().play()
+            autoplay: { type: "boolean", default: true },
+            // Comes from where the entity is: quieter with the distance from the camera, to the left or to the right
+            spatial: { type: "boolean", default: false },
+            // The distance from the camera, meters, at which nothing is heard any more
+            range: { type: "number", default: 20, min: 0.1, step: 1, when: { spatial: [true] } },
+        },
+        create: (f) => {
+            const marker = new THREE.Object3D();
+            marker.userData.sound = f;
+            return marker;
+        },
+    },
+    // The ears of the scene: the distance of the spatial sounds is counted from this entity instead of the
+    // camera. For a camera that stands far from what it shows (an isometric view): put it on the player.
+    listener: {
+        label: "Sound Listener",
+        fields: {},
+        create: () => {
+            const marker = new THREE.Object3D();
+            marker.userData.listener = true;
+            return marker;
+        },
+    },
     // A model built by a project script (defineModel)
     model: {
         label: "Model",

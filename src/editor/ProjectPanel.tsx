@@ -3,8 +3,8 @@ import type { DragEvent, MouseEvent, ReactNode } from "react";
 import { builtinEffects, builtinSurfaces, defaultMaterialData } from "../engine";
 import {
     addToLook, createFolder, createLook, createMaterial, createPrefab, deleteFolder, deleteLook, deleteMaterial, deletePrefab,
-    copyText, deleteScene, deleteTexture, duplicateAsset, moveAssetToFolder, newScene, openPrefab, openScene, renameAsset, renameFolder,
-    renameScene, showInExplorer, uploadTextures
+    applySound, copyText, deleteScene, deleteTexture, duplicateAsset, moveAssetToFolder, newScene, openPrefab, openScene, renameAsset, renameFolder,
+    renameScene, showInExplorer, uploadFiles
 } from "./core/actions";
 import { confirmAt, openContextMenu } from "./contextMenu";
 import type { ContextItem } from "./contextMenu";
@@ -22,12 +22,13 @@ import type { IconName } from "./ui";
 type Kind = AssetRef["kind"];
 
 // A kind of assets, a row at the top of the tree; "script" gathers what the scripts define besides models
-type TabKey = "scene" | "material" | "texture" | "prefab" | "model" | "look" | "script";
+type TabKey = "scene" | "material" | "texture" | "sound" | "prefab" | "model" | "look" | "script";
 
 const TABS: { key: TabKey; title: string; icon: IconName; hint: string }[] = [
     { key: "scene", title: "Scenes", icon: "scene", hint: "Double-click a scene to open it · right-click for more" },
     { key: "material", title: "Materials", icon: "material", hint: "Click to edit · drag onto an object to assign" },
     { key: "texture", title: "Textures", icon: "image", hint: "Images of assets/ · drop image files here to add · drag onto an object to give it a material with the texture" },
+    { key: "sound", title: "Sounds", icon: "sound", hint: "Audio files of assets/ · drop audio files here to add · double-click to listen · drag onto an object to give it a Sound component" },
     { key: "prefab", title: "Prefabs", icon: "prefab", hint: "Drag into the scene · double-click to edit · drop an object here to make a prefab" },
     { key: "model", title: "Models", icon: "script", hint: "Models built by code in scripts/ · drag or double-click to add to the scene" },
     { key: "look", title: "Looks", icon: "look", hint: "Render styles · click to edit · double-click or drag into the scene to use" },
@@ -41,6 +42,7 @@ const ICONS: Record<Kind, IconName> = {
     model: "script",
     look: "look",
     texture: "image",
+    sound: "sound",
     behavior: "script",
     effect: "look",
     surface: "cube",
@@ -53,7 +55,8 @@ const FOLDERS: Partial<Record<TabKey, FolderSection>> = {
     material: "materials",
     prefab: "prefabs",
     look: "looks",
-    texture: "textures"
+    texture: "textures",
+    sound: "sounds"
 };
 
 // The dialog that asks for a name: of a new scene, of a new folder, or the new name of a folder
@@ -72,6 +75,7 @@ const DIRS: Record<TabKey, string> = {
     prefab: "prefabs",
     look: "looks",
     texture: "assets",
+    sound: "assets",
     model: "scripts",
     script: "scripts"
 };
@@ -80,7 +84,7 @@ const DIRS: Record<TabKey, string> = {
 // the scripts folder; null for what is built into the engine.
 function fileOf(item: Item): string | null {
     if (item.kind === "scene" || item.kind === "material" || item.kind === "prefab" || item.kind === "look") return `${DIRS[item.kind]}/${item.name}.json`;
-    if (item.kind === "texture") return `assets/${item.name}`;
+    if (item.kind === "texture" || item.kind === "sound") return `assets/${item.name}`;
     return item.note?.includes("built-in") ? null : "scripts";
 }
 
@@ -95,6 +99,9 @@ interface Item {
     // A second line under the name: what kind of script thing it is
     note?: string;
 }
+
+// The sound that was last played from the panel
+let preview: HTMLAudioElement | null = null;
 
 // How the assets are shown: big tiles or a compact list; remembered in the browser
 type View = "grid" | "list";
@@ -124,6 +131,7 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
         if (key === "model") return registry.models().map((m) => ({ kind: "model", name: m.name, label: m.label ?? m.name }));
         if (key === "look") return registry.lookNames().map((name) => ({ kind: "look", name, label: name }));
         if (key === "texture") return registry.textureNames().map((name) => ({ kind: "texture", name, label: name, image: registry.textureUrl(name) }));
+        if (key === "sound") return registry.soundNames().map((name) => ({ kind: "sound", name, label: name }));
         if (key === "script") {
             return [
                 ...registry.behaviors().map((d): Item => ({ kind: "behavior", name: d.name, label: d.label ?? d.name, note: "behavior" })),
@@ -211,12 +219,20 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
         else store.update({ status: "Select an object to put the behavior on" });
     };
 
+    // Plays a sound of the project, for the ear; the one that was playing stops
+    const listen = (name: string) => {
+        preview?.pause();
+        preview = new Audio(registry.soundUrl(name));
+        preview.play().catch(() => store.update({ status: `${name} cannot be played` }));
+    };
+
     // What a double click does
     const activate = (item: Item) => {
         if (item.kind === "scene") openScene(item.name);
         if (item.kind === "prefab") openPrefab(item.name);
         if (item.kind === "model") instantiateModel(item.name);
         if (item.kind === "look") store.setEnvironment("look", item.name);
+        if (item.kind === "sound") listen(item.name);
         if (item.kind === "behavior") addBehavior(item.name);
         if (item.kind === "effect") addToLook("effects", item.name);
         if (item.kind === "surface") addToLook("surfaces", item.name);
@@ -250,6 +266,13 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
             menu.push({ label: "Duplicate", icon: "copy", run: () => duplicateAsset("look", name) });
             menu.push({ label: "Delete", icon: "trash", danger: true, run: () => deleteLook(name) });
         } else if (kind === "texture") {
+            menu.push({ label: "Delete…", icon: "trash", danger: true, run: sure(() => deleteTexture(name)) });
+        } else if (kind === "sound") {
+            menu.push({ label: "Listen", icon: "sound", run: () => listen(name) });
+            if (objects.length === 1) menu.push({ label: "Add to Selected Object", icon: "plus", run: () => {
+                applySound(objects[0], name);
+                store.select(objects[0]);
+            } });
             menu.push({ label: "Delete…", icon: "trash", danger: true, run: sure(() => deleteTexture(name)) });
         } else if (kind === "behavior") {
             menu.push({ label: "Add to Selected Object", icon: "plus", run: () => addBehavior(name) });
@@ -483,11 +506,10 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
                     onContextMenu={(e) => placeMenu(e, tabKey, folder)}
                     onDragOver={(e) => e.preventDefault()}
                     onDrop={(e) => {
-                        // Image files dragged in from the desktop become textures
+                        // Image and audio files dragged in from the desktop become textures and sounds
                         if (e.dataTransfer.files.length > 0) {
                             e.preventDefault();
-                            go("texture");
-                            uploadTextures([...e.dataTransfer.files]);
+                            uploadFiles([...e.dataTransfer.files]).then((kind) => kind && go(kind));
                             return;
                         }
                         // An asset from the tree or from a search lands in the folder that is open
@@ -524,6 +546,11 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
                     {all.length === 0 && tabKey === "texture" && (
                         <div className="empty">
                             No textures yet. Drop image files (.png, .jpg, .webp) here, or put them into the project's assets/ folder.
+                        </div>
+                    )}
+                    {all.length === 0 && tabKey === "sound" && (
+                        <div className="empty">
+                            No sounds yet. Drop audio files (.mp3, .ogg, .wav) here, or put them into the project's assets/ folder.
                         </div>
                     )}
                     {all.length === 0 && tabKey === "prefab" && (

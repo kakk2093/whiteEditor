@@ -1,5 +1,5 @@
 import {
-    applyToPrefab, parsePrefab, parseScene, renameLayerIn, resolveLook, validateLook, validateMaterial, validatePrefab, validateScene
+    applyToPrefab, parsePrefab, parseScene, renameLayerIn, resolveLook, SOUND_FILE, validateLook, validateMaterial, validatePrefab, validateScene
 } from "../../engine";
 import type { LookData, MaterialData, ProjectSettings, SceneData } from "../../engine";
 import { renameInEntities, renameInScene } from "./references";
@@ -559,14 +559,15 @@ export function updateMaterial<K extends keyof MaterialData>(name: string, key: 
     }, 300));
 }
 
-// Image files (dropped into the Project panel) go into assets/ and become textures. A name the project
-// cannot keep is tidied up; a file with the name of an existing image replaces it.
-export async function uploadTextures(files: File[]) {
+// Image and audio files (dropped into the Project panel) go into assets/ and become textures and sounds. A
+// name the project cannot keep is tidied up; a file with the name of an existing one replaces it.
+// Tells what the last of them is, null if none was taken.
+export async function uploadFiles(files: File[]): Promise<"texture" | "sound" | null> {
     const { project } = sceneStore;
-    const images = files.filter((file) => /\.(png|jpe?g|webp)$/i.test(file.name));
+    const images = files.filter((file) => /\.(png|jpe?g|webp)$/i.test(file.name) || SOUND_FILE.test(file.name));
     if (images.length === 0) {
-        sceneStore.update({ status: "Only .png, .jpg and .webp images can be textures" });
-        return;
+        sceneStore.update({ status: "Only images (.png, .jpg, .webp) and sounds (.mp3, .ogg, .wav) can be added" });
+        return null;
     }
     try {
         const names: string[] = [];
@@ -579,13 +580,31 @@ export async function uploadTextures(files: File[]) {
         }
         // The same reload as after an edit of scripts: the registry gets the new list of images
         await loadScripts(project);
-        sceneStore.selectAsset({ kind: "texture", name: names[names.length - 1] });
+        const last = names[names.length - 1];
+        const kind = SOUND_FILE.test(last) ? "sound" : "texture";
+        sceneStore.selectAsset({ kind, name: last });
         sceneStore.update({ status: `Added to assets/: ${names.join(", ")}` });
+        return kind;
     } catch (e) {
         report(e);
+        return null;
     }
 }
 
+// A sound dropped onto an object: the object gets a Sound component with it, or its Sound component gets it
+export function applySound(entityId: string, sound: string) {
+    const entity = sceneStore.findEntity(entityId);
+    const content = entity && (sceneStore.expand(entity) ?? entity);
+    if (!content) return;
+    // One step of undo
+    sceneStore.batch(() => {
+        if (!content.components.some((component) => component.type === "sound")) sceneStore.addComponent(entityId, "sound");
+        sceneStore.setComponentField(entityId, "sound", "sound", sound);
+    });
+    sceneStore.update({ status: `${content.name} plays ${sound}` });
+}
+
+// Removes an image or an audio file of assets/
 export async function deleteTexture(name: string) {
     const { project } = sceneStore;
     try {

@@ -56,6 +56,8 @@ export function renderStill(registry: Registry, data: SceneData, options: StillO
     };
 
     const game = new Game(registry, data);
+    // A picture makes no sound
+    game.sound.enabled = false;
     game.runtime.onError = (message) => problems.push(message);
     const pipeline = new RenderPipeline(renderer);
     const look = options.look ?? data.environment?.look;

@@ -991,6 +991,31 @@ function AssetInspector({ asset }: { asset: AssetRef }) {
             </>
         );
     }
+    if (asset.kind === "sound") {
+        const users = store.usersOf("sound", asset.name).map((entity) => entity.name);
+        return (
+            <>
+                <div className="inspector-head">
+                    <Icon name="sound" /> <b style={{ flex: 1 }}>{asset.name}</b>
+                    <button
+                        className="btn ghost danger"
+                        title="Delete the audio file"
+                        onClick={(e) => confirmAt(e, `Delete sound ${asset.name}? This cannot be undone`, "Delete", () => deleteTexture(asset.name))}
+                    >
+                        <Icon name="trash" />
+                    </button>
+                </div>
+                <audio className="sound-preview" controls src={registry.soundUrl(asset.name)} />
+                <div className="note">
+                    An audio file of the project's assets/ folder. An object plays it with a Sound component (drag it onto
+                    the object), a behavior with self.playSound("{asset.name}").
+                </div>
+                <Section title="Sound components of this scene">
+                    <div className="muted">{users.length > 0 ? users.join(", ") : "No object has it."}</div>
+                </Section>
+            </>
+        );
+    }
     if (asset.kind === "behavior" || asset.kind === "effect" || asset.kind === "surface") {
         return <ScriptInspector kind={asset.kind} name={asset.name} />;
     }

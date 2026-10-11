@@ -22,10 +22,10 @@ import { buildGame } from './tools/buildGame'
 
 const NAME = /^[\w-]+$/
 
-// Folders whose files are JSON assets addressed by name
-// A file an editor may put into assets/
-const IMAGE_NAME = /^[\w-]+\.(png|jpe?g|webp)$/i
+// A file an editor may put into assets/: an image (a texture) or an audio file (a sound)
+const IMAGE_NAME = /^[\w-]+\.(png|jpe?g|webp|mp3|ogg|wav)$/i
 
+// Folders whose files are JSON assets addressed by name
 const JSON_SECTIONS = ['scenes', 'materials', 'prefabs', 'looks']
 
 const TSCONFIG = `{
@@ -133,6 +133,12 @@ async function listNames(dir: string, ext: string) {
 export async function listImages(assetsDir: string) {
   const files = await fs.readdir(assetsDir, { recursive: true }).catch(() => [] as string[])
   return files.map(toPosix).filter((f) => /\.(png|jpe?g|webp)$/i.test(f)).sort()
+}
+
+// The audio files of assets/, which Sound components and self.playSound() name
+export async function listSounds(assetsDir: string) {
+  const files = await fs.readdir(assetsDir, { recursive: true }).catch(() => [] as string[])
+  return files.map(toPosix).filter((f) => /\.(mp3|ogg|wav)$/i.test(f)).sort()
 }
 
 // Opens the file manager of the system with the file selected (or, for a folder, inside it)
@@ -252,7 +258,10 @@ export function projectsPlugin(dir = 'projects'): Plugin {
         }
 
         // GET /__api/projects/demo/assets -> the images of assets/, as materials name them: ["bricks.png", "walls/stone.png"]
-        if (section === 'assets' && !item) return listImages(path.join(projectDir, 'assets'))
+        // GET /__api/projects/demo/assets?kind=sound -> its audio files: ["coin.wav"]
+        if (section === 'assets' && !item) {
+          return query.get('kind') === 'sound' ? listSounds(path.join(projectDir, 'assets')) : listImages(path.join(projectDir, 'assets'))
+        }
 
         // POST /__api/projects/demo/build?scene=main -> builds the game into <project>/build
         if (section === 'build' && !item) {
@@ -340,11 +349,11 @@ export function projectsPlugin(dir = 'projects'): Plugin {
           const [pathname, search = ''] = (req.url ?? '/').split('?')
           const segments = pathname.split('/').filter(Boolean).map(decodeURIComponent)
 
-          // PUT / DELETE /__api/projects/demo/assets/bricks.png -> an image of assets/ is written (the body
+          // PUT / DELETE /__api/projects/demo/assets/bricks.png -> an image or a sound of assets/ is written (the body
           // is the file itself) or removed. The watcher then tells the editors that the project changed.
           if (segments.length === 3 && segments[1] === 'assets' && req.method !== 'GET') {
             const [project, , file] = segments
-            if (!NAME.test(project) || !IMAGE_NAME.test(file)) throw new HttpError(400, 'An image name can have only Latin letters, digits, _ and -, and ends in .png, .jpg or .webp')
+            if (!NAME.test(project) || !IMAGE_NAME.test(file)) throw new HttpError(400, 'A file name can have only Latin letters, digits, _ and -, and ends in .png, .jpg, .webp, .mp3, .ogg or .wav')
             const assetsDir = path.join(root, project, 'assets')
             if (!(await fs.stat(path.join(root, project)).then((s) => s.isDirectory(), () => false))) throw new HttpError(404, `Project "${project}" not found`)
             if (req.method === 'DELETE') {

@@ -34,7 +34,7 @@ export async function writeAsset(project: string, section: AssetSection, name: s
     await request(`${project}/${section}/${name}`, { method: "PUT", body: JSON.stringify(data) });
 }
 
-// Puts an image file into the project's assets/ folder, under `name` ("bricks.png")
+// Puts an image or an audio file into the project's assets/ folder, under `name` ("bricks.png")
 export async function uploadImage(project: string, name: string, file: Blob) {
     await request(`${project}/assets/${encodeURIComponent(name)}`, { method: "PUT", body: file });
 }
@@ -91,6 +91,7 @@ export async function loadRegistry(project: string) {
 
     // The time in the address gets an image that was edited past the cache of the browser
     registry.setTextures(`/projects/${project}/assets/`, await request(`${project}/assets`), `?t=${Date.now()}`);
+    registry.setSounds(`/projects/${project}/assets/`, await request(`${project}/assets?kind=sound`), `?t=${Date.now()}`);
     try {
         registry.setSettings(parseSettings(await request(`${project}/settings`)));
     } catch (e) {

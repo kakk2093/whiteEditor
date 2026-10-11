@@ -123,7 +123,15 @@ export const follow = defineBehavior({
 export const pickup = defineBehavior({
     name: "pickup",
     label: "Pickup",
+    params: {
+        // Heard when it is collected
+        sound: { type: "asset", kind: "sound", default: "coin.wav" },
+    },
     enter: (self, other) => {
-        if (self.get("drive", other)) self.destroy();
+        if (!self.get("drive", other)) return;
+        // Not a Sound component: that one would go silent with the object. A slightly different pitch every
+        // time, so that several in a row do not sound like a machine.
+        if (self.params.sound) self.playSound(self.params.sound, { volume: 0.6, pitch: 0.92 + Math.random() * 0.16 });
+        self.destroy();
     },
 });

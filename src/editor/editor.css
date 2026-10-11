@@ -1417,6 +1417,13 @@ kbd {
     image-rendering: pixelated;
 }
 
+.sound-preview {
+    display: block;
+    width: 100%;
+    height: 36px;
+    margin: 8px 0;
+}
+
 .texture-preview {
     display: block;
     width: 100%;

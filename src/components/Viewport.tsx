@@ -586,8 +586,8 @@ export default function Viewport() {
                 if (!asset) return;
                 e.preventDefault();
                 const entityId = pickRef.current(e.clientX, e.clientY);
-                // A material, a texture or a behavior goes onto the object under the mouse; the rest becomes new objects
-                dropAsset(asset, ["material", "texture", "behavior"].includes(asset.kind) ? entityId : null);
+                // A material, a texture, a sound or a behavior goes onto the object under the mouse; the rest becomes new objects
+                dropAsset(asset, ["material", "texture", "sound", "behavior"].includes(asset.kind) ? entityId : null);
             }}
             // A right click opens the menu; holding the button to look around or fly must not
             onContextMenu={(e) => {

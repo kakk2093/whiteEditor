@@ -65,6 +65,11 @@ try {
     ? fs.readdirSync(assetsDir, { recursive: true }).map((f) => f.split(path.sep).join('/')).filter((f) => /\.(png|jpe?g|webp)$/i.test(f))
     : []
   registry.setTextures('', images)
+  // Sound components and params of kind "sound" name the audio files of assets/
+  const sounds = fs.existsSync(assetsDir)
+    ? fs.readdirSync(assetsDir, { recursive: true }).map((f) => f.split(path.sep).join('/')).filter((f) => /\.(mp3|ogg|wav)$/i.test(f))
+    : []
+  registry.setSounds('', sounds)
 
   for (const name of jsonNames('materials')) {
     try {
@@ -120,7 +125,7 @@ try {
   if (fs.existsSync(foldersFile)) {
     try {
       const folders = JSON.parse(fs.readFileSync(foldersFile, 'utf-8'))
-      const sections = ['scenes', 'materials', 'prefabs', 'looks', 'textures']
+      const sections = ['scenes', 'materials', 'prefabs', 'looks', 'textures', 'sounds']
       if (!folders || typeof folders !== 'object' || Array.isArray(folders)) throw new Error('must be an object')
       for (const [section, tree] of Object.entries(folders)) {
         if (!sections.includes(section)) {

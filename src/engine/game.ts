@@ -6,6 +6,7 @@ import type { EnvironmentData } from "./environment";
 import { applyTransform, loadScene } from "./loadScene";
 import type { Registry } from "./Registry";
 import { Runtime } from "./runtime";
+import { SoundPlayer } from "./sound";
 import type { EntityData, SceneData } from "./types";
 
 // What a camera component makes
@@ -37,6 +38,17 @@ function findCamera(obj: THREE.Object3D): SceneCamera | null {
     return null;
 }
 
+// The first Sound Listener component of an active entity: its marker object
+function findListener(obj: THREE.Object3D): THREE.Object3D | null {
+    if (!obj.visible) return null;
+    if (obj.userData.listener) return obj;
+    for (const child of obj.children) {
+        const found = findListener(child);
+        if (found) return found;
+    }
+    return null;
+}
+
 // A running scene: its three.js objects, environment, camera and behaviors.
 // Play in the editor and the built game both go through this class, so they cannot drift apart.
 //   const game = new Game(registry, parseScene(json));
@@ -52,6 +64,9 @@ export class Game {
 
     // Keyboard and mouse for the behaviors; it hears nothing until input.attach(canvas) is called
     readonly input = new Input();
+
+    // What the sounds of the scene are played with; they are heard from where the camera is
+    readonly sound: SoundPlayer;
 
     // The camera of the scene, null if no active entity has a camera component
     camera: SceneCamera | null;
@@ -73,13 +88,16 @@ export class Game {
             if (id) this.objects.set(id, obj);
         });
         this.camera = findCamera(this.root);
-        this.runtime = new Runtime(registry, this.root, this.input);
+        this.sound = new SoundPlayer(registry);
+        this.runtime = new Runtime(registry, this.root, this.input, this.sound);
         this.runtime.camera = this.camera;
         this.runtime.globals = globals;
     }
 
     start() {
+        this.sound.preload();
         this.runtime.start();
+        this.hear();
     }
 
     // dt is in seconds
@@ -89,6 +107,12 @@ export class Game {
         // A behavior may have spawned, destroyed or switched off the camera
         this.camera = findCamera(this.root);
         this.runtime.camera = this.camera;
+        this.hear();
+    }
+
+    // The sounds are heard by the entity with a Sound Listener, by the camera if there is none
+    private hear() {
+        this.sound.update(this.camera, findListener(this.root) ?? this.camera);
     }
 
     // Call when the size of the canvas changes
@@ -139,6 +163,7 @@ export class Game {
 
     dispose() {
         this.runtime.dispose();
+        this.sound.dispose();
         disposeObject(this.root);
     }
 }

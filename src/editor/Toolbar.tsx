@@ -113,6 +113,9 @@ export default function Toolbar() {
                     { label: store.paused ? "Resume" : "Pause", icon: "pause", shortcut: "Ctrl+Shift+P", disabled: !store.playing, run: () => store.togglePause() },
                     { label: "Step One Frame", icon: "step", shortcut: "Ctrl+Alt+P", disabled: !store.playing, run: () => store.step() }
                 ]
+            }, {
+                // Only the editor: a built game always has its sound
+                items: [{ label: store.muted ? "Unmute Sound" : "Mute Sound", icon: store.muted ? "sound" : "mute", run: () => store.setMuted(!store.muted) }]
             }]
         },
         {

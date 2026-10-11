@@ -42,8 +42,8 @@ export type SettingsPage = "project" | "scene" | "editor" | "controls";
 
 export interface AssetRef {
     // The last three are not files: what the scripts of the project (and the engine) define
-    // "texture" is an image file of assets/, named with its extension
-    kind: "material" | "model" | "scene" | "prefab" | "look" | "texture" | "behavior" | "effect" | "surface";
+    // "texture" is an image file of assets/, named with its extension; "sound" an audio file of it
+    kind: "material" | "model" | "scene" | "prefab" | "look" | "texture" | "sound" | "behavior" | "effect" | "surface";
     name: string;
 }
 
@@ -338,6 +338,9 @@ class SceneStore {
     // false draws the viewport without the look of the scene: arranging objects in a pixelated picture is hard.
     // The game itself always has its look.
     lookEnabled = savedOptions.lookEnabled !== false;
+
+    // true: Play makes no sound in the editor. The built game is not affected.
+    muted = savedOptions.muted === true;
 
     // Counts how often the scene data was put back (stop(), undo, redo); a field being typed in must then forget its text
     restores = 0;
@@ -841,9 +844,16 @@ class SceneStore {
         this.notify();
     }
 
+    setMuted(muted: boolean) {
+        this.muted = muted;
+        if (this.game) this.game.sound.volume = muted ? 0 : 1;
+        this.saveOptions();
+        this.notify();
+    }
+
     // The options of the editor itself (Settings, Editor page) are kept in the browser between runs
     private saveOptions() {
-        const options = { gizmoSpace: this.gizmoSpace, snap: this.snap, snapStep: this.snapStep, lookEnabled: this.lookEnabled };
+        const options = { gizmoSpace: this.gizmoSpace, snap: this.snap, snapStep: this.snapStep, lookEnabled: this.lookEnabled, muted: this.muted };
         localStorage.setItem(OPTIONS_KEY, JSON.stringify(options));
     }
 
@@ -887,6 +897,9 @@ class SceneStore {
         this.game?.dispose();
         const game = new Game(this.registry, scene?.data ?? this.toJSON(), this.playGlobals);
         game.runtime.onError = (message) => this.update({ status: message });
+        game.sound.volume = this.muted ? 0 : 1;
+        // A scene entered while Play is paused waits in silence too
+        game.sound.setPaused(this.paused);
         this.game = game;
         this.playScene = scene?.name ?? null;
         game.start();
@@ -997,6 +1010,7 @@ class SceneStore {
     togglePause() {
         if (!this.game) return;
         this.paused = !this.paused;
+        this.game.sound.setPaused(this.paused);
         this.status = this.paused ? "Paused: the viewport is the editor again, look around and edit; resume continues the game" : "Playing";
         this.notify();
     }
@@ -1005,6 +1019,7 @@ class SceneStore {
     step() {
         if (!this.game) return;
         this.paused = true;
+        this.game.sound.setPaused(true);
         this.game.update(1 / 60);
         this.status = "Paused, moved by one frame";
         this.notify();
@@ -1533,7 +1548,7 @@ class SceneStore {
         this.notify();
     }
 
-    // The entities of the scene that use the asset: a material on their mesh, a behavior, a model, or, for a
+    // The entities of the scene that use the asset: a material on their mesh, a sound, a behavior, a model, or, for a
     // prefab, its instances. What is inside prefab instances is not looked through.
     usersOf(kind: AssetRef["kind"], name: string): EntityData[] {
         const users: EntityData[] = [];
@@ -1541,6 +1556,7 @@ class SceneStore {
             const uses = kind === "prefab"
                 ? entity.prefab === name
                 : entity.components.some((c) => (kind === "material" && c.type === "mesh" && c.material === name)
+                    || (kind === "sound" && c.type === "sound" && c.sound === name)
                     || (kind === "behavior" && c.type === "script" && c.script === name)
                     || (kind === "model" && c.type === "model" && c.model === name));
             if (uses) users.push(entity);

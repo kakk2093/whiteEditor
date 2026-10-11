@@ -5,10 +5,14 @@ import type { EffectDef, LookData } from "./look";
 import { applyMaterialData, createSharedMaterial } from "./materials";
 import type { MaterialData } from "./materials";
 import { defaultSettings, layersCollide } from "./settings";
+import type { SoundHandle, SoundOptions } from "./sound";
 import type { ProjectSettings } from "./settings";
 import { builtinSurfaces, isSurfaceDef } from "./surface";
 import type { SurfaceDef } from "./surface";
 import type { EntityData, Params, ParamValue, Vec3 } from "./types";
+
+// What a param of type "asset" can refer to
+export type AssetKind = "material" | "look" | "prefab" | "texture" | "layer" | "scene" | "sound";
 
 export type ParamDef = (
     | { type: "number"; default: number; min?: number; max?: number; step?: number }
@@ -22,7 +26,8 @@ export type ParamDef = (
     // "texture" is an image file of the project's assets/ folder, named with its extension: "bricks.png"
     // "layer" is a collision layer of the project settings (project.json); "" is the default layer
     // "scene" is a scene of the project, e.g. the one a door leads to (self.loadScene)
-    | { type: "asset"; kind: "material" | "look" | "prefab" | "texture" | "layer" | "scene"; default: string }
+    // "sound" is an audio file of assets/, named with its extension: "coin.wav"
+    | { type: "asset"; kind: AssetKind; default: string }
 ) & {
     // The field matters only while other fields of the same object have one of these values, e.g.
     // { kind: ["spot"] }; otherwise the Inspector does not show it. The value is kept either way.
@@ -149,9 +154,24 @@ export interface BehaviorSelf<P = Params, S = unknown> {
     // Replaces the running scene with another scene of the project, once this frame is over: everything of
     // this scene is destroyed (the behaviors get their destroy()), the other one starts from its file.
     loadScene: (name: string) => void;
+    // Plays an audio file of assets/: self.playSound("coin.wav"), self.playSound("hum.ogg", { loop: true, at: self.object }).
+    // With `at` (a point or an object) it gets quieter with the distance from the camera, up to `range` meters.
+    // What comes back can stop it and change its volume. It does not end with the object of the behavior.
+    playSound: (name: string, options?: SoundOptions) => SoundHandle;
+    // The Sound component of this object, or of the one given: play() starts it from the beginning, stop()
+    // ends it. null if the object has no Sound component.
+    sound: (object?: THREE.Object3D) => SoundSource | null;
     // What lives on from scene to scene, for as long as the game runs: the score, what was collected.
     // Any behavior of any scene reads and writes the same object: self.globals.coins = 3.
     globals: Record<string, unknown>;
+}
+
+// The Sound component of an entity, as a behavior sees it
+export interface SoundSource {
+    // Starts the sound of the component from its beginning
+    play: () => void;
+    stop: () => void;
+    readonly playing: boolean;
 }
 
 export interface BehaviorDef {
@@ -226,6 +246,13 @@ export class Registry {
     private textureBase = "";
 
     private textureQuery = "";
+
+    // The audio files of assets/, and where they are loaded from
+    private soundFiles: string[] = [];
+
+    private soundBase = "";
+
+    private soundQuery = "";
 
     // Loaded images, and promises of those still on the way
     private images = new Map<string, HTMLImageElement | Promise<HTMLImageElement>>();
@@ -324,6 +351,23 @@ export class Registry {
         return this.textureBase + name.split("/").map(encodeURIComponent).join("/") + this.textureQuery;
     }
 
+    // `files` are the audio files of assets/ ("coin.wav", "music/theme.ogg"); the rest is as in setTextures()
+    setSounds(base: string, files: string[], query = "") {
+        this.soundBase = base;
+        this.soundFiles = [...files].sort();
+        this.soundQuery = query;
+        return this;
+    }
+
+    soundNames() {
+        return this.soundFiles;
+    }
+
+    // Where the file of a sound is loaded from
+    soundUrl(name: string) {
+        return this.soundBase + name.split("/").map(encodeURIComponent).join("/") + this.soundQuery;
+    }
+
     // The image of a texture; loaded once, however many materials use it. null outside of a browser.
     private loadImage = (name: string) => {
         if (!name || typeof document === "undefined") return null;
@@ -364,8 +408,9 @@ export class Registry {
         return this.scenes;
     }
 
-    assetNames(kind: "material" | "look" | "prefab" | "texture" | "layer" | "scene") {
+    assetNames(kind: AssetKind) {
         if (kind === "layer") return this.settings.layers;
+        if (kind === "sound") return this.soundNames();
         if (kind === "scene") return this.scenes;
         if (kind === "texture") return this.textureNames();
         if (kind === "prefab") return this.prefabNames();

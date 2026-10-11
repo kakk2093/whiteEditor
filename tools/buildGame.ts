@@ -29,6 +29,12 @@ const listImages = async (dir: string) =>
     .filter((f) => /\.(png|jpe?g|webp)$/i.test(f))
     .sort()
 
+const listSounds = async (dir: string) =>
+  (await fs.readdir(dir, { recursive: true }).catch(() => [] as string[]))
+    .map((f) => f.split(path.sep).join('/'))
+    .filter((f) => /\.(mp3|ogg|wav)$/i.test(f))
+    .sort()
+
 const readJson = async (dir: string, name: string) => JSON.parse(await fs.readFile(path.join(dir, `${name}.json`), 'utf-8'))
 
 const page = (title: string) => `<!doctype html>
@@ -83,6 +89,7 @@ export async function buildGame(root: string, projectDir: string, scene?: string
     ...scripts.map((_, i) => `registry.registerExports(script${i})`),
     // assets/ is copied next to index.html
     `registry.setTextures('./assets/', ${JSON.stringify(await listImages(path.join(projectDir, 'assets')))})`,
+    `registry.setSounds('./assets/', ${JSON.stringify(await listSounds(path.join(projectDir, 'assets')))})`,
     // project.json: the collision layers
     `registry.setSettings(parseSettings(${JSON.stringify(settings)}))`,
     `for (const [name, data] of Object.entries(${await section('materials')})) registry.setMaterial(name, data)`,

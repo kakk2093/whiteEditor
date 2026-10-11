@@ -109,6 +109,10 @@ const images = fs.existsSync(assetsDir)
   ? fs.readdirSync(assetsDir, { recursive: true }).map((f) => f.split(path.sep).join('/')).filter((f) => /\.(png|jpe?g|webp)$/i.test(f)).sort()
   : []
 
+const sounds = fs.existsSync(assetsDir)
+  ? fs.readdirSync(assetsDir, { recursive: true }).map((f) => f.split(path.sep).join('/')).filter((f) => /\.(mp3|ogg|wav)$/i.test(f)).sort()
+  : []
+
 // The scenes a param of kind "scene" can name
 const scenesDir = path.join(projectDir, 'scenes')
 const sceneNames = fs.existsSync(scenesDir) ? fs.readdirSync(scenesDir).filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5)) : []
@@ -130,6 +134,7 @@ const entryCode = () => [
     return `try { registry.registerExports(await import(${JSON.stringify(url)})) } catch (e) { problems.push(${JSON.stringify(`scripts/${file}: `)} + e.message) }`
   }),
   `registry.setTextures(${JSON.stringify(`/projects/${project}/assets/`)}, ${JSON.stringify(images)})`,
+  `registry.setSounds(${JSON.stringify(`/projects/${project}/assets/`)}, ${JSON.stringify(sounds)})`,
   `registry.setSettings(parseSettings(${JSON.stringify(settings)}))`,
   `registry.setScenes(${JSON.stringify(sceneNames)})`,
   `for (const [name, data] of Object.entries(${JSON.stringify(readSection('materials'))})) registry.setMaterial(name, data)`,
