@@ -1,0 +1,41 @@
+{
+  "version": 3,
+  "root": {
+    "id": "f50ca1ed",
+    "name": "GameObject",
+    "position": [0, 0, 0],
+    "rotation": [0, 0, 0],
+    "scale": [1, 1, 1],
+    "components": [],
+    "children": [
+      {
+        "id": "223d739a",
+        "name": "Capsule (1)",
+        "position": [0, 0.6922, 1.1485],
+        "rotation": [0, 0, 0],
+        "scale": [1, 1, 1],
+        "components": [
+          {
+            "type": "mesh",
+            "shape": "capsule"
+          }
+        ],
+        "children": []
+      },
+      {
+        "id": "f7af4160",
+        "name": "Capsule (2)",
+        "position": [4.0566, 0.6922, 1.1485],
+        "rotation": [0, 0, 0],
+        "scale": [1, 1, 1],
+        "components": [
+          {
+            "type": "mesh",
+            "shape": "capsule"
+          }
+        ],
+        "children": []
+      }
+    ]
+  }
+}

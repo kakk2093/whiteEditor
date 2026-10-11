@@ -80,6 +80,13 @@ export default function Toolbar() {
             {project && (
                 <>
                     <span className="sep" />
+                    <button className="btn ghost" onClick={() => store.undo()} disabled={!store.canUndo} title="Undo (Ctrl+Z)">
+                        <Icon name="undo" />
+                    </button>
+                    <button className="btn ghost" onClick={() => store.redo()} disabled={!store.canRedo} title="Redo (Ctrl+Y or Ctrl+Shift+Z)">
+                        <Icon name="redo" />
+                    </button>
+                    <span className="sep" />
                     <button
                         className={`btn ${store.playing ? "playing" : ""}`}
                         onClick={() => (store.playing ? store.requestStop() : store.play())}

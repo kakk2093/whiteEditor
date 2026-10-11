@@ -1,5 +1,5 @@
 import type { ComponentData, EntityData } from "../engine";
-import { createPrefab, openPrefab } from "./core/actions";
+import { applyOverrides, createPrefab, openPrefab } from "./core/actions";
 import { sceneStore } from "./core/SceneStore";
 import type { ContextSection } from "./contextMenu";
 import type { IconName } from "./ui";
@@ -59,6 +59,19 @@ export function sceneContextMenu(): ContextSection[] {
     return createSections(null);
 }
 
+// Right-click on something inside a prefab instance
+export function innerContextMenu(entity: EntityData): ContextSection[] {
+    const store = sceneStore;
+    const items: ContextSection["items"] = [{ label: "Focus", shortcut: "F", run: () => store.focus(entity.id) }];
+    if (store.hasOverrides(entity.id)) {
+        items.push(
+            { label: "Apply to Prefab", icon: "prefab", run: () => applyOverrides(entity.id) },
+            { label: "Revert to Prefab", icon: "back", run: () => store.revertOverrides(entity.id) }
+        );
+    }
+    return [{ items }];
+}
+
 // Right-click on an object
 export function entityContextMenu(entity: EntityData): ContextSection[] {
     const store = sceneStore;
@@ -79,6 +92,10 @@ export function entityContextMenu(entity: EntityData): ContextSection[] {
         const prefab = entity.prefab;
         actions.items.push(
             { label: "Edit Prefab", icon: "prefab", run: () => openPrefab(prefab) },
+            ...(entity.overrides ? [
+                { label: "Apply All to Prefab", icon: "prefab" as const, run: () => applyOverrides(entity.id) },
+                { label: "Revert All to Prefab", icon: "back" as const, run: () => store.revertOverrides(entity.id) },
+            ] : []),
             { label: "Unpack Prefab", icon: "unlink", run: () => store.unpack(entity.id) }
         );
     } else if (!store.editingPrefab) {

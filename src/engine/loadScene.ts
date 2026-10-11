@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { createComponentObject, createPlaceholder, setScripts } from "./components";
+import { expandInstance } from "./prefab";
 import type { Registry } from "./Registry";
 import { generateId } from "./types";
 import type { ComponentData, EntityData, SceneData, Vec3 } from "./types";
@@ -11,29 +12,31 @@ export function applyTransform(obj: THREE.Object3D, entity: EntityData, property
 }
 
 // An entity is a Group: the objects of its components and its child entities are children of that group.
-// `prefabStack` lists the prefabs being expanded: objects that come from inside a prefab carry no entityId,
-// so in the editor a click on any part of an instance selects the instance itself.
-export function createEntityObject(registry: Registry, entity: EntityData, prefabStack: string[] = []): THREE.Group {
+// `prefabStack` lists the prefabs being expanded. `inner` is true for what comes from inside a prefab: such
+// objects carry an innerId ("<instance id>/<path>") instead of an entityId, so in the editor a click on any
+// part of an instance selects the instance itself.
+export function createEntityObject(registry: Registry, entity: EntityData, prefabStack: string[] = [], inner = false): THREE.Group {
     const group = new THREE.Group();
     group.name = entity.name;
     group.visible = entity.active ?? true;
-    if (prefabStack.length === 0) group.userData.entityId = entity.id;
+    if (inner) group.userData.innerId = entity.id;
+    else group.userData.entityId = entity.id;
     applyTransform(group, entity, "position");
     applyTransform(group, entity, "rotation");
     applyTransform(group, entity, "scale");
 
-    // A prefab instance takes its components and children from the prefab
+    // A prefab instance takes its components and children from the prefab, changed by its overrides
     let source = entity;
     let stack = prefabStack;
     if (entity.prefab) {
-        const root = registry.getPrefab(entity.prefab);
-        if (!root || prefabStack.includes(entity.prefab)) {
-            console.warn(root ? `Prefab "${entity.prefab}" contains itself` : `Unknown prefab "${entity.prefab}"`);
+        const expanded = expandInstance(registry, entity, prefabStack);
+        if (!expanded) {
+            console.warn(registry.getPrefab(entity.prefab) ? `Prefab "${entity.prefab}" contains itself` : `Unknown prefab "${entity.prefab}"`);
             group.add(createPlaceholder());
             return group;
         }
         group.userData.prefab = entity.prefab;
-        source = root;
+        source = expanded;
         stack = [...prefabStack, entity.prefab];
     }
 
@@ -43,7 +46,7 @@ export function createEntityObject(registry: Registry, entity: EntityData, prefa
         if (obj) group.add(obj);
     }
     for (const child of source.children) {
-        group.add(createEntityObject(registry, child, stack));
+        group.add(createEntityObject(registry, child, stack, inner || source !== entity));
     }
     return group;
 }

@@ -40,7 +40,7 @@ export class Game {
 
     private registry: Registry;
 
-    // The objects of the scene entities by entity id (not of what is inside prefab instances)
+    // The objects of the scene entities by entity id; of what is inside prefab instances by "<instance id>/<path>"
     private objects = new Map<string, THREE.Object3D>();
 
     // Builds its own objects; `data` is only read
@@ -50,7 +50,8 @@ export class Game {
         this.root = loadScene(registry, data);
         this.scene.add(this.root);
         this.root.traverse((obj) => {
-            if (obj.userData.entityId) this.objects.set(obj.userData.entityId, obj);
+            const id = obj.userData.entityId ?? obj.userData.innerId;
+            if (id) this.objects.set(id, obj);
         });
         this.camera = findCamera(this.root);
         this.runtime = new Runtime(registry, this.root, this.input);

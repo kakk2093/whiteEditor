@@ -2,7 +2,8 @@ import type { EnvironmentData } from "./environment";
 
 export type Vec3 = [number, number, number];
 
-export type ParamValue = number | string | boolean;
+// string[] is a list of colors (a param of type "colors")
+export type ParamValue = number | string | boolean | string[];
 
 export type Params = Record<string, ParamValue>;
 
@@ -14,6 +15,16 @@ export interface ComponentData {
     [field: string]: ParamValue | Params;
 }
 
+// What a prefab instance changes in one entity of its prefab (see prefab.ts)
+export interface EntityOverride {
+    active?: boolean;
+    position?: Vec3;
+    rotation?: Vec3;
+    scale?: Vec3;
+    // By component key ("mesh", "script:spin"): the fields to replace; "params" are replaced one by one
+    components?: Record<string, Record<string, ParamValue | Params>>;
+}
+
 // A GameObject: does nothing by itself, everything comes from its components
 export interface EntityData {
     // Any string unique within the scene
@@ -22,8 +33,11 @@ export interface EntityData {
     // false hides the entity together with its children; missing means true
     active?: boolean;
     // Name of a prefab asset: the entity is an instance of it. Its components and children then come
-    // from the prefab file; the instance itself only keeps its name, active flag and transform.
+    // from the prefab file; the instance itself only keeps its name, active flag, transform and overrides.
     prefab?: string;
+    // Only for an instance: what it changes inside the prefab, by the path of names from the prefab root
+    // ("Desk/Lamp"; "." is the root itself)
+    overrides?: Record<string, EntityOverride>;
     // Local transform, relative to the parent entity
     position: Vec3;
     // Euler XYZ, degrees
@@ -66,6 +80,7 @@ function normalizeEntity(raw: Partial<EntityData>, fromRadians: boolean, usedIds
         name: raw.name ?? "GameObject",
         ...(raw.active === false ? { active: false } : {}),
         ...(raw.prefab ? { prefab: raw.prefab } : {}),
+        ...(raw.prefab && raw.overrides ? { overrides: structuredClone(raw.overrides) } : {}),
         position: raw.position ? [...raw.position] : [0, 0, 0],
         rotation: fromRadians ? (rotation.map((r) => r * RAD_TO_DEG) as Vec3) : rotation,
         scale: raw.scale ? [...raw.scale] : [1, 1, 1],

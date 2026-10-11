@@ -818,3 +818,62 @@ kbd {
     height: 30px;
     justify-content: flex-start;
 }
+
+/* A list of colors: swatches in rows, then the same list as text */
+.colors {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+    flex: 1;
+    min-width: 0;
+}
+
+.colors .color-swatch {
+    width: 22px;
+}
+
+.colors .input {
+    flex-basis: 100%;
+}
+
+/* What is inside a prefab instance; a name in bold has changes of this instance */
+.tree-row.inner {
+    font-style: italic;
+}
+
+.tree-row.overridden .name {
+    font-weight: 600;
+}
+
+/* A field a prefab instance has changed for itself */
+.field > label.overridden {
+    color: var(--prefab);
+    font-weight: 600;
+}
+
+.checkbox.overridden {
+    outline: 1px solid var(--prefab);
+    outline-offset: 1px;
+}
+
+/* The frame around the view of a selected camera; the picture itself is drawn on the canvas (Viewport.tsx) */
+.viewport-preview {
+    position: absolute;
+    right: 10px;
+    bottom: 10px;
+    width: 30%;
+    height: 30%;
+    border: 1px solid var(--border);
+    outline: 1px solid rgba(0, 0, 0, 0.6);
+    pointer-events: none;
+}
+
+.viewport-preview span {
+    position: absolute;
+    left: 0;
+    top: -18px;
+    padding: 1px 6px;
+    font-size: 11px;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.6);
+}

@@ -1,4 +1,4 @@
-import { parsePrefab, parseScene, validateScene } from "../../engine";
+import { applyToPrefab, parsePrefab, parseScene, validateScene } from "../../engine";
 import type { LookData, MaterialData } from "../../engine";
 import type { AssetSection } from "./project";
 import { sceneStore } from "./SceneStore";
@@ -215,7 +215,7 @@ export async function deleteScene(name: string) {
 export async function createPrefab(entityId: string) {
     const { project, registry } = sceneStore;
     const entity = sceneStore.findEntity(entityId);
-    if (!entity || entity.prefab || sceneStore.editingPrefab || blockedByPlay()) return;
+    if (!entity || entity.prefab || sceneStore.isInner(entityId) || sceneStore.editingPrefab || blockedByPlay()) return;
     try {
         const name = freeName(entity.name, registry.prefabNames());
         const root = { ...structuredClone(entity), position: [0, 0, 0] as [number, number, number] };
@@ -234,6 +234,31 @@ export function openPrefab(name: string) {
         sceneStore.openPrefab(name);
         sceneStore.update({ status: `Editing prefab ${name}` });
     });
+}
+
+// Writes what an instance changes into its prefab, so that every instance gets it; the instance then no
+// longer differs. For an id of something inside the instance: only the changes of that one object.
+export async function applyOverrides(id: string) {
+    const { project, registry } = sceneStore;
+    const instance = sceneStore.instanceOf(id);
+    const root = instance?.prefab ? registry.getPrefab(instance.prefab) : null;
+    if (!instance?.prefab || !instance.overrides || !root || blockedByPlay()) return;
+    // A prefab that is open for editing is saved from there
+    if (sceneStore.editingPrefab === instance.prefab) return;
+    try {
+        const name = instance.prefab;
+        const path = sceneStore.isInner(id) ? id.slice(id.indexOf("/") + 1) : null;
+        const overrides = path === null ? instance.overrides : { [path]: instance.overrides[path] ?? {} };
+        const changed = applyToPrefab(root, overrides);
+        await writeAsset(project, "prefabs", name, { version: 3, root: changed });
+        registry.setPrefab(name, changed);
+        sceneStore.revertOverrides(id);
+        // Every other instance shows the new prefab
+        sceneStore.setRegistry(registry);
+        sceneStore.update({ status: `Applied to prefabs/${name}.json; every instance of ${name} follows` });
+    } catch (e) {
+        report(e);
+    }
 }
 
 // Leaves prefab editing; unsaved changes of the prefab are saved, like Unity's auto save
@@ -336,6 +361,7 @@ export async function createMaterial() {
         const name = freeName("Material", registry.materialNames());
         await writeAsset(project, "materials", name, {});
         registry.setMaterial(name, {});
+        sceneStore.recordAsset("materials", name, null, {});
         sceneStore.selectAsset({ kind: "material", name });
     } catch (e) {
         report(e);
@@ -347,8 +373,10 @@ const pendingWrites = new Map<string, ReturnType<typeof setTimeout>>();
 // Applies the change at once and writes the file a moment later, so dragging a value does not flood the disk
 export function updateMaterial<K extends keyof MaterialData>(name: string, key: K, value: MaterialData[K]) {
     const { project, registry } = sceneStore;
-    const data = { ...registry.getMaterialData(name), [key]: value };
+    const before = registry.getMaterialData(name) ?? {};
+    const data = { ...before, [key]: value };
     registry.setMaterial(name, data);
+    sceneStore.recordAsset("materials", name, before, data);
     sceneStore.changed();
 
     clearTimeout(pendingWrites.get(name));
@@ -358,6 +386,30 @@ export function updateMaterial<K extends keyof MaterialData>(name: string, key: 
     }, 300));
 }
 
+// Undo and redo of a material or a look: makes it what it was, in the registry and on disk.
+// null removes it (undo of its creation) or, the other way, a deleted one comes back.
+sceneStore.assetHandler = (section, name, data) => {
+    const { project, registry } = sceneStore;
+    const kind = section === "materials" ? "material" : "look";
+    const key = section === "materials" ? name : `looks/${name}`;
+    clearTimeout(pendingWrites.get(key));
+    pendingWrites.delete(key);
+
+    const existed = section === "materials" ? registry.getMaterialData(name) !== undefined : registry.getLookData(name) !== undefined;
+    if (data === null) {
+        deleteAsset(project, section, name).catch(report);
+        if (section === "materials") registry.removeMaterial(name);
+        else registry.removeLook(name);
+        if (sceneStore.selectedAsset?.kind === kind && sceneStore.selectedAsset.name === name) sceneStore.selectAsset(null);
+    } else {
+        writeAsset(project, section, name, data).catch(report);
+        if (section === "materials") registry.setMaterial(name, data as Partial<MaterialData>);
+        else registry.setLook(name, data as LookData);
+    }
+    // A material that appeared or went away: the meshes that name it have to be built again
+    if (section === "materials" && existed !== (data !== null)) sceneStore.setRegistry(registry);
+};
+
 // A new look starts as the pixel-art one: small picture, outlines, few colors
 export async function createLook() {
     const { project, registry } = sceneStore;
@@ -366,6 +418,7 @@ export async function createLook() {
         const data: LookData = { pixelSize: 3, effects: [{ effect: "outline" }, { effect: "palette" }] };
         await writeAsset(project, "looks", name, data);
         registry.setLook(name, data);
+        sceneStore.recordAsset("looks", name, null, data);
         sceneStore.selectAsset({ kind: "look", name });
     } catch (e) {
         report(e);
@@ -375,6 +428,7 @@ export async function createLook() {
 // Like updateMaterial: applies at once, writes the file a moment later
 export function updateLook(name: string, data: LookData) {
     const { project, registry } = sceneStore;
+    sceneStore.recordAsset("looks", name, registry.getLookData(name) ?? {}, data);
     registry.setLook(name, data);
     sceneStore.changed();
 
@@ -392,6 +446,7 @@ export async function deleteLook(name: string) {
         clearTimeout(pendingWrites.get(`looks/${name}`));
         pendingWrites.delete(`looks/${name}`);
         await deleteAsset(project, "looks", name);
+        sceneStore.recordAsset("looks", name, registry.getLookData(name) ?? {}, null);
         registry.removeLook(name);
         sceneStore.selectAsset(null);
     } catch (e) {
@@ -405,6 +460,7 @@ export async function deleteMaterial(name: string) {
         clearTimeout(pendingWrites.get(name));
         pendingWrites.delete(name);
         await deleteAsset(project, "materials", name);
+        sceneStore.recordAsset("materials", name, registry.getMaterialData(name) ?? {}, null);
         registry.removeMaterial(name);
         sceneStore.selectAsset(null);
         // Meshes that used it fall back to the default material

@@ -61,7 +61,8 @@ export interface EffectDef {
     //   uv     where the pixel is, 0..1
     //   color  the picture at that pixel so far, linear RGB
     // Every param is a uniform of the same name: number -> float, boolean -> bool, color -> vec3 (linear),
-    // select -> int (index of the option); so a param cannot be called uv, color or like anything below.
+    // select -> int (index of the option), colors -> vec3 name[32] (linear) with int nameCount;
+    // so a param cannot be called uv, color or like anything below.
     // Also available:
     //   vec4 texel(vec2 uv)      the picture at another place
     //   float depthAt(vec2 uv)   distance from the camera in meters (needs inputs: ["depth"])
@@ -110,11 +111,13 @@ vec4 effect(vec2 uv, vec4 color) {
 }`,
 });
 
-// Fewer colors: each channel keeps only `levels` steps, with a dither pattern hiding the bands
+// Fewer colors, with a dither pattern hiding the bands. With `colors` every pixel becomes the nearest
+// color of that list; with an empty list each channel keeps only `levels` steps.
 const palette = defineEffect({
     name: "palette",
     label: "Palette",
     params: {
+        colors: { type: "colors", default: [] },
         levels: { type: "number", default: 5, min: 2, max: 32, step: 1 },
         dither: { type: "number", default: 0.3, min: 0, max: 1, step: 0.05 },
     },
@@ -132,8 +135,27 @@ float bayer4(vec2 p) {
 vec4 effect(vec2 uv, vec4 color) {
     // Counted in sRGB, where equal steps look equal
     vec3 c = toSRGB(clamp(color.rgb, 0.0, 1.0));
+    float pattern = bayer4(uv * resolution) * dither;
+    if (colorsCount > 0) {
+        // The pattern pushes a pixel between two colors of the list towards one or the other
+        c += pattern * 0.25;
+        vec3 nearest = c;
+        float least = 1000.0;
+        for (int i = 0; i < 32; i++) {
+            if (i >= colorsCount) break;
+            vec3 candidate = toSRGB(colors[i]);
+            // Green differences are seen best, blue ones worst
+            vec3 d = (c - candidate) * vec3(0.55, 0.77, 0.34);
+            float distance2 = dot(d, d);
+            if (distance2 < least) {
+                least = distance2;
+                nearest = candidate;
+            }
+        }
+        return vec4(toLinear(nearest), color.a);
+    }
     float steps = levels - 1.0;
-    c = floor(c * steps + 0.5 + bayer4(uv * resolution) * dither) / steps;
+    c = floor(c * steps + 0.5 + pattern) / steps;
     return vec4(toLinear(clamp(c, 0.0, 1.0)), color.a);
 }`,
 });

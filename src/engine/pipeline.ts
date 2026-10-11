@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import type { EffectDef, EffectEntry, ResolvedLook } from "./look";
 import { paramDefaults } from "./Registry";
-import type { ParamDef, Registry } from "./Registry";
+import type { Registry } from "./Registry";
+import { uniformDeclaration, uniformNames, uniformValues } from "./shaderParams";
 import { Surfaces } from "./surface";
 
 // Draws a scene through a look: with the surfaces of the look in its materials, into a (possibly smaller)
@@ -57,34 +58,6 @@ void main() {
 }`;
 
 const TONE_MAPPINGS = ["none", "reinhard", "aces"];
-
-function uniformDeclaration(name: string, def: ParamDef) {
-    switch (def.type) {
-        case "number":
-            return `uniform float ${name};`;
-        case "boolean":
-            return `uniform bool ${name};`;
-        case "color":
-            return `uniform vec3 ${name};`;
-        case "select":
-            return `uniform int ${name};`;
-        default:
-            // Strings and asset names have nothing to be in a shader
-            return "";
-    }
-}
-
-function uniformValue(def: ParamDef, value: unknown) {
-    switch (def.type) {
-        case "color":
-            // Hex colors are sRGB; the picture the effects work on is linear
-            return new THREE.Color(typeof value === "string" ? value : def.default);
-        case "select":
-            return Math.max(0, def.options.indexOf(value as string));
-        default:
-            return value;
-    }
-}
 
 interface Pass {
     def: EffectDef;
@@ -166,7 +139,7 @@ export class RenderPipeline {
             this.passes.forEach((pass) => pass.material.dispose());
             this.passes = used.map(({ def }) => {
                 const params = def.params ?? {};
-                const declarations = Object.entries(params).map(([name, d]) => uniformDeclaration(name, d)).join("\n");
+                const declarations = Object.entries(params).map(([name, d]) => uniformDeclaration(d, uniformNames(name, d))).join("\n");
                 const uniforms: Record<string, THREE.IUniform> = {
                     tColor: { value: null },
                     tDepth: { value: null },
@@ -176,7 +149,9 @@ export class RenderPipeline {
                     cameraNear: { value: 0.1 },
                     cameraFar: { value: 1000 },
                 };
-                for (const name of Object.keys(params)) uniforms[name] = { value: null };
+                for (const [name, d] of Object.entries(params)) {
+                    for (const uniform of uniformNames(name, d)) uniforms[uniform] = { value: null };
+                }
                 const material = new THREE.ShaderMaterial({
                     vertexShader: VERTEX,
                     fragmentShader: `${HEADER}\n${declarations}\n${def.shader}\n${FOOTER}`,
@@ -192,7 +167,10 @@ export class RenderPipeline {
             const params = def.params ?? {};
             const values = { ...paramDefaults(params), ...entry };
             for (const [name, d] of Object.entries(params)) {
-                this.passes[i].material.uniforms[name].value = uniformValue(d, values[name]);
+                const uniformValue = uniformValues(d, values[name]);
+                uniformNames(name, d).forEach((uniform, n) => {
+                    this.passes[i].material.uniforms[uniform].value = uniformValue[n];
+                });
             }
         });
         this.needsNormal = used.some(({ def }) => def.inputs?.includes("normal"));

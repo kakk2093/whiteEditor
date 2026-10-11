@@ -8,7 +8,7 @@
     "fogColor": "#0b4a5c",
     "fogNear": 1,
     "fogFar": 20,
-    "look": "Sketch"
+    "look": "PS1"
   },
   "entities": [
     {
@@ -156,26 +156,12 @@
     {
       "id": "f50ca1ed",
       "name": "GameObject",
-      "position": [1.1091, 0.7243, 2.5157],
+      "position": [-2.3858, 0.7243, 4.1172],
       "rotation": [0, 0, 0],
       "scale": [1, 1, 1],
       "components": [],
-      "children": [
-        {
-          "id": "223d739a",
-          "name": "Capsule (1)",
-          "position": [0, 0.6922, 1.1485],
-          "rotation": [0, 0, 0],
-          "scale": [1, 1, 1],
-          "components": [
-            {
-              "type": "mesh",
-              "shape": "capsule"
-            }
-          ],
-          "children": []
-        }
-      ]
+      "children": [],
+      "prefab": "GameObject"
     },
     {
       "id": "81455c65",

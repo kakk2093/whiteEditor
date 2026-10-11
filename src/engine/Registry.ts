@@ -6,22 +6,36 @@ import { applyMaterialData, createSharedMaterial } from "./materials";
 import type { MaterialData } from "./materials";
 import { builtinSurfaces, isSurfaceDef } from "./surface";
 import type { SurfaceDef } from "./surface";
-import type { EntityData, Params } from "./types";
+import type { EntityData, Params, ParamValue } from "./types";
 
-export type ParamDef =
+export type ParamDef = (
     | { type: "number"; default: number; min?: number; max?: number; step?: number }
     | { type: "color"; default: string }
+    // A list of colors, e.g. a palette: ["#1a1c2c", "#5d275d"]; at most MAX_COLORS (shaderParams.ts)
+    | { type: "colors"; default: string[] }
     | { type: "boolean"; default: boolean }
     | { type: "string"; default: string }
     | { type: "select"; default: string; options: string[] }
     // A reference to a project asset by name, "" = none
-    | { type: "asset"; kind: "material" | "look"; default: string };
+    | { type: "asset"; kind: "material" | "look"; default: string }
+) & {
+    // The field matters only while other fields of the same object have one of these values, e.g.
+    // { kind: ["spot"] }; otherwise the Inspector does not show it. The value is kept either way.
+    when?: Record<string, ParamValue[]>;
+};
+
+// true if the field has a meaning with these values of the other fields (see `when`)
+export function fieldApplies(def: ParamDef, defs: Record<string, ParamDef>, values: Record<string, unknown>) {
+    return Object.entries(def.when ?? {}).every(([key, allowed]) => allowed.includes((values[key] ?? defs[key]?.default) as ParamValue));
+}
 
 type ParamType<D extends ParamDef> = D extends { type: "number" }
     ? number
     : D extends { type: "boolean" }
         ? boolean
-        : string;
+        : D extends { type: "colors" }
+            ? string[]
+            : string;
 
 export function paramDefaults(defs: Record<string, ParamDef>): Params {
     return Object.fromEntries(Object.entries(defs).map(([key, def]) => [key, def.default]));

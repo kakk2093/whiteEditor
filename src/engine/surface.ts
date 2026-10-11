@@ -2,6 +2,7 @@ import * as THREE from "three";
 import type { SurfaceEntry } from "./look";
 import { paramDefaults } from "./Registry";
 import type { ParamDef, Registry } from "./Registry";
+import { uniformDeclaration, uniformNames, uniformValues } from "./shaderParams";
 
 // A surface is what a look adds to the materials of the scene: things a screen effect cannot do, because
 // they happen while an object is drawn (moving its vertices, changing how light falls on it). The look lists
@@ -87,32 +88,6 @@ const flat = defineSurface({
 // Known to every project; a project surface with the same name replaces the built-in one
 export const builtinSurfaces: SurfaceDef[] = [vertexSnap, toon, flat];
 
-function uniformDeclaration(name: string, def: ParamDef) {
-    switch (def.type) {
-        case "number":
-            return `uniform float ${name};`;
-        case "boolean":
-            return `uniform bool ${name};`;
-        case "color":
-            return `uniform vec3 ${name};`;
-        case "select":
-            return `uniform int ${name};`;
-        default:
-            return "";
-    }
-}
-
-function uniformValue(def: ParamDef, value: unknown) {
-    switch (def.type) {
-        case "color":
-            return new THREE.Color(typeof value === "string" ? value : def.default);
-        case "select":
-            return Math.max(0, def.options.indexOf(value as string));
-        default:
-            return value;
-    }
-}
-
 // The code of the surfaces for one of the two shaders. All of them end up in the same shader, so the names
 // each one uses (its params, its function) are renamed apart with #define for the length of its code.
 function stageCode(used: SurfaceDef[], stage: "vertex" | "fragment", fn: string) {
@@ -123,9 +98,10 @@ function stageCode(used: SurfaceDef[], stage: "vertex" | "fragment", fn: string)
         if (!source) return;
         const names: Record<string, string> = { resolution: "surface_resolution", time: "surface_time", [fn]: `surface${i}_${stage}` };
         for (const [param, d] of Object.entries(def.params ?? {})) {
-            if (!uniformDeclaration(param, d)) continue;
-            names[param] = `surface${i}_${param}`;
-            code += `${uniformDeclaration(names[param], d)}\n`;
+            const own = uniformNames(param, d);
+            if (own.length === 0) continue;
+            for (const name of own) names[name] = `surface${i}_${name}`;
+            code += `${uniformDeclaration(d, own.map((name) => names[name]))}\n`;
         }
         const renamed = Object.entries(names);
         code += `${renamed.map(([from, to]) => `#define ${from} ${to}`).join("\n")}\n${source}\n${renamed.map(([from]) => `#undef ${from}`).join("\n")}\n`;
@@ -184,7 +160,9 @@ export class Surfaces {
             const { surface_resolution, surface_time } = this.uniforms;
             this.uniforms = { surface_resolution, surface_time };
             used.forEach(({ def }, i) => {
-                for (const param of Object.keys(def.params ?? {})) this.uniforms[`surface${i}_${param}`] = { value: null };
+                for (const [param, d] of Object.entries(def.params ?? {})) {
+                    for (const name of uniformNames(param, d)) this.uniforms[`surface${i}_${name}`] = { value: null };
+                }
             });
         }
 
@@ -192,7 +170,10 @@ export class Surfaces {
             const params = def.params ?? {};
             const values = { ...paramDefaults(params), ...entry };
             for (const [name, d] of Object.entries(params)) {
-                this.uniforms[`surface${i}_${name}`].value = uniformValue(d, values[name]);
+                const uniformValue = uniformValues(d, values[name]);
+                uniformNames(name, d).forEach((uniform, n) => {
+                    this.uniforms[`surface${i}_${uniform}`].value = uniformValue[n];
+                });
             }
         });
     }

@@ -7,14 +7,21 @@ import {
     createEntity,
     createEntityObject,
     defaultEnvironment,
+    diffOverride,
     disposeObject,
+    expandInstance,
+    expandPristine,
     findComponent,
+    findInExpanded,
     Game,
     generateId,
     rebuildComponentObject,
-    Registry
+    Registry,
+    ROOT_PATH
 } from "../../engine";
-import type { ComponentData, EntityData, EnvironmentData, ParamValue, Params, PrefabData, SceneData } from "../../engine";
+import type {
+    ComponentData, EntityData, EntityOverride, EnvironmentData, ParamValue, Params, PrefabData, SceneData
+} from "../../engine";
 
 type Listener = () => void;
 
@@ -45,6 +52,27 @@ function findEntity(
     return null;
 }
 
+// What an id stands for. `entity` is the real entity of the scene, or, for what comes from a prefab, a copy
+// of it with the overrides applied; `instance` is then the real instance it belongs to and `path` its
+// place in the prefab. Editing the copy changes nothing until commit() turns it into an override.
+interface Target {
+    entity: EntityData;
+    instance: EntityData | null;
+    path: string;
+}
+
+// A change of a material or a look, as a step of undo: what the asset was and what it became.
+// null means there was (or is) no such asset: the step created or deleted it.
+export interface AssetStep {
+    section: "materials" | "looks";
+    name: string;
+    before: unknown | null;
+    after: unknown | null;
+}
+
+// One step of undo: the scene as it was before a change of it, or a change of an asset
+type Step = { scene: string } | { asset: AssetStep };
+
 // A deep copy in which every entity gets a new id
 function cloneWithNewIds(entity: EntityData): EntityData {
     return {
@@ -56,6 +84,12 @@ function cloneWithNewIds(entity: EntityData): EntityData {
 
 // `key` is what componentKey() gives: the type, or "script:<behavior>" for the types an entity can have several of
 export const getComponent = findComponent;
+
+// How many steps back undo remembers
+const UNDO_LIMIT = 100;
+
+// Changes closer in time than this are undone as one step
+const UNDO_MERGE_MS = 400;
 
 // The three.js layer of what only the editor shows inside the scene: the grid, the markers of lights and
 // cameras. The viewport draws this layer after the look of the scene, sharp and untouched by its effects.
@@ -128,7 +162,34 @@ class SceneStore {
     // Name of the prefab being edited: its root is then the only entity, and the scene waits in `stash`
     editingPrefab: string | null = null;
 
-    private stash: { entities: EntityData[]; environment: EnvironmentData; savedSnapshot: string } | null = null;
+    private stash: {
+        entities: EntityData[];
+        environment: EnvironmentData;
+        savedSnapshot: string;
+        undoStack: Step[];
+        redoStack: Step[];
+    } | null = null;
+
+    // Undo / redo, oldest step first. A step of the scene (or of the prefab being edited) is its JSON before
+    // the change: every change of the scene data ends in notify(), which is where it is recorded. A change
+    // of a material or a look is recorded by the action that makes it (recordAsset). Both are in one list,
+    // so they are undone in the order they were made.
+    private undoStack: Step[] = [];
+
+    private redoStack: Step[] = [];
+
+    // What the last recorded step changed: "scene" or "<section>/<name>" of an asset; only changes of the
+    // same thing merge into one step
+    private lastStep = "";
+
+    // Set by actions.ts: makes an asset what it was (null: removes it), in the registry and on disk
+    assetHandler: ((section: AssetStep["section"], name: string, data: unknown | null) => void) | null = null;
+
+    // The scene data as of the last notify(), to see that it changed and what it was before
+    private current = "";
+
+    // When the last change was recorded; changes that follow each other closely are one step
+    private lastChange = 0;
 
     // A prefab has no lights of its own, so it gets one while it is being edited
     private prefabLight = new THREE.DirectionalLight(0xffffff, 2.5);
@@ -159,7 +220,7 @@ class SceneStore {
     // The game itself always has its look.
     lookEnabled = true;
 
-    // Counts how often the scene data was put back by stop(); a field being typed in must then forget its text
+    // Counts how often the scene data was put back (stop(), undo, redo); a field being typed in must then forget its text
     restores = 0;
 
     // Bumped on every change, lets React treat the store as an external store
@@ -193,16 +254,246 @@ class SceneStore {
     getVersion = () => this.version;
 
     private notify() {
+        this.record();
         this.version++;
         this.listeners.forEach((fn) => fn());
     }
 
-    get selected() {
-        return this.selectedId ? findEntity(this.entities, this.selectedId)?.entity ?? null : null;
+    // Puts the scene data as it was before the change that just happened onto the undo stack
+    private record() {
+        const now = JSON.stringify(this.toJSON());
+        if (now === this.current) return;
+        // Nothing was shown yet, so there is nothing to go back to
+        if (!this.current) {
+            this.current = now;
+            return;
+        }
+        const time = performance.now();
+        // Dragging the gizmo or typing a number is many small changes: together they are one step
+        if (this.lastStep !== "scene" || time - this.lastChange > UNDO_MERGE_MS) {
+            this.undoStack.push({ scene: this.current });
+            if (this.undoStack.length > UNDO_LIMIT) this.undoStack.shift();
+        }
+        this.redoStack = [];
+        this.lastChange = time;
+        this.lastStep = "scene";
+        this.current = now;
     }
 
+    // A material or a look was changed, created (before = null) or deleted (after = null)
+    recordAsset(section: AssetStep["section"], name: string, before: unknown | null, after: unknown | null) {
+        const key = `${section}/${name}`;
+        const time = performance.now();
+        const top = this.undoStack[this.undoStack.length - 1];
+        // Dragging a slider or a color is many small changes: together they are one step
+        if (top && "asset" in top && this.lastStep === key && time - this.lastChange <= UNDO_MERGE_MS) {
+            top.asset.after = after;
+        } else {
+            this.undoStack.push({ asset: { section, name, before, after } });
+            if (this.undoStack.length > UNDO_LIMIT) this.undoStack.shift();
+        }
+        this.redoStack = [];
+        this.lastChange = time;
+        this.lastStep = key;
+    }
+
+    // Forgets the steps: what is shown now is another scene (or prefab)
+    private resetHistory(undoStack: Step[] = [], redoStack: Step[] = []) {
+        this.undoStack = undoStack;
+        this.redoStack = redoStack;
+        this.lastStep = "";
+        this.current = JSON.stringify(this.toJSON());
+        this.lastChange = 0;
+    }
+
+    get canUndo() {
+        return this.undoStack.length > 0;
+    }
+
+    get canRedo() {
+        return this.redoStack.length > 0;
+    }
+
+    undo() {
+        this.travel(this.undoStack, this.redoStack, "Undo");
+    }
+
+    redo() {
+        this.travel(this.redoStack, this.undoStack, "Redo");
+    }
+
+    // Takes the step on top of `from` back (or makes it again) and puts into `to` what leads the other way
+    private travel(from: Step[], to: Step[], what: "Undo" | "Redo") {
+        const step = from.pop();
+        if (!step) return;
+        let subject = "";
+        if ("asset" in step) {
+            const { section, name, before, after } = step.asset;
+            to.push(step);
+            this.assetHandler?.(section, name, what === "Undo" ? before : after);
+            // A field of the asset being typed in must forget its text
+            this.restores++;
+            subject = ` ${section}/${name}`;
+        } else {
+            to.push({ scene: this.current });
+            this.restore(JSON.parse(step.scene) as SceneData);
+            this.restartGame();
+            this.current = JSON.stringify(this.toJSON());
+        }
+        // The next change is a step of its own, however soon it comes
+        this.lastChange = 0;
+        this.lastStep = "";
+        this.status = `${what}${subject} (${this.undoStack.length} to undo, ${this.redoStack.length} to redo)`;
+        this.notify();
+    }
+
+    // Replaces the scene data with an earlier state of the same scene
+    private restore(data: SceneData) {
+        this.entities = data.entities;
+        this.environment = { ...defaultEnvironment, ...data.environment };
+        applyEnvironment(this.scene, this.environment);
+        this.rebuild();
+        if (this.selectedId && !this.objects.has(this.selectedId)) this.selectedId = null;
+        // A field being typed in must forget its text
+        this.restores++;
+    }
+
+    get selected() {
+        return this.selectedId ? this.findEntity(this.selectedId) : null;
+    }
+
+    // An entity of the scene, or, by an id like "<instance id>/<path>", what a prefab instance has at that
+    // path: a copy with the overrides of the instance applied
     findEntity(id: string) {
-        return findEntity(this.entities, id)?.entity ?? null;
+        return this.locate(id)?.entity ?? null;
+    }
+
+    // `content` asks for what a prefab instance is made of instead of the instance itself: its components
+    // come from the prefab, so changing them is an override too
+    private locate(id: string, content = false): Target | null {
+        const slash = id.indexOf("/");
+        const real = findEntity(this.entities, slash < 0 ? id : id.slice(0, slash))?.entity;
+        if (!real) return null;
+        if (slash < 0 && !(content && real.prefab)) return { entity: real, instance: null, path: "" };
+
+        const expanded = expandInstance(this.registry, real);
+        if (!expanded) return null;
+        if (slash < 0) return { entity: expanded, instance: real, path: ROOT_PATH };
+        const entity = findInExpanded(expanded, id);
+        return entity ? { entity, instance: real, path: id.slice(slash + 1) } : null;
+    }
+
+    // After an edit: what now differs from the prefab becomes the override of the instance at that path
+    private commit(target: Target) {
+        const { instance, path, entity } = target;
+        if (!instance) return;
+        const pristine = expandPristine(this.registry, instance);
+        const before = pristine && findInExpanded(pristine, entity.id);
+        if (!before) return;
+
+        const override = diffOverride(this.registry, before, entity, path === ROOT_PATH);
+        const overrides = { ...instance.overrides };
+        if (override) overrides[path] = override;
+        else delete overrides[path];
+        if (Object.keys(overrides).length > 0) instance.overrides = overrides;
+        else delete instance.overrides;
+    }
+
+    // The content of a prefab instance, for the Hierarchy and the Inspector; null if it cannot be shown
+    expand(entity: EntityData) {
+        return entity.prefab ? expandInstance(this.registry, entity) : null;
+    }
+
+    // true if the id is of something inside a prefab instance
+    isInner(id: string) {
+        return id.includes("/");
+    }
+
+    // The instance the id belongs to: itself, or the one it is inside of
+    instanceOf(id: string) {
+        const entity = findEntity(this.entities, id.split("/")[0])?.entity;
+        return entity?.prefab ? entity : null;
+    }
+
+    // true if the instance changes what the prefab gives it (for an inner id: at that very place)
+    hasOverrides(id: string) {
+        const overrides = this.instanceOf(id)?.overrides;
+        if (!overrides) return false;
+        return this.isInner(id) ? id.slice(id.indexOf("/") + 1) in overrides : true;
+    }
+
+    // What the instance changes at the place the id names (for the instance itself: in its root), if anything.
+    // The Inspector marks these fields.
+    overrideOf(id: string): EntityOverride | null {
+        const overrides = this.instanceOf(id)?.overrides;
+        return overrides?.[this.isInner(id) ? id.slice(id.indexOf("/") + 1) : ROOT_PATH] ?? null;
+    }
+
+    // Back to what the prefab gives, for one thing the instance changes: `field` is where it is in the
+    // override, e.g. ["position"], ["components", "mesh", "shape"], ["components", "model", "params", "steps"]
+    revertOverrideField(id: string, field: string[]) {
+        const instance = this.instanceOf(id);
+        const path = this.isInner(id) ? id.slice(id.indexOf("/") + 1) : ROOT_PATH;
+        const override = instance?.overrides?.[path];
+        if (!instance?.overrides || !override) return;
+
+        // Removes the field, then every object that it leaves empty
+        const remove = (object: Record<string, unknown>, keys: string[]) => {
+            const [key, ...rest] = keys;
+            const inside = object[key];
+            if (rest.length === 0) delete object[key];
+            else if (typeof inside === "object" && inside !== null) {
+                remove(inside as Record<string, unknown>, rest);
+                if (Object.keys(inside).length === 0) delete object[key];
+            }
+        };
+        const changed = structuredClone(override) as Record<string, unknown>;
+        remove(changed, field);
+        if (Object.keys(changed).length > 0) instance.overrides = { ...instance.overrides, [path]: changed as EntityOverride };
+        else delete instance.overrides[path];
+        if (Object.keys(instance.overrides).length === 0) delete instance.overrides;
+
+        this.rebuildEntity(instance);
+        this.restores++;
+        this.restartGame();
+        this.notify();
+    }
+
+    // Back to what the prefab gives: for an instance all of its overrides, for an inner id the one at that place
+    revertOverrides(id: string) {
+        const instance = this.instanceOf(id);
+        if (!instance?.overrides) return;
+        if (this.isInner(id)) {
+            delete instance.overrides[id.slice(id.indexOf("/") + 1)];
+            if (Object.keys(instance.overrides).length === 0) delete instance.overrides;
+        } else {
+            delete instance.overrides;
+        }
+        this.rebuildEntity(instance);
+        this.restores++;
+        this.restartGame();
+        this.notify();
+    }
+
+    // Builds the three.js object of one entity (with all that is under it) again
+    private rebuildEntity(entity: EntityData) {
+        const old = this.objects.get(entity.id);
+        const parent = old?.parent;
+        if (!old || !parent) return;
+        parent.remove(old);
+        this.unindexObjects(old);
+        disposeObject(old);
+        const obj = createEntityObject(this.registry, entity);
+        parent.add(obj);
+        this.adopt(entity, obj);
+    }
+
+    // The camera component of the selected entity: the viewport shows its view in a corner.
+    // Not during Play, which has the Game view for that.
+    get previewCamera() {
+        if (this.playing) return null;
+        const camera = this.selectedObject?.children.find((child) => child.userData.component === "camera");
+        return camera instanceof THREE.PerspectiveCamera ? camera : null;
     }
 
     get selectedObject() {
@@ -213,23 +504,27 @@ class SceneStore {
     private adopt(entity: EntityData, obj: THREE.Object3D) {
         const byId = new Map<string, THREE.Object3D>();
         obj.traverse((child) => {
-            if (child.userData.entityId) byId.set(child.userData.entityId, child);
+            const id = child.userData.entityId ?? child.userData.innerId;
+            if (id) byId.set(id, child);
         });
 
         const visit = (e: EntityData) => {
-            const o = byId.get(e.id);
+            // What is inside a prefab instance is registered too, under its "<instance id>/<path>"
+            const shown = this.expand(e) ?? e;
+            const o = byId.get(shown.id);
             if (o) {
-                this.objects.set(e.id, o);
-                this.updateHelper(e);
+                this.objects.set(shown.id, o);
+                this.updateHelper(shown);
             }
-            e.children.forEach(visit);
+            shown.children.forEach(visit);
         };
         visit(entity);
     }
 
     private unindexObjects(obj: THREE.Object3D) {
         obj.traverse((child) => {
-            if (child.userData.entityId) this.objects.delete(child.userData.entityId);
+            const id = child.userData.entityId ?? child.userData.innerId;
+            if (id) this.objects.delete(id);
         });
     }
 
@@ -374,15 +669,7 @@ class SceneStore {
         this.confirmingStop = false;
         this.paused = false;
 
-        if (changed && !keep && snapshot) {
-            const data = JSON.parse(snapshot) as SceneData;
-            this.entities = data.entities;
-            this.environment = { ...defaultEnvironment, ...data.environment };
-            applyEnvironment(this.scene, this.environment);
-            this.rebuild();
-            if (this.selectedId && !this.objects.has(this.selectedId)) this.selectedId = null;
-            this.restores++;
-        }
+        if (changed && !keep && snapshot) this.restore(JSON.parse(snapshot) as SceneData);
         this.status = !changed ? "Stopped" : keep ? "Stopped, the changes made during Play are kept" : "Stopped, the changes made during Play are dropped";
         this.notify();
     }
@@ -488,6 +775,8 @@ class SceneStore {
         const obj = this.objects.get(id);
         if (!found || !obj || id === parentId) return;
         if (this.editingPrefab && !found.parent) return;
+        // What is inside a prefab instance takes no children
+        if (parentId && this.isInner(parentId)) return;
         // An entity cannot become a child of its own descendant
         if (parentId && findEntity(found.entity.children, parentId)) return;
 
@@ -539,21 +828,24 @@ class SceneStore {
     }
 
     setTransform(id: string, property: TransformProperty, axis: 0 | 1 | 2, value: number) {
-        const entity = findEntity(this.entities, id)?.entity;
+        const target = this.locate(id);
         const obj = this.objects.get(id);
-        if (!entity || !obj) return;
+        if (!target || !obj) return;
+        const { entity } = target;
         entity[property][axis] = value;
         // The data keeps rotation in degrees
         obj[property][AXES[axis]] = property === "rotation" ? THREE.MathUtils.degToRad(value) : value;
         this.game?.syncEntity(entity, property);
+        this.commit(target);
         this.notify();
     }
 
     // Copies the transform of the entity's three.js object back into the entity data
     syncFromObject(id: string) {
-        const entity = findEntity(this.entities, id)?.entity;
+        const target = this.locate(id);
         const obj = this.objects.get(id);
-        if (!entity || !obj) return;
+        if (!target || !obj) return;
+        const { entity } = target;
         entity.position = [round(obj.position.x), round(obj.position.y), round(obj.position.z)];
         entity.rotation = [
             round(THREE.MathUtils.radToDeg(obj.rotation.x)),
@@ -561,6 +853,7 @@ class SceneStore {
             round(THREE.MathUtils.radToDeg(obj.rotation.z))
         ];
         entity.scale = [round(obj.scale.x), round(obj.scale.y), round(obj.scale.z)];
+        this.commit(target);
         this.notify();
     }
 
@@ -598,13 +891,15 @@ class SceneStore {
     }
 
     setActive(id: string, active: boolean) {
-        const entity = findEntity(this.entities, id)?.entity;
+        const target = this.locate(id);
         const obj = this.objects.get(id);
-        if (!entity || !obj) return;
+        if (!target || !obj) return;
+        const { entity } = target;
         if (active) delete entity.active;
         else entity.active = false;
         obj.visible = active;
         this.game?.syncEntity(entity);
+        this.commit(target);
         this.notify();
     }
 
@@ -624,31 +919,34 @@ class SceneStore {
 
     removeComponent(id: string, key: string) {
         const entity = findEntity(this.entities, id)?.entity;
-        if (!entity) return;
+        if (!entity || entity.prefab) return;
         entity.components = entity.components.filter((c) => componentKey(c) !== key);
         this.rebuildComponent(entity, key);
         this.notify();
     }
 
+    // For an instance or what is inside one the change becomes an override
     setComponentField(id: string, key: string, field: string, value: ParamValue) {
-        const entity = findEntity(this.entities, id)?.entity;
-        const component = entity && getComponent(entity, key);
-        if (!entity || !component) return;
+        const target = this.locate(id, true);
+        const component = target && getComponent(target.entity, key);
+        if (!target || !component) return;
         component[field] = value;
         // Another model or behavior has other params
         if (field === componentDefs[component.type]?.source?.key) component.params = {};
-        this.rebuildComponent(entity, key);
+        this.rebuildComponent(target.entity, key);
+        this.commit(target);
         this.notify();
     }
 
     // A param of the model or behavior the component takes from scripts/.
     // A behavior reads its params when Play starts, so for it the change shows on the next Play.
     setComponentParam(id: string, key: string, param: string, value: ParamValue) {
-        const entity = findEntity(this.entities, id)?.entity;
-        const component = entity && getComponent(entity, key);
-        if (!entity || !component) return;
+        const target = this.locate(id, true);
+        const component = target && getComponent(target.entity, key);
+        if (!target || !component) return;
         component.params = { ...(component.params as Params | undefined), [param]: value };
-        this.rebuildComponent(entity, key);
+        this.rebuildComponent(target.entity, key);
+        this.commit(target);
         this.notify();
     }
 
@@ -664,6 +962,7 @@ class SceneStore {
         const entity = findEntity(this.entities, id)?.entity;
         if (!entity) return;
         entity.prefab = prefab;
+        delete entity.overrides;
         entity.components = [];
         entity.children = [];
         this.rebuild();
@@ -674,10 +973,12 @@ class SceneStore {
     // The opposite: the instance becomes an ordinary entity with its own copy of the prefab content
     unpack(id: string) {
         const entity = findEntity(this.entities, id)?.entity;
-        const root = entity?.prefab ? this.registry.getPrefab(entity.prefab) : null;
-        if (!entity || !root) return;
-        const copy = cloneWithNewIds(root);
+        // With its overrides; instances of other prefabs inside stay instances
+        const content = entity && expandInstance(this.registry, entity, [], false);
+        if (!entity || !content) return;
+        const copy = cloneWithNewIds(content);
         delete entity.prefab;
+        delete entity.overrides;
         entity.components = copy.components;
         entity.children = copy.children;
         this.rebuild();
@@ -725,6 +1026,7 @@ class SceneStore {
     load(data: SceneData) {
         this.stop();
         this.show(structuredClone(data.entities), { ...defaultEnvironment, ...data.environment });
+        this.resetHistory();
         this.savedSnapshot = JSON.stringify(this.toJSON());
         this.notify();
     }
@@ -739,12 +1041,20 @@ class SceneStore {
         if (!root) return;
         this.stop();
         if (!this.editingPrefab) {
-            this.stash = { entities: this.entities, environment: this.environment, savedSnapshot: this.savedSnapshot };
+            // The steps of the scene wait together with it
+            this.stash = {
+                entities: this.entities,
+                environment: this.environment,
+                savedSnapshot: this.savedSnapshot,
+                undoStack: this.undoStack,
+                redoStack: this.redoStack,
+            };
         }
         this.show([{ ...structuredClone(root), position: [0, 0, 0] }], { ...defaultEnvironment });
         this.scene.add(this.prefabLight);
         this.editingPrefab = name;
         this.selectedId = this.entities[0].id;
+        this.resetHistory();
         this.savedSnapshot = JSON.stringify(this.toJSON());
         this.notify();
     }
@@ -755,6 +1065,7 @@ class SceneStore {
         this.scene.remove(this.prefabLight);
         this.editingPrefab = null;
         this.show(this.stash.entities, this.stash.environment);
+        this.resetHistory(this.stash.undoStack, this.stash.redoStack);
         this.savedSnapshot = this.stash.savedSnapshot;
         this.stash = null;
         this.notify();

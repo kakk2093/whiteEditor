@@ -1,13 +1,16 @@
 import { useState } from "react";
-import type { ReactNode } from "react";
-import { componentDefs, componentKey, environmentFields, lookFields, materialFields, paramDefaults, resolveLook } from "../engine";
+import type { MouseEvent, ReactNode } from "react";
+import {
+    componentDefs, componentKey, environmentFields, fieldApplies, lookFields, materialFields, MAX_COLORS, paramDefaults, resolveLook
+} from "../engine";
 import type {
     ComponentData, EntityData, EnvironmentData, LookData, MaterialData, ParamDef, ParamValue, Params
 } from "../engine";
 import {
-    createPrefab, deleteLook, deleteMaterial, deletePrefab, deleteScene, openPrefab, openScene, updateLook, updateMaterial
+    applyOverrides, createPrefab, deleteLook, deleteMaterial, deletePrefab, deleteScene, openPrefab, openScene, updateLook, updateMaterial
 } from "./core/actions";
 import { instantiateModel, instantiatePrefab } from "./core/dnd";
+import { openContextMenu } from "./contextMenu";
 import { getComponent, sceneStore } from "./core/SceneStore";
 import type { AssetRef, TransformProperty } from "./core/SceneStore";
 import { useSceneStore } from "./core/useSceneStore";
@@ -69,6 +72,46 @@ function ParamField({ def, value, onChange }: { def: ParamDef; value: ParamValue
                     />
                 </>
             );
+        case "colors": {
+            const colors = value as string[];
+            return (
+                <div className="colors">
+                    {colors.map((color, i) => (
+                        <input
+                            key={i}
+                            className="color-swatch"
+                            type="color"
+                            value={color}
+                            title={`${color} — right-click to remove`}
+                            onChange={(e) => onChange(colors.map((c, n) => (n === i ? e.target.value : c)))}
+                            onContextMenu={(e) => {
+                                e.preventDefault();
+                                onChange(colors.filter((_, n) => n !== i));
+                            }}
+                        />
+                    ))}
+                    {colors.length < MAX_COLORS && (
+                        <button className="btn ghost" title="Add a color" onClick={() => onChange([...colors, colors[colors.length - 1] ?? "#ffffff"])}>
+                            <Icon name="plus" size={12} />
+                        </button>
+                    )}
+                    {/* A whole palette at once: any text with hex colors in it, e.g. copied from a palette site */}
+                    <input
+                        className="input"
+                        key={colors.join()}
+                        defaultValue={colors.join(" ")}
+                        placeholder="paste hex colors"
+                        title="The list as text: paste hex colors separated by anything"
+                        onChange={(e) => {
+                            const found = e.target.value.match(/[0-9a-f]{6}/gi) ?? [];
+                            const rest = e.target.value.replace(/[0-9a-f]{6}/gi, "");
+                            // Only once nothing half-typed is left
+                            if (!/[0-9a-f]/i.test(rest)) onChange(found.slice(0, MAX_COLORS).map((c) => `#${c.toLowerCase()}`));
+                        }}
+                    />
+                </div>
+            );
+        }
         case "boolean":
             return <input className="checkbox" type="checkbox" checked={value as boolean} onChange={(e) => onChange(e.target.checked)} />;
         case "select":
@@ -94,17 +137,35 @@ function ParamField({ def, value, onChange }: { def: ParamDef; value: ParamValue
 }
 
 // One row per field, values missing in `values` show the default
-function Fields({ defs, values, onChange }: {
+// Shown on what a prefab instance has changed for itself
+const CHANGED_TITLE = "Changed in this instance: the prefab has another value. Right-click to revert";
+
+// The right-click menu of a field a prefab instance has changed
+function revertMenu(e: MouseEvent, run: () => void) {
+    openContextMenu(e, [{ items: [{ label: "Revert to Prefab", icon: "back", run }] }]);
+}
+
+function Fields({ defs, values, onChange, changed, onRevert }: {
     defs: Record<string, ParamDef>;
     values: Params;
     onChange: (key: string, value: ParamValue) => void;
+    // The fields a prefab instance overrides; they are marked
+    changed?: Record<string, unknown>;
+    // Puts such a field back to what the prefab gives
+    onRevert?: (key: string) => void;
 }) {
     const defaults = paramDefaults(defs);
     return (
         <>
-            {Object.entries(defs).map(([key, def]) => (
+            {Object.entries(defs).filter(([, def]) => fieldApplies(def, defs, values)).map(([key, def]) => (
                 <div key={key} className="field">
-                    <label title={key}>{humanize(key)}</label>
+                    <label
+                        className={changed && key in changed ? "overridden" : undefined}
+                        title={changed && key in changed ? `${key} — ${CHANGED_TITLE}` : key}
+                        onContextMenu={changed && key in changed && onRevert ? (e) => revertMenu(e, () => onRevert(key)) : undefined}
+                    >
+                        {humanize(key)}
+                    </label>
                     <div className="control">
                         <ParamField def={def} value={values[key] ?? defaults[key]} onChange={(value) => onChange(key, value)} />
                     </div>
@@ -140,11 +201,20 @@ function Section({ title, onRemove, removeTitle = "Remove component", extra, chi
 }
 
 function TransformSection({ entity }: { entity: EntityData }) {
+    const override = sceneStore.overrideOf(entity.id);
     return (
         <Section title="Transform">
             {TRANSFORMS.map(({ property, title }) => (
                 <div key={property} className="field">
-                    <label>{title}</label>
+                    <label
+                        className={override?.[property] ? "overridden" : undefined}
+                        title={override?.[property] ? CHANGED_TITLE : undefined}
+                        onContextMenu={override?.[property]
+                            ? (e) => revertMenu(e, () => sceneStore.revertOverrideField(entity.id, [property]))
+                            : undefined}
+                    >
+                        {title}
+                    </label>
                     <div className="control">
                         {AXES.map((axis, i) => (
                             <div key={axis} className={`axis ${axis}`}>
@@ -163,7 +233,9 @@ function TransformSection({ entity }: { entity: EntityData }) {
     );
 }
 
-function ComponentSection({ entity, component }: { entity: EntityData; component: ComponentData }) {
+// `locked` is for a component that comes from a prefab: its fields can be changed (an override of the
+// instance), the component itself stays
+function ComponentSection({ entity, component, locked = false }: { entity: EntityData; component: ComponentData; locked?: boolean }) {
     const store = useSceneStore();
     const def = componentDefs[component.type];
     const key = componentKey(component);
@@ -180,19 +252,32 @@ function ComponentSection({ entity, component }: { entity: EntityData; component
     // Components an entity has several of are told apart by what they run: "Spin (Script)"
     const title = def?.multiple ? `${sourceDef?.label ?? sourceName} (${def.label})` : def?.label ?? component.type;
 
+    // What a prefab instance changes in this component
+    const override = store.overrideOf(entity.id)?.components?.[key];
+
     return (
-        <Section title={title} onRemove={() => store.removeComponent(entity.id, key)}>
+        <Section title={title} onRemove={locked ? undefined : () => store.removeComponent(entity.id, key)}>
             {def && (
                 <Fields
                     defs={def.fields}
                     values={component as Params}
                     onChange={(field, value) => store.setComponentField(entity.id, key, field, value)}
+                    changed={override}
+                    onRevert={(field) => store.revertOverrideField(entity.id, ["components", key, field])}
                 />
             )}
 
             {source && !def.multiple && (
                 <div className="field">
-                    <label>{humanize(source.key)}</label>
+                    <label
+                        className={override && source.key in override ? "overridden" : undefined}
+                        title={override && source.key in override ? CHANGED_TITLE : undefined}
+                        onContextMenu={override && source.key in override
+                            ? (e) => revertMenu(e, () => store.revertOverrideField(entity.id, ["components", key]))
+                            : undefined}
+                    >
+                        {humanize(source.key)}
+                    </label>
                     <div className="control">
                         <select
                             className="select"
@@ -212,6 +297,8 @@ function ComponentSection({ entity, component }: { entity: EntityData; component
                     defs={sourceDef.params ?? {}}
                     values={(component.params as Params | undefined) ?? {}}
                     onChange={(param, value) => store.setComponentParam(entity.id, key, param, value)}
+                    changed={override?.params as Params | undefined}
+                    onRevert={(param) => store.revertOverrideField(entity.id, ["components", key, "params", param])}
                 />
             )}
             {source && sourceName && !sourceDef && (
@@ -226,6 +313,12 @@ function ComponentSection({ entity, component }: { entity: EntityData; component
 function EntityInspector({ entity }: { entity: EntityData }) {
     const store = useSceneStore();
     const isPrefabRoot = store.editingPrefab !== null && store.entities[0] === entity;
+    // Something inside a prefab instance: what is changed here is kept by the instance as an override
+    const inner = store.isInner(entity.id);
+    const instance = store.instanceOf(entity.id);
+    const fromPrefab = inner || entity.prefab !== undefined;
+    // The components of an instance are those of the root of its prefab
+    const components = (entity.prefab ? store.expand(entity)?.components : entity.components) ?? [];
 
     // Add Component: the types the entity does not have yet, then, for the types it can have several of
     // (scripts), what is not attached yet
@@ -253,15 +346,23 @@ function EntityInspector({ entity }: { entity: EntityData }) {
         <>
             <div className="inspector-head">
                 <input
-                    className="checkbox"
+                    className={`checkbox ${store.overrideOf(entity.id)?.active !== undefined ? "overridden" : ""}`}
                     type="checkbox"
-                    title="Active: an inactive object is hidden together with its children"
+                    title={`Active: an inactive object is hidden together with its children${
+                        store.overrideOf(entity.id)?.active !== undefined ? `. ${CHANGED_TITLE}` : ""
+                    }`}
                     checked={entity.active ?? true}
                     onChange={(e) => store.setActive(entity.id, e.target.checked)}
                 />
                 <Icon name={entityIcon(entity)} />
-                <input className="input" value={entity.name} onChange={(e) => store.rename(entity.id, e.target.value)} />
-                {!isPrefabRoot && (
+                <input
+                    className="input"
+                    value={entity.name}
+                    disabled={inner}
+                    title={inner ? "The name comes from the prefab" : undefined}
+                    onChange={(e) => store.rename(entity.id, e.target.value)}
+                />
+                {!isPrefabRoot && !inner && (
                     <>
                         <button className="btn ghost" title="Duplicate (Ctrl+D)" onClick={duplicate}>
                             <Icon name="copy" />
@@ -285,14 +386,46 @@ function EntityInspector({ entity }: { entity: EntityData }) {
                     </button>
                 </div>
             )}
+            {inner && (
+                <div className="note prefab">
+                    <Icon name="prefab" /> Inside an instance of prefab <b>{instance?.prefab}</b>
+                </div>
+            )}
+            {fromPrefab && (
+                <div className="note">
+                    {store.hasOverrides(entity.id) ? (
+                        <>
+                            {inner ? "Changed here (marked fields)." : "Has changes of its own."}
+                            <button
+                                className="btn"
+                                title="Write the changes into the prefab: every instance of it gets them"
+                                disabled={store.playing || store.editingPrefab === instance?.prefab}
+                                onClick={() => applyOverrides(entity.id)}
+                            >
+                                <Icon name="prefab" /> {inner ? "Apply" : "Apply All"}
+                            </button>
+                            <button
+                                className="btn"
+                                title="Drop the changes: back to what the prefab gives"
+                                onClick={() => store.revertOverrides(entity.id)}
+                            >
+                                <Icon name="back" /> {inner ? "Revert" : "Revert All"}
+                            </button>
+                        </>
+                    ) : (
+                        "What you change here changes this instance only; the prefab and its other instances stay as they are."
+                    )}
+                </div>
+            )}
 
             <TransformSection entity={entity} />
 
-            {!entity.prefab && (
+            {components.map((component) => (
+                <ComponentSection key={componentKey(component)} entity={entity} component={component} locked={fromPrefab} />
+            ))}
+
+            {!fromPrefab && (
                 <>
-                    {entity.components.map((component) => (
-                        <ComponentSection key={componentKey(component)} entity={entity} component={component} />
-                    ))}
 
                     {addSections.some((section) => section.items.length > 0) && (
                         <div className="add-component">
@@ -587,7 +720,7 @@ export default function Inspector() {
             <div className="panel-header">Inspector</div>
             <div className="panel-body">
                 {asset ? (
-                    <AssetInspector asset={asset} />
+                    <AssetInspector key={`${asset.kind}:${asset.name}:${store.restores}`} asset={asset} />
                 ) : selected ? (
                     <EntityInspector key={`${selected.id}:${store.restores}`} entity={selected} />
                 ) : store.editingPrefab ? (

@@ -37,7 +37,11 @@ function onKeyDown(e: KeyboardEvent) {
     if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
 
     const id = sceneStore.selectedId;
-    if ((e.ctrlKey || e.metaKey) && e.code === "KeyD") {
+    if ((e.ctrlKey || e.metaKey) && (e.code === "KeyZ" || e.code === "KeyY")) {
+        e.preventDefault();
+        if (e.code === "KeyY" || e.shiftKey) sceneStore.redo();
+        else sceneStore.undo();
+    } else if ((e.ctrlKey || e.metaKey) && e.code === "KeyD") {
         e.preventDefault();
         const copy = id && sceneStore.duplicate(id);
         if (copy) sceneStore.select(copy.id);

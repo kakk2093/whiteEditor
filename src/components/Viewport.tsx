@@ -29,6 +29,11 @@ interface ViewportContext {
     animationId: number | null;
 }
 
+// The view of a selected camera: its part of the viewport's width and height, and its distance from the corner.
+// The same numbers are in editor.css (.viewport-preview).
+const PREVIEW_SIZE = 0.3;
+const PREVIEW_MARGIN = 10;
+
 export default function Viewport() {
     const store = useSceneStore();
     const ref = useRef<HTMLDivElement>(null);
@@ -372,6 +377,25 @@ export default function Viewport() {
                     renderer.render(gizmo, camera);
                 }
                 renderer.autoClear = true;
+
+                // A camera is selected: its view in the corner, small, drawn as the game would draw it
+                const preview = sceneStore.previewCamera;
+                if (preview) {
+                    const width = Math.round(canvas.clientWidth * PREVIEW_SIZE);
+                    const height = Math.round(canvas.clientHeight * PREVIEW_SIZE);
+                    const left = canvas.clientWidth - width - PREVIEW_MARGIN;
+                    preview.aspect = width / height;
+                    preview.updateProjectionMatrix();
+                    gizmo.visible = false;
+                    // The y of a three.js viewport is counted from the bottom
+                    renderer.setViewport(left, PREVIEW_MARGIN, width, height);
+                    renderer.setScissor(left, PREVIEW_MARGIN, width, height);
+                    renderer.setScissorTest(true);
+                    pipeline.render(scene, preview);
+                    renderer.setScissorTest(false);
+                    renderer.setViewport(0, 0, canvas.clientWidth, canvas.clientHeight);
+                    gizmo.visible = gizmoShown;
+                }
             }
         };
 
@@ -511,6 +535,11 @@ export default function Viewport() {
                 </div>
             )}
 
+            {store.previewCamera && (
+                <div className="viewport-preview">
+                    <span>{store.selected?.name}</span>
+                </div>
+            )}
             <div className="viewport-hint">
                 {store.gameView
                     ? "Game view: the camera of the scene, keys and mouse go to the game · " +

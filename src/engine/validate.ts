@@ -2,8 +2,10 @@ import { componentDefs, componentKey } from "./components";
 import { environmentFields } from "./environment";
 import { lookFields } from "./look";
 import type { LookData } from "./look";
+import { expandPristine, findInExpanded, innerPaths, ROOT_PATH } from "./prefab";
 import type { ParamDef, Registry } from "./Registry";
-import type { EntityData, ParamValue, PrefabData, SceneData } from "./types";
+import { MAX_COLORS } from "./shaderParams";
+import type { ComponentData, EntityData, ParamValue, PrefabData, SceneData } from "./types";
 
 function checkValue(def: ParamDef, value: unknown, registry: Registry): string | null {
     switch (def.type) {
@@ -16,6 +18,11 @@ function checkValue(def: ParamDef, value: unknown, registry: Registry): string |
             return typeof value === "boolean" ? null : "must be true or false";
         case "color":
             return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value) ? null : 'must be a color like "#aabbcc"';
+        case "colors":
+            if (!Array.isArray(value) || !value.every((c) => typeof c === "string" && /^#[0-9a-f]{6}$/i.test(c))) {
+                return 'must be a list of colors like ["#aabbcc", "#112233"]';
+            }
+            return value.length > MAX_COLORS ? `must have at most ${MAX_COLORS} colors` : null;
         case "string":
             return typeof value === "string" ? null : "must be a string";
         case "select":
@@ -50,6 +57,77 @@ function isVec3(value: unknown) {
     return Array.isArray(value) && value.length === 3 && value.every((n) => typeof n === "number" && !Number.isNaN(n));
 }
 
+// The fields of one component: its own, and the params of the model or behavior it takes from scripts/.
+// With `partial` it is a piece of an override: only what it names is checked.
+function checkComponent(component: ComponentData, at: string, registry: Registry, problems: string[], partial = false) {
+    const def = componentDefs[component.type];
+    const { source } = def;
+    if (source) {
+        const name = component[source.key] as string;
+        const found = source.get(registry, name);
+        if (!found) {
+            const known = source.list(registry).map((d) => d.name).join(", ") || "none";
+            problems.push(`${at}: ${source.what} "${name}" is not defined in scripts/ (known: ${known})`);
+        } else if (!partial || component.params !== undefined) {
+            const params = (component.params ?? {}) as Record<string, unknown>;
+            checkFields(found.params ?? {}, params, `${at}.params`, registry, problems);
+        }
+    }
+    checkFields(def.fields, component, at, registry, problems, ["type", ...(source ? [source.key, "params"] : [])]);
+}
+
+// The overrides of a prefab instance: every path and component must exist in the prefab
+function checkOverrides(entity: EntityData, where: string, registry: Registry, problems: string[]) {
+    const overrides = entity.overrides ?? {};
+    if (typeof overrides !== "object" || Array.isArray(overrides)) {
+        problems.push(`${where}.overrides: must be an object of "path": { ... }`);
+        return;
+    }
+    const pristine = expandPristine(registry, entity);
+    if (!pristine) return;
+
+    for (const [path, override] of Object.entries(overrides)) {
+        const at = `${where}.overrides["${path}"]`;
+        const target = findInExpanded(pristine, path === ROOT_PATH ? entity.id : `${entity.id}/${path}`);
+        if (!target) {
+            problems.push(`${at}: prefab "${entity.prefab}" has nothing at this path (known: ${[ROOT_PATH, ...innerPaths(pristine)].join(", ")})`);
+            continue;
+        }
+        if (typeof override !== "object" || override === null) {
+            problems.push(`${at}: must be an object`);
+            continue;
+        }
+        for (const [key, value] of Object.entries(override)) {
+            if (key === "components") continue;
+            if (!["active", "position", "rotation", "scale"].includes(key)) {
+                problems.push(`${at}: unknown field "${key}" (known: active, position, rotation, scale, components)`);
+            } else if (path === ROOT_PATH) {
+                problems.push(`${at}.${key}: the root is the instance itself, write "${key}" on the instance`);
+            } else if (key === "active" ? typeof value !== "boolean" : !isVec3(value)) {
+                problems.push(`${at}.${key}: must be ${key === "active" ? "true or false" : "[x, y, z]"}`);
+            }
+        }
+        for (const [key, fields] of Object.entries(override.components ?? {})) {
+            const component = target.components.find((c) => componentKey(c) === key);
+            if (!component) {
+                const known = target.components.map(componentKey).join(", ") || "none";
+                problems.push(`${at}.components["${key}"]: "${target.name}" has no such component in the prefab (known: ${known})`);
+                continue;
+            }
+            const def = componentDefs[component.type];
+            if (!def) continue;
+            if ("type" in fields || (def.multiple && def.source && def.source.key in fields)) {
+                problems.push(`${at}.components["${key}"]: an override cannot change what the component is`);
+                continue;
+            }
+            // Checked as the component would be with these fields put in
+            const sourceKey = def.source?.key;
+            const changed = { type: component.type, ...(sourceKey ? { [sourceKey]: component[sourceKey] } : {}), ...fields };
+            checkComponent(changed, `${at}.components["${key}"]`, registry, problems, true);
+        }
+    }
+}
+
 function checkEntity(entity: EntityData, path: string, registry: Registry, ids: Set<string>, problems: string[]) {
     const where = `${path}/${entity.name}`;
 
@@ -65,10 +143,12 @@ function checkEntity(entity: EntityData, path: string, registry: Registry, ids: 
             problems.push(`${where}: prefab "${entity.prefab}" does not exist (known: ${registry.prefabNames().join(", ") || "none"})`);
         }
         if (entity.components.length > 0 || entity.children.length > 0) {
-            problems.push(`${where}: a prefab instance cannot have its own components or children`);
+            problems.push(`${where}: a prefab instance cannot have its own components or children (use "overrides" to change what the prefab gives)`);
         }
+        if (entity.overrides) checkOverrides(entity, where, registry, problems);
         return;
     }
+    if (entity.overrides) problems.push(`${where}: only a prefab instance can have overrides`);
 
     const keys = new Set<string>();
     for (const component of entity.components) {
@@ -85,19 +165,7 @@ function checkEntity(entity: EntityData, path: string, registry: Registry, ids: 
             continue;
         }
 
-        const { source } = def;
-        if (source) {
-            const name = component[source.key] as string;
-            const found = source.get(registry, name);
-            if (!found) {
-                const known = source.list(registry).map((d) => d.name).join(", ") || "none";
-                problems.push(`${at}: ${source.what} "${name}" is not defined in scripts/ (known: ${known})`);
-            } else {
-                const params = (component.params ?? {}) as Record<string, unknown>;
-                checkFields(found.params ?? {}, params, `${at}.params`, registry, problems);
-            }
-        }
-        checkFields(def.fields, component, at, registry, problems, ["type", ...(source ? [source.key, "params"] : [])]);
+        checkComponent(component, at, registry, problems);
     }
 
     for (const child of entity.children) checkEntity(child, where, registry, ids, problems);

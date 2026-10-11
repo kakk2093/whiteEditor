@@ -101,11 +101,11 @@ export const componentDefs: Record<string, ComponentDef> = {
             intensity: { type: "number", default: 3, min: 0, step: 0.5 },
             castShadow: { type: "boolean", default: false },
             // point and spot: how far the light reaches, 0 = no limit
-            range: { type: "number", default: 0, min: 0, step: 1 },
+            range: { type: "number", default: 0, min: 0, step: 1, when: { kind: ["point", "spot"] } },
             // spot: cone half-angle, degrees
-            angle: { type: "number", default: 30, min: 1, max: 89, step: 1 },
+            angle: { type: "number", default: 30, min: 1, max: 89, step: 1, when: { kind: ["spot"] } },
             // directional: half-size of the area that gets shadows
-            shadowSize: { type: "number", default: 10, min: 1, step: 1 },
+            shadowSize: { type: "number", default: 10, min: 1, step: 1, when: { kind: ["directional"], castShadow: [true] } },
         },
         create: createLight,
     },
