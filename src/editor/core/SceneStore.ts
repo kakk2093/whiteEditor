@@ -183,8 +183,15 @@ class SceneStore {
         this.selectedIds = id ? [id] : [];
     }
 
+    // The entity whose name is being typed in the Hierarchy
+    renamingId: string | null = null;
+
     // What Copy has taken: the entities as JSON text (the same text goes to the system clipboard)
     clipboard: string | null = null;
+
+    // The axes of the gizmo: "world" keeps them along the axes of the scene, "local" turns them with the
+    // object (its own forward, up and side). Scaling is always along the object's own axes.
+    gizmoSpace: "world" | "local" = "world";
 
     // Gizmo snapping: moves by whole steps of `snapStep` meters, turns by 15 degrees, scales by 0.25
     snap = false;
@@ -933,6 +940,11 @@ class SceneStore {
         return true;
     }
 
+    setGizmoSpace(space: "world" | "local") {
+        this.gizmoSpace = space;
+        this.notify();
+    }
+
     setSnap(on: boolean, step = this.snapStep) {
         this.snap = on;
         this.snapStep = step;
@@ -1095,6 +1107,44 @@ class SceneStore {
         const id = this.selectedId;
         if (!id) return null;
         return this.game ? this.game.getObject(id) : this.objects.get(id) ?? null;
+    }
+
+    // Puts the entity next to another one: right before it or right after it among its siblings. This is
+    // how the order of the Hierarchy (and of the scene file) is changed. If the other one has another parent,
+    // the entity moves there first, keeping its place in the world.
+    moveBeside(id: string, targetId: string, after: boolean) {
+        const target = findEntity(this.entities, targetId);
+        const found = findEntity(this.entities, id);
+        if (!found || !target || id === targetId) return;
+        // The root of a prefab has no neighbors, and nothing goes inside itself
+        if (this.editingPrefab && (!found.parent || !target.parent)) return;
+        if (findEntity(found.entity.children, targetId)) return;
+
+        if (target.parent !== found.parent) this.reparent(id, target.parent?.id ?? null);
+        const now = findEntity(this.entities, id);
+        if (!now || now.parent !== target.parent) return;
+        const list = now.siblings;
+        list.splice(list.indexOf(now.entity), 1);
+        list.splice(list.indexOf(target.entity) + (after ? 1 : 0), 0, now.entity);
+        // The first camera of the scene is the one the game looks through, so the order can matter
+        this.restartGame();
+        this.notify();
+    }
+
+    // The Hierarchy shows a field instead of the name of this entity (F2)
+    startRename(id: string | null = this.selectedId) {
+        if (!id || this.isInner(id) || !findEntity(this.entities, id)) return;
+        this.renamingId = id;
+        this.notify();
+    }
+
+    // `name` is what was typed; null (Esc) or an empty name leaves the old one
+    finishRename(name: string | null) {
+        const id = this.renamingId;
+        if (!id) return;
+        this.renamingId = null;
+        if (name?.trim()) this.rename(id, name.trim());
+        else this.notify();
     }
 
     rename(id: string, name: string) {

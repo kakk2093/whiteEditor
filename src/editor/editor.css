@@ -310,8 +310,17 @@ kbd {
     color: #fff;
 }
 
-.tree-row.drop {
+/* Where a dragged row would land: inside this one, or as its neighbor above or below */
+.tree-row.drop-inside {
     box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.tree-row.drop-before {
+    box-shadow: inset 0 2px 0 0 var(--accent);
+}
+
+.tree-row.drop-after {
+    box-shadow: inset 0 -2px 0 0 var(--accent);
 }
 
 .tree-row.inactive {
@@ -342,8 +351,46 @@ kbd {
 }
 
 .tree-row .name {
+    flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+/* The name being typed (F2) */
+.tree-row .rename {
+    flex: 1;
+    width: 0;
+    height: 20px;
+    color: var(--text);
+}
+
+/* Switches the object on and off; stays visible on what is off */
+.tree-row .eye {
+    display: flex;
+    padding: 2px;
+    color: var(--muted);
+    opacity: 0;
+}
+
+.tree-row:hover .eye,
+.tree-row.inactive .eye {
+    opacity: 1;
+}
+
+.tree-row .eye:hover {
+    color: #fff;
+}
+
+.tree-search {
+    display: flex;
+    gap: 2px;
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--border);
+}
+
+.tree-search .input {
+    flex: 1;
+    width: 0;
 }
 
 /* ---------- inspector ---------- */

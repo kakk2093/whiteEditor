@@ -50,6 +50,11 @@ function onKeyDown(e: KeyboardEvent) {
     } else if (e.ctrlKey || e.metaKey || e.altKey || sceneStore.flying) {
         // While the right mouse button is held, the letter keys fly the camera (see Viewport)
         return;
+    } else if (e.code === "F2") {
+        e.preventDefault();
+        sceneStore.startRename();
+    } else if (e.code === "KeyX") {
+        sceneStore.setGizmoSpace(sceneStore.gizmoSpace === "world" ? "local" : "world");
     } else if (e.code === "KeyF") {
         sceneStore.focus();
     } else if (e.code === "KeyW") {

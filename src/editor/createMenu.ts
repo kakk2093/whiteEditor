@@ -96,6 +96,7 @@ export function entityContextMenu(entity: EntityData): ContextSection[] {
         );
     }
     if (store.clipboard) actions.items.push({ label: "Paste", shortcut: "Ctrl+V", run: () => store.paste() });
+    if (!many) actions.items.push({ label: "Rename", shortcut: "F2", run: () => store.startRename(entity.id) });
     if (!store.editingPrefab || !isPrefabRoot) {
         actions.items.push({ label: many ? "Group" : "Group (new parent)", icon: "folder", shortcut: "Ctrl+G", run: () => store.groupSelected() });
     }

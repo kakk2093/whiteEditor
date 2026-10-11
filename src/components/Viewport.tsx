@@ -320,6 +320,7 @@ export default function Viewport() {
 
         const unsubscribe = sceneStore.subscribe(() => {
             ctx.transform?.setMode(sceneStore.gizmoMode);
+            ctx.transform?.setSpace(sceneStore.gizmoSpace);
             // Snapping: whole steps instead of any value
             ctx.transform?.setTranslationSnap(sceneStore.snap ? sceneStore.snapStep : null);
             ctx.transform?.setRotationSnap(sceneStore.snap ? THREE.MathUtils.degToRad(15) : null);
@@ -521,6 +522,13 @@ export default function Viewport() {
                 ))}
                 {!store.gameView && (
                     <>
+                        <button
+                            className="btn ghost"
+                            title="The axes of the gizmo: World — along the axes of the scene, Local — turned with the object (X)"
+                            onClick={() => store.setGizmoSpace(store.gizmoSpace === "world" ? "local" : "world")}
+                        >
+                            {store.gizmoSpace === "world" ? "World" : "Local"}
+                        </button>
                         <button
                             className={`btn ghost ${store.snap ? "active" : ""}`}
                             title="Snap: the gizmo moves by whole steps, turns by 15° and scales by 0.25"
