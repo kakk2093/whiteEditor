@@ -1,0 +1,77 @@
+{
+  "version": 3,
+  "environment": { "background": "#27405c", "ambientIntensity": 0.8 },
+  "entities": [
+    {
+      "name": "Camera",
+      "position": [0, 2.2, 6],
+      "rotation": [-15, 0, 0],
+      "components": [{ "type": "camera" }]
+    },
+    {
+      "name": "Sun",
+      "position": [3, 6, 4],
+      "rotation": [-50, 30, 0],
+      "components": [{ "type": "light", "kind": "directional", "castShadow": true }]
+    },
+    {
+      "name": "Floor",
+      "scale": [12, 1, 12],
+      "components": [{ "type": "mesh", "shape": "plane", "material": "Tiles" }]
+    },
+    {
+      "name": "Cube",
+      "position": [0, 0.8, 0],
+      "components": [
+        { "type": "mesh", "material": "Bricks" },
+        { "type": "script", "script": "spin", "params": { "speed": 40 } }
+      ]
+    },
+    {
+      "name": "HUD",
+      "components": [{ "type": "canvas" }],
+      "children": [
+        {
+          "name": "Score",
+          "components": [
+            { "type": "ui", "anchor": "top-left", "x": 16, "y": 12, "width": 260, "height": 40 },
+            { "type": "text", "text": "Score: 0", "size": 30, "align": "left", "outline": 2 }
+          ]
+        },
+        {
+          "name": "Icon",
+          "components": [
+            { "type": "ui", "anchor": "top-right", "x": -16, "y": 16, "width": 48, "height": 48 },
+            { "type": "image", "texture": "tiles.png", "color": "#ffd54a" }
+          ]
+        },
+        {
+          "name": "Panel",
+          "components": [
+            { "type": "ui", "anchor": "bottom", "y": -20, "width": 360, "height": 120 },
+            { "type": "image", "color": "#101820", "opacity": 0.75 }
+          ],
+          "children": [
+            {
+              "name": "Hint",
+              "components": [
+                { "type": "ui", "anchor": "top", "y": 8, "width": 340, "height": 44 },
+                { "type": "text", "text": "The interface is drawn over the picture. Click the button.", "size": 16, "color": "#c8d4e0" }
+              ]
+            },
+            {
+              "name": "Add",
+              "components": [
+                { "type": "ui", "anchor": "bottom", "y": -12, "width": 160, "height": 44 },
+                { "type": "image", "color": "#2d6cdf" },
+                { "type": "text", "text": "Add a point", "size": 20 },
+                { "type": "button" },
+                { "type": "script", "script": "clicker", "params": { "label": "Score" } }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

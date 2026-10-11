@@ -8,6 +8,7 @@ import type { Registry } from "./Registry";
 import { Runtime } from "./runtime";
 import { SoundPlayer } from "./sound";
 import type { EntityData, SceneData } from "./types";
+import { UiLayer } from "./ui";
 
 // What a camera component makes
 export type SceneCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
@@ -68,6 +69,15 @@ export class Game {
     // What the sounds of the scene are played with; they are heard from where the camera is
     readonly sound: SoundPlayer;
 
+    // The interface of the game: whoever draws the scene gives it to the pipeline (pipeline.render(..., game.ui))
+    readonly ui: UiLayer;
+
+    // Width / height of the picture, as of the last resize(): the buttons are found by it
+    private aspect = 16 / 9;
+
+    // false if the sounds were given by whoever runs the scenes: then they are not this scene's to end
+    private ownSound: boolean;
+
     // The camera of the scene, null if no active entity has a camera component
     camera: SceneCamera | null;
 
@@ -77,8 +87,9 @@ export class Game {
     private objects = new Map<string, THREE.Object3D>();
 
     // Builds its own objects; `data` is only read. `globals` is what the behaviors keep from scene to scene:
-    // a game of several scenes gives each of them the same object.
-    constructor(registry: Registry, data: SceneData, globals: Record<string, unknown> = {}) {
+    // a game of several scenes gives each of them the same object. The same with `sound`: given the
+    // player of the scene before, the music goes on.
+    constructor(registry: Registry, data: SceneData, globals: Record<string, unknown> = {}, sound?: SoundPlayer) {
         this.registry = registry;
         applyEnvironment(this.scene, data.environment);
         this.root = loadScene(registry, data);
@@ -88,7 +99,9 @@ export class Game {
             if (id) this.objects.set(id, obj);
         });
         this.camera = findCamera(this.root);
-        this.sound = new SoundPlayer(registry);
+        this.ui = new UiLayer(registry, this.root);
+        this.sound = sound ?? new SoundPlayer(registry);
+        this.ownSound = !sound;
         this.runtime = new Runtime(registry, this.root, this.input, this.sound);
         this.runtime.camera = this.camera;
         this.runtime.globals = globals;
@@ -102,6 +115,10 @@ export class Game {
 
     // dt is in seconds
     update(dt: number) {
+        // A gamepad has to be asked what it holds
+        this.input.poll();
+        // The buttons first: a click is known to the behaviors in the same frame
+        for (const object of this.ui.update(this.aspect, this.input)) this.runtime.click(object);
         this.runtime.update(dt);
         this.input.endFrame();
         // A behavior may have spawned, destroyed or switched off the camera
@@ -117,6 +134,7 @@ export class Game {
 
     // Call when the size of the canvas changes
     resize(width: number, height: number) {
+        if (height > 0) this.aspect = width / height;
         if (this.camera && height > 0) setCameraAspect(this.camera, width / height);
     }
 
@@ -163,7 +181,9 @@ export class Game {
 
     dispose() {
         this.runtime.dispose();
-        this.sound.dispose();
+        this.ui.dispose();
+        if (this.ownSound) this.sound.dispose();
+        else this.sound.endScene();
         disposeObject(this.root);
     }
 }

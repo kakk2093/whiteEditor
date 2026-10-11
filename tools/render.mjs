@@ -1,6 +1,9 @@
 // Draws a scene into a PNG file, the way the game draws it (its camera, its look), without opening the editor:
 //   npm run render -- <project> [scene] [--out file.png] [--size 960x540] [--time 2]
 //                     [--camera x,y,z --target x,y,z [--fov 60]] [--look Name | --no-look]
+//                     [--input "KeyD@0-1.5 Space@1 click:Play@2"] [--state]
+// --input plays the scene for --time seconds with these keys and clicks; --state prints where every
+// object is after that and what the texts say: a way to check the game itself, not only a picture.
 // The picture goes to projects/<project>/renders/<scene>.png unless --out says otherwise.
 //
 // WebGL needs a browser, so a headless Chrome or Edge is started for a moment (set WHITE_BROWSER to the
@@ -16,7 +19,8 @@ import { createServer } from 'vite'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 const USAGE = 'Usage: npm run render -- <project> [scene] [--out file.png] [--size 960x540] [--time seconds]\n'
-  + '       [--camera x,y,z --target x,y,z [--fov degrees]] [--look Name | --no-look]'
+  + '       [--camera x,y,z --target x,y,z [--fov degrees]] [--look Name | --no-look]\n'
+  + '       [--input "KeyD@0-1.5 Space@1 click:Name@2 mouse:0.5,-0.2@1"] [--state]'
 
 const fail = (message, code = 2) => {
   console.error(message)
@@ -31,12 +35,13 @@ const argv = process.argv.slice(2)
 for (let i = 0; i < argv.length; i++) {
   const arg = argv[i]
   if (arg === '--no-look') flags.look = ''
+  else if (arg === '--state') flags.state = true
   else if (arg.startsWith('--')) {
     if (argv[i + 1] === undefined) fail(`${arg} needs a value\n${USAGE}`)
     flags[arg.slice(2)] = argv[++i]
   } else names.push(arg)
 }
-const unknown = Object.keys(flags).filter((f) => !['out', 'size', 'time', 'camera', 'target', 'fov', 'look'].includes(f))
+const unknown = Object.keys(flags).filter((f) => !['out', 'size', 'time', 'camera', 'target', 'fov', 'look', 'input', 'state'].includes(f))
 if (unknown.length > 0) fail(`Unknown option --${unknown[0]}\n${USAGE}`)
 
 const [project, sceneArg] = names
@@ -66,6 +71,36 @@ const options = {}
 if (flags.size) [options.width, options.height] = numbers(flags.size, 2, '--size')
 if (flags.time) [options.time] = numbers(flags.time, 1, '--time')
 if (flags.look !== undefined) options.look = flags.look
+if (flags.state) options.state = true
+
+// --input: what the player does, items separated by spaces, each "<what>@<when>":
+//   KeyD@0-1.5      the key is held from 0 to 1.5 s      Space@1     pressed at 1 s for a moment
+//   click:Play@2    a click on the object named Play     click:0.5,-0.2@2   on a point of the screen (-1..1)
+//   mouse:0.5,0@1   the mouse goes there                 Mouse2@1-2  the right button is held
+if (flags.input) {
+  const TAP = 0.1
+  options.inputs = []
+  let last = 0
+  for (const item of String(flags.input).trim().split(/\s+/)) {
+    const [what, when] = item.split('@')
+    const [from, to] = (when ?? '').split('-').map(Number)
+    if (!what || when === undefined || Number.isNaN(from) || (to !== undefined && Number.isNaN(to))) {
+      fail(`--input: "${item}" is not "<key>@<seconds>", "<key>@<from>-<to>", "click:<name or x,y>@<seconds>" or "mouse:<x,y>@<seconds>"`)
+    }
+    const until = to ?? from + TAP
+    last = Math.max(last, until)
+    const place = (text) => (/^-?[\d.]+,-?[\d.]+$/.test(text) ? text.split(',').map(Number) : text)
+    if (what.startsWith('click:')) {
+      options.inputs.push({ at: from, mouse: place(what.slice(6)), key: 'Mouse0', down: true }, { at: until, key: 'Mouse0', down: false })
+    } else if (what.startsWith('mouse:')) {
+      options.inputs.push({ at: from, mouse: place(what.slice(6)) })
+    } else {
+      options.inputs.push({ at: from, key: what, down: true }, { at: until, key: what, down: false })
+    }
+  }
+  // Long enough for everything asked, and a moment more for the game to answer the last of it
+  if (!flags.time) options.time = Math.ceil((last + 0.2) * 10) / 10
+}
 if (flags.camera || flags.target) {
   options.camera = {
     position: numbers(flags.camera ?? '5,4,5', 3, '--camera'),
@@ -113,6 +148,10 @@ const sounds = fs.existsSync(assetsDir)
   ? fs.readdirSync(assetsDir, { recursive: true }).map((f) => f.split(path.sep).join('/')).filter((f) => /\.(mp3|ogg|wav)$/i.test(f)).sort()
   : []
 
+const fonts = fs.existsSync(assetsDir)
+  ? fs.readdirSync(assetsDir, { recursive: true }).map((f) => f.split(path.sep).join('/')).filter((f) => /\.(ttf|otf|woff2?)$/i.test(f)).sort()
+  : []
+
 // The scenes a param of kind "scene" can name
 const scenesDir = path.join(projectDir, 'scenes')
 const sceneNames = fs.existsSync(scenesDir) ? fs.readdirSync(scenesDir).filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5)) : []
@@ -129,21 +168,25 @@ const entryCode = () => [
   `window.addEventListener("unhandledrejection", (e) => send({ error: String(e.reason?.message ?? e.reason) }))`,
   `const registry = new Registry()`,
   `const problems = []`,
+  // What the scripts print while the scene runs
+  `const logs = []`,
+  `for (const level of ["log", "warn", "error"]) { const real = console[level]; console[level] = (...args) => { logs.push(level + ": " + args.map((a) => (a instanceof Error ? a.message : typeof a === "object" ? JSON.stringify(a) : String(a))).join(" ")); real(...args) } }`,
   ...scripts.map((file) => {
     const url = `/projects/${project}/scripts/${file.split(path.sep).join('/')}`
     return `try { registry.registerExports(await import(${JSON.stringify(url)})) } catch (e) { problems.push(${JSON.stringify(`scripts/${file}: `)} + e.message) }`
   }),
   `registry.setTextures(${JSON.stringify(`/projects/${project}/assets/`)}, ${JSON.stringify(images)})`,
   `registry.setSounds(${JSON.stringify(`/projects/${project}/assets/`)}, ${JSON.stringify(sounds)})`,
+  `registry.setFonts(${JSON.stringify(`/projects/${project}/assets/`)}, ${JSON.stringify(fonts)})`,
   `registry.setSettings(parseSettings(${JSON.stringify(settings)}))`,
   `registry.setScenes(${JSON.stringify(sceneNames)})`,
   `for (const [name, data] of Object.entries(${JSON.stringify(readSection('materials'))})) registry.setMaterial(name, data)`,
   `for (const [name, data] of Object.entries(${JSON.stringify(readSection('prefabs'))})) registry.setPrefab(name, parsePrefab(data).root)`,
   `for (const [name, data] of Object.entries(${JSON.stringify(readSection('looks'))})) registry.setLook(name, data)`,
-  // A single picture cannot wait for a late image, so the textures are loaded first
+  // A single picture cannot wait for a late image or font, so they are loaded first
   `await registry.preloadTextures()`,
   `const still = renderStill(registry, parseScene(${JSON.stringify(readJson('scenes', scene))}), ${JSON.stringify(options)})`,
-  `send({ ...still, problems: [...problems, ...still.problems] })`,
+  `send({ ...still, logs: logs.slice(0, 200), problems: [...problems, ...still.problems] })`,
 ].join('\n')
 
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"></head><body>
@@ -161,7 +204,7 @@ const server = await createServer({
   cacheDir: path.join(root, 'node_modules/.vite-render'),
   server: { port: 0, host: '127.0.0.1', strictPort: false, hmr: false, ws: false, watch: null },
   resolve: { alias: { 'white-engine': path.join(root, 'src/engine/index.ts') } },
-  optimizeDeps: { include: ['three'] },
+  optimizeDeps: { include: ['three', 'cannon-es'] },
   plugins: [
     {
       name: 'white-render',
@@ -227,6 +270,14 @@ try {
     const cameras = { scene: 'the camera of the scene', given: 'the camera from --camera', auto: 'an automatic camera (the scene has none)' }
     console.log(`${project}: scene "${scene}" -> ${path.relative(process.cwd(), out)}`)
     console.log(`  ${result.width}x${result.height}, ${cameras[result.camera]}, ${((Date.now() - started) / 1000).toFixed(1)} s`)
+    if (options.inputs || options.time) console.log(`  played ${options.time ?? 0} s${options.inputs ? ` with ${options.inputs.length} input events` : ''}`)
+    for (const line of result.logs ?? []) console.log(`  ${line}`)
+    if (result.state) {
+      for (const e of result.state.entities) {
+        console.log(`  state: ${e.name}  [${e.position.join(', ')}]${e.active ? '' : '  inactive'}${e.text !== undefined ? `  text ${JSON.stringify(e.text)}` : ''}`)
+      }
+      if (Object.keys(result.state.globals).length > 0) console.log(`  globals: ${JSON.stringify(result.state.globals)}`)
+    }
     for (const problem of result.problems) console.log(`  problem: ${problem}`)
     if (result.problems.length > 0) process.exitCode = 1
   }

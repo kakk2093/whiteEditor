@@ -4,15 +4,20 @@ import { builtinEffects, isEffectDef } from "./look";
 import type { EffectDef, LookData } from "./look";
 import { applyMaterialData, createSharedMaterial } from "./materials";
 import type { MaterialData } from "./materials";
+import type { ParticleHandle } from "./particles";
+import type { BodyHandle } from "./physics";
 import { defaultSettings, layersCollide } from "./settings";
 import type { SoundHandle, SoundOptions } from "./sound";
 import type { ProjectSettings } from "./settings";
 import { builtinSurfaces, isSurfaceDef } from "./surface";
 import type { SurfaceDef } from "./surface";
 import type { EntityData, Params, ParamValue, Vec3 } from "./types";
+import { loadFont } from "./ui";
+import type { UiElement } from "./ui";
 
 // What a param of type "asset" can refer to
-export type AssetKind = "material" | "look" | "prefab" | "texture" | "layer" | "scene" | "sound";
+// "font" is a font file of assets/, named with its extension: "pixel.ttf"
+export type AssetKind = "material" | "look" | "prefab" | "texture" | "layer" | "scene" | "sound" | "font";
 
 export type ParamDef = (
     | { type: "number"; default: number; min?: number; max?: number; step?: number }
@@ -106,6 +111,26 @@ export interface FindQuery {
     behavior?: string;
 }
 
+// How a tween goes from the start to the end: evenly, starting slowly, ending slowly, or both
+export type Ease = "linear" | "in" | "out" | "inOut";
+
+export interface TweenOptions {
+    ease?: Ease;
+    // "repeat" starts over from the beginning, "yoyo" goes there and back, both without end
+    loop?: "none" | "repeat" | "yoyo";
+    // Seconds before it starts
+    delay?: number;
+    // Called when it has arrived (never, with a loop)
+    done?: () => void;
+}
+
+// A tween or a timer that was started
+export interface Running {
+    stop: () => void;
+    // false once it has finished or was stopped
+    readonly running: boolean;
+}
+
 // What a behavior gets about the entity it is attached to
 export interface BehaviorSelf<P = Params, S = unknown> {
     // The three.js group of the entity: move, rotate and scale it here
@@ -131,8 +156,9 @@ export interface BehaviorSelf<P = Params, S = unknown> {
     get: <T = unknown>(behavior: string, object?: THREE.Object3D) => BehaviorSelf<Params, T> | null;
     // Moves the object by this much (meters, along the axes of its parent: for an object of the scene root
     // those of the world). If the object has a solid collider, it stops at other solid colliders, sliding
-    // along them; false if something was in the way.
-    move: (x: number, y: number, z: number) => boolean;
+    // along them; false if something was in the way. `step` (meters, 0 by default): a ledge up to this high
+    // does not stop an object that stands on the ground, it walks up onto it: stairs, curbs.
+    move: (x: number, y: number, z: number, step?: number) => boolean;
     // The objects whose colliders this object's collider touches right now
     touching: () => THREE.Object3D[];
     // The nearest collider a ray meets, null if none: self.raycast(self.object.position, [0, -1, 0], { distance: 2 }).
@@ -158,9 +184,33 @@ export interface BehaviorSelf<P = Params, S = unknown> {
     // With `at` (a point or an object) it gets quieter with the distance from the camera, up to `range` meters.
     // What comes back can stop it and change its volume. It does not end with the object of the behavior.
     playSound: (name: string, options?: SoundOptions) => SoundHandle;
+    // Makes the file the music: it loops and, unlike every other sound, goes on when the scene changes
+    // (self.loadScene). One at a time: another file takes its place, the same file just plays on.
+    playMusic: (name: string, options?: Omit<SoundOptions, "at" | "range">) => SoundHandle;
+    stopMusic: () => void;
     // The Sound component of this object, or of the one given: play() starts it from the beginning, stop()
     // ends it. null if the object has no Sound component.
     sound: (object?: THREE.Object3D) => SoundSource | null;
+    // Moves numbers of `target` to the values of `to` in `seconds`, a little every frame:
+    // self.tween(self.object.position, { y: 3 }, 0.5, { ease: "out" }). `target` is anything with numbers in
+    // it: a position, a scale, the fields from self.ui(). It ends with the object of the behavior.
+    tween: (target: object, to: Record<string, number>, seconds: number, options?: TweenOptions) => Running;
+    // Calls the function once, `seconds` from now; it is forgotten if the object of the behavior goes first
+    after: (seconds: number, call: () => void) => Running;
+    // Calls the function every `seconds`, until it is stopped or the object of the behavior goes
+    every: (seconds: number, call: () => void) => Running;
+    // The Particles component of this object, or of the one given: emit(20) throws out a burst,
+    // `playing` switches its steady stream. null if the object has no Particles component.
+    particles: (object?: THREE.Object3D) => ParticleHandle | null;
+    // The body of this object in the physics, or of the one given: its velocity, and pushing it.
+    // self.body()?.push(0, 5, 0) throws it up. null if the object has no Body component.
+    body: (object?: THREE.Object3D) => BodyHandle | null;
+    // The interface components of this object, or of the one given: { rect, text, image, button }, each the
+    // fields of that component. Changing one shows at once: self.ui()!.text!.text = "Score: 3". null if the
+    // object has no UI Element component.
+    ui: (object?: THREE.Object3D) => UiElement | null;
+    // Sets what the Text component of this object (or of the one given) says; a Label in the world, too
+    setText: (text: string | number, object?: THREE.Object3D) => void;
     // What lives on from scene to scene, for as long as the game runs: the score, what was collected.
     // Any behavior of any scene reads and writes the same object: self.globals.coins = 3.
     globals: Record<string, unknown>;
@@ -188,6 +238,8 @@ export interface BehaviorDef {
     // The collider of the object began / stopped touching the collider of `other`
     enter?: (self: BehaviorSelf, other: THREE.Object3D) => void;
     exit?: (self: BehaviorSelf, other: THREE.Object3D) => void;
+    // The Button of the object was clicked: the mouse (or a finger) went down and up on it
+    click?: (self: BehaviorSelf) => void;
 }
 
 // Used by project scripts:
@@ -201,6 +253,7 @@ export function defineBehavior<P extends Record<string, ParamDef> = Record<strin
     destroy?: (self: BehaviorSelf<{ [K in keyof P]: ParamType<P[K]> }, S>) => void;
     enter?: (self: BehaviorSelf<{ [K in keyof P]: ParamType<P[K]> }, S>, other: THREE.Object3D) => void;
     exit?: (self: BehaviorSelf<{ [K in keyof P]: ParamType<P[K]> }, S>, other: THREE.Object3D) => void;
+    click?: (self: BehaviorSelf<{ [K in keyof P]: ParamType<P[K]> }, S>) => void;
 }): BehaviorDef {
     return { kind: "behavior", ...def } as BehaviorDef;
 }
@@ -246,6 +299,13 @@ export class Registry {
     private textureBase = "";
 
     private textureQuery = "";
+
+    // The font files of assets/, and where they are loaded from
+    private fontFiles: string[] = [];
+
+    private fontBase = "";
+
+    private fontQuery = "";
 
     // The audio files of assets/, and where they are loaded from
     private soundFiles: string[] = [];
@@ -368,6 +428,52 @@ export class Registry {
         return this.soundBase + name.split("/").map(encodeURIComponent).join("/") + this.soundQuery;
     }
 
+    // `files` are the font files of assets/ ("pixel.ttf"); the rest is as in setTextures()
+    setFonts(base: string, files: string[], query = "") {
+        this.fontBase = base;
+        this.fontFiles = [...files].sort();
+        this.fontQuery = query;
+        return this;
+    }
+
+    fontNames() {
+        return this.fontFiles;
+    }
+
+    private fontUrl(name: string) {
+        return this.fontBase + name.split("/").map(encodeURIComponent).join("/") + this.fontQuery;
+    }
+
+    // The CSS family a font of assets/ is drawn with, once its file is loaded; null until then, and for a
+    // file the project does not have
+    fontFamily(name: string) {
+        if (!this.fontFiles.includes(name)) return null;
+        const font = loadFont(this.fontUrl(name));
+        return font?.ready ? font.family : null;
+    }
+
+    // The image of a texture of assets/: the image itself if it is loaded already, otherwise a promise of
+    // it; null for a file the project does not have, and outside of a browser
+    loadTexture(name: string) {
+        return this.textureFiles.includes(name) ? this.loadImage(name) : null;
+    }
+
+    // Resolves when the font is loaded (or has failed); null for a file the project does not have
+    fontReady(name: string) {
+        return this.fontFiles.includes(name) ? loadFont(this.fontUrl(name))?.done ?? null : null;
+    }
+
+    // The image of a texture if it is loaded; otherwise null, and the loading is started
+    getImage(name: string) {
+        if (!this.textureFiles.includes(name)) return null;
+        const image = this.loadImage(name);
+        if (image instanceof Promise) {
+            image.catch(() => {});
+            return null;
+        }
+        return image;
+    }
+
     // The image of a texture; loaded once, however many materials use it. null outside of a browser.
     private loadImage = (name: string) => {
         if (!name || typeof document === "undefined") return null;
@@ -383,10 +489,13 @@ export class Registry {
         return image;
     };
 
-    // Resolves once the textures of every material are loaded (or have failed): for drawing a single picture,
-    // where there is no next frame for a late image to show up in
+    // Resolves once every image and every font of the project is loaded (or has failed): for drawing a
+    // single picture, where there is no next frame for a late one to show up in
     async preloadTextures() {
-        await Promise.allSettled([...this.materialData.values()].map((data) => this.loadImage(data.texture ?? "")));
+        await Promise.allSettled([
+            ...this.textureFiles.map((name) => this.loadImage(name)),
+            ...this.fontFiles.map((name) => loadFont(this.fontUrl(name))?.done),
+        ]);
     }
 
     setSettings(settings: ProjectSettings) {
@@ -411,6 +520,7 @@ export class Registry {
     assetNames(kind: AssetKind) {
         if (kind === "layer") return this.settings.layers;
         if (kind === "sound") return this.soundNames();
+        if (kind === "font") return this.fontNames();
         if (kind === "scene") return this.scenes;
         if (kind === "texture") return this.textureNames();
         if (kind === "prefab") return this.prefabNames();

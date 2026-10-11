@@ -1,0 +1,185 @@
+{
+  "version": 3,
+  "environment": {
+    "background": "#27405c",
+    "ambientColor": "#ffffff",
+    "ambientIntensity": 0.8,
+    "fog": false,
+    "fogColor": "#222222",
+    "fogNear": 5,
+    "fogFar": 50,
+    "look": ""
+  },
+  "entities": [
+    {
+      "id": "af6ea80f",
+      "name": "Camera",
+      "position": [0, 5, 11],
+      "rotation": [-22, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "camera"
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "f8fec50f",
+      "name": "Sun",
+      "position": [3, 6, 4],
+      "rotation": [-50, 30, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "light",
+          "kind": "directional",
+          "castShadow": true
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "2978d570",
+      "name": "Floor",
+      "position": [0, -0.5, 0],
+      "rotation": [0, 0, 0],
+      "scale": [16, 1, 10],
+      "components": [
+        {
+          "type": "mesh",
+          "material": "Tiles"
+        },
+        {
+          "type": "collider"
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "95d2a82a",
+      "name": "Ramp",
+      "position": [-4.5, 1, 0],
+      "rotation": [0, 0, -25],
+      "scale": [4, 0.2, 2],
+      "components": [
+        {
+          "type": "mesh",
+          "material": "Bricks"
+        },
+        {
+          "type": "collider"
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "e7e1e6b1",
+      "name": "Ball",
+      "position": [-5.8, 2.6, 0],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "sphere",
+          "material": "Bricks"
+        },
+        {
+          "type": "collider",
+          "shape": "sphere"
+        },
+        {
+          "type": "body",
+          "mass": 37,
+          "bounce": 0.4
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "38b14b64",
+      "name": "Crate",
+      "position": [1.5, 0.5, 0],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "mesh",
+          "material": "Bricks"
+        },
+        {
+          "type": "collider"
+        },
+        {
+          "type": "body"
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "06bc4ce3",
+      "name": "Crate (1)",
+      "position": [1.5, 1.5, 0],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "mesh",
+          "material": "Bricks"
+        },
+        {
+          "type": "collider"
+        },
+        {
+          "type": "body"
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "7719b432",
+      "name": "Crate (2)",
+      "position": [1.5, 2.5, 0],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "mesh",
+          "material": "Bricks"
+        },
+        {
+          "type": "collider"
+        },
+        {
+          "type": "body"
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "6dc163fd",
+      "name": "Player",
+      "position": [4.5, 1, 2.5],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "capsule"
+        },
+        {
+          "type": "collider",
+          "shape": "capsule",
+          "radius": 0.5,
+          "height": 2
+        },
+        {
+          "type": "script",
+          "script": "walker"
+        }
+      ],
+      "children": []
+    }
+  ]
+}

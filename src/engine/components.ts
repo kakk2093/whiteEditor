@@ -1,7 +1,12 @@
 import * as THREE from "three";
 import { paramDefaults } from "./Registry";
 import type { ParamDef, Registry } from "./Registry";
+import { createParticles } from "./particles";
+import type { ParticleFields } from "./particles";
+import { createLabel, createSprite } from "./sprites";
+import type { LabelFields, SpriteFields } from "./sprites";
 import type { ComponentData, EntityData, Params } from "./types";
+import { UI_ANCHORS } from "./ui";
 
 // What a component can take from the project's scripts/: a code model, a behavior
 export interface SourceDef {
@@ -75,6 +80,16 @@ function createLight(f: Params): THREE.Light {
     }
     return light;
 }
+
+// An object that draws nothing and only carries the fields of its component, for whoever looks for them
+function marker(key: string, fields: Params) {
+    const object = new THREE.Object3D();
+    object.userData[key] = fields;
+    return object;
+}
+
+// The components of the interface that need a UI Element next to them
+export const UI_PARTS = ["text", "image", "button"];
 
 // The built-in component types; the Inspector is generated from `fields`
 export const componentDefs: Record<string, ComponentDef> = {
@@ -159,6 +174,97 @@ export const componentDefs: Record<string, ComponentDef> = {
             return marker;
         },
     },
+    // An emitter of particles (see particles.ts): sparks, smoke, dust. They fly off along the "up" of the
+    // entity (its local Y) and stay in the world when it moves on.
+    particles: {
+        label: "Particles",
+        fields: {
+            // The steady stream is on; off, the emitter waits for self.particles().emit()
+            playing: { type: "boolean", default: true },
+            // Particles per second
+            rate: { type: "number", default: 20, min: 0, step: 1 },
+            // How many can live at once; the oldest goes when a new one has no room
+            max: { type: "number", default: 200, min: 1, max: 5000, step: 10 },
+            // Seconds a particle lives (each a little more or less)
+            lifetime: { type: "number", default: 1.5, min: 0.05, step: 0.1 },
+            // Meters per second at the start
+            speed: { type: "number", default: 2, min: 0, step: 0.1 },
+            // How far from "up" they may fly, degrees: 0 is a jet, 180 is every way
+            spread: { type: "number", default: 25, min: 0, max: 180, step: 5 },
+            // They appear anywhere this near the entity, meters
+            radius: { type: "number", default: 0, min: 0, step: 0.05 },
+            // Pulls them down (meters per second squared); below zero they rise, like smoke
+            gravity: { type: "number", default: 0, step: 0.5 },
+            // Meters across, at the start and at the end of the life
+            size: { type: "number", default: 0.15, min: 0, step: 0.01 },
+            sizeEnd: { type: "number", default: 0.05, min: 0, step: 0.01 },
+            color: { type: "color", default: "#ffd27a" },
+            colorEnd: { type: "color", default: "#ff5a1f" },
+            opacity: { type: "number", default: 1, min: 0, max: 1, step: 0.05 },
+            // Fades out towards the end of the life
+            fade: { type: "boolean", default: true },
+            // square keeps hard pixels (pixel art), circle is a hard dot, soft a blurred one
+            shape: { type: "select", default: "square", options: ["square", "circle", "soft"] },
+            // Adds its light to what is behind it: fire, sparks, magic. Off for smoke and dust.
+            additive: { type: "boolean", default: false },
+        },
+        create: (f) => createParticles(f as unknown as ParticleFields),
+    },
+    // A flat picture in the world (see sprites.ts): unlit, it can keep facing the camera
+    sprite: {
+        label: "Sprite",
+        fields: {
+            // An image of assets/; none is a plain rectangle of the color
+            texture: { type: "asset", kind: "texture", default: "" },
+            // The image is multiplied by it
+            color: { type: "color", default: "#ffffff" },
+            opacity: { type: "number", default: 1, min: 0, max: 1, step: 0.05 },
+            // Meters
+            width: { type: "number", default: 1, min: 0.01, step: 0.1 },
+            height: { type: "number", default: 1, min: 0.01, step: 0.1 },
+            // Always turned to the camera
+            billboard: { type: "boolean", default: true },
+            filter: { type: "select", default: "nearest", options: ["nearest", "linear"] },
+        },
+        create: (f, registry) => createSprite(f as unknown as SpriteFields, registry),
+    },
+    // A text in the world: a name over a head, a sign, a number that flies up
+    label: {
+        label: "Label",
+        fields: {
+            text: { type: "string", default: "Label" },
+            font: { type: "asset", kind: "font", default: "" },
+            // The height of a line, meters
+            size: { type: "number", default: 0.4, min: 0.01, step: 0.05 },
+            color: { type: "color", default: "#ffffff" },
+            opacity: { type: "number", default: 1, min: 0, max: 1, step: 0.05 },
+            // A line around the letters, in parts of the height of a line: 0.08 is a clear edge
+            outline: { type: "number", default: 0.08, min: 0, max: 0.5, step: 0.02 },
+            outlineColor: { type: "color", default: "#000000" },
+            billboard: { type: "boolean", default: true },
+        },
+        create: (f, registry) => createLabel(f as unknown as LabelFields, registry),
+    },
+    // Makes the entity a body of the physics (see physics.ts), like Rigidbody in Unity: it falls, rolls, is
+    // pushed and bounces. Its shape is the Collider of the same entity, which has to be solid.
+    body: {
+        label: "Body",
+        fields: {
+            // Kilograms: what a heavier body does to a lighter one when they meet
+            mass: { type: "number", default: 1, min: 0.01, step: 0.5 },
+            // 0 slides like ice, 1 grips
+            friction: { type: "number", default: 0.5, min: 0, max: 1, step: 0.05 },
+            // 0 lands dead, 1 bounces back as high as it fell from
+            bounce: { type: "number", default: 0.1, min: 0, max: 1, step: 0.05 },
+            // How fast it loses its speed and its spin by itself, as if in thick air
+            damping: { type: "number", default: 0.05, min: 0, max: 1, step: 0.05 },
+            // Keeps it upright: it is pushed around but never tips over (a character, a crate that only slides)
+            lockRotation: { type: "boolean", default: false },
+            // Off: it floats, and only moves when something pushes it
+            gravity: { type: "boolean", default: true },
+        },
+        create: (f) => marker("body", f),
+    },
     // What the entity sounds like in the running game: an audio file of assets/. It draws nothing; the Runtime
     // starts it (see runtime.ts), a behavior can do it too with self.sound().play().
     sound: {
@@ -168,13 +274,17 @@ export const componentDefs: Record<string, ComponentDef> = {
             volume: { type: "number", default: 1, min: 0, step: 0.05 },
             // Speed of playing: 2 is twice as fast and an octave higher
             pitch: { type: "number", default: 1, min: 0.1, max: 4, step: 0.05 },
-            loop: { type: "boolean", default: false },
+            loop: { type: "boolean", default: false, when: { music: [false] } },
             // Starts with the scene (or when the entity appears); off, it waits for self.sound().play()
             autoplay: { type: "boolean", default: true },
+            // The music of the game: one at a time, always looping, and it goes on from scene to scene. If the
+            // next scene names the same file as its music, it plays on unbroken; another file takes its place.
+            // It does not end with the entity.
+            music: { type: "boolean", default: false },
             // Comes from where the entity is: quieter with the distance from the camera, to the left or to the right
-            spatial: { type: "boolean", default: false },
+            spatial: { type: "boolean", default: false, when: { music: [false] } },
             // The distance from the camera, meters, at which nothing is heard any more
-            range: { type: "number", default: 20, min: 0.1, step: 1, when: { spatial: [true] } },
+            range: { type: "number", default: 20, min: 0.1, step: 1, when: { music: [false], spatial: [true] } },
         },
         create: (f) => {
             const marker = new THREE.Object3D();
@@ -192,6 +302,79 @@ export const componentDefs: Record<string, ComponentDef> = {
             marker.userData.listener = true;
             return marker;
         },
+    },
+    // The interface of the game (see ui.ts) lives inside a Canvas, like in Unity: the entity with this
+    // component is the screen, and the UI Elements under it are laid out from its edges. Switching it off
+    // hides all of them.
+    canvas: {
+        label: "Canvas",
+        fields: {
+            // How many units of the interface the screen is high for the elements of this canvas, whatever
+            // its size in pixels (what Canvas Scaler is in Unity): an element 54 units high takes a tenth of
+            // it with the default 540. The width follows the shape of the screen.
+            height: { type: "number", default: 540, min: 1, step: 10 },
+        },
+        create: (f) => marker("uiCanvas", f),
+    },
+    // An element of the interface: an entity under a Canvas, drawn flat over the picture, not in the world.
+    // Its place is the fields below, not its position. Text, Image and Button on the same entity are what
+    // is drawn in that place.
+    ui: {
+        label: "UI Element",
+        fields: {
+            // Where on its parent (the canvas, or the element it is a child of) it is pinned
+            anchor: { type: "select", default: "center", options: UI_ANCHORS },
+            // From the anchor, in the units of the interface (the screen is as many of them high as the
+            // canvas says): x to the right, y down
+            x: { type: "number", default: 0, step: 1 },
+            y: { type: "number", default: 0, step: 1 },
+            // 0: as wide, as high, as the parent
+            width: { type: "number", default: 200, min: 0, step: 1 },
+            height: { type: "number", default: 50, min: 0, step: 1 },
+        },
+        create: (f) => marker("ui", f),
+    },
+    text: {
+        label: "Text",
+        fields: {
+            text: { type: "string", default: "Text" },
+            // A font file of assets/; none is the plain font of the system
+            font: { type: "asset", kind: "font", default: "" },
+            size: { type: "number", default: 24, min: 1, step: 1 },
+            color: { type: "color", default: "#ffffff" },
+            opacity: { type: "number", default: 1, min: 0, max: 1, step: 0.05 },
+            align: { type: "select", default: "center", options: ["left", "center", "right"] },
+            vertical: { type: "select", default: "middle", options: ["top", "middle", "bottom"] },
+            // Goes to the next line where the element ends
+            wrap: { type: "boolean", default: true },
+            // A line around the letters, to read them over any picture; 0 is none
+            outline: { type: "number", default: 0, min: 0, step: 0.5 },
+            outlineColor: { type: "color", default: "#000000" },
+            // No soft edges: every pixel is either there or not. For pixel fonts.
+            sharp: { type: "boolean", default: false },
+        },
+        create: (f) => marker("uiText", f),
+    },
+    image: {
+        label: "Image",
+        fields: {
+            // An image of assets/ stretched over the element; none is a plain rectangle of the color
+            texture: { type: "asset", kind: "texture", default: "" },
+            // The color of the rectangle; an image is multiplied by it
+            color: { type: "color", default: "#ffffff" },
+            opacity: { type: "number", default: 1, min: 0, max: 1, step: 0.05 },
+            // Off keeps the pixels of a scaled image hard
+            smooth: { type: "boolean", default: false },
+        },
+        create: (f) => marker("uiImage", f),
+    },
+    // Makes the element something to click: the behaviors of the entity get click()
+    button: {
+        label: "Button",
+        fields: {
+            enabled: { type: "boolean", default: true },
+        },
+        create: (f) => marker("uiButton", f),
     },
     // A model built by a project script (defineModel)
     model: {

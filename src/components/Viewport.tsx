@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
-import { aspectRatio, createRenderer, RenderPipeline, resolveLook, setCameraAspect } from "../engine";
+import { anchorPoint, aspectRatio, createRenderer, RenderPipeline, resolveLook, setCameraAspect, UI_HANDLE, UI_HANDLES, UiLayer, updateParticles } from "../engine";
 import type { Input } from "../engine";
 import { dropAsset, getDraggedAsset } from "../editor/core/dnd";
 import { ColliderHandles } from "./colliderHandles";
@@ -139,6 +139,11 @@ export default function Viewport() {
         const onPointerUp = (e: PointerEvent) => {
             if (!ctx.renderer || !ctx.raycaster || !ctx.mouse || !ctx.camera) return;
             if (e.button !== 0 || downOnGizmo || handles.grabbed) return;
+            // The press was on an element of the interface: it is selected already
+            if (uiPressed) {
+                uiPressed = false;
+                return;
+            }
             if (endMarquee(e)) return;
             if (Math.hypot(e.clientX - downX, e.clientY - downY) > CLICK_THRESHOLD) return;
             if (sceneStore.gameView) return;
@@ -166,6 +171,121 @@ export default function Viewport() {
             while (obj && !obj.userData.entityId) obj = obj.parent;
 
             return obj ? obj.userData.entityId : null;
+        };
+
+        // =====================
+        // INTERFACE (drag an element)
+        // =====================
+        // While the interface of the scene is shown over the viewport, a press on one of its elements selects
+        // it, and dragging moves it: its x and y, in the units of the interface. The selected element has
+        // handles at its corners and sides: dragging one moves that side, the opposite one stays.
+        let uiPressed = false;
+        let uiDrag: {
+            id: string;
+            pointerId: number;
+            downX: number;
+            downY: number;
+            x: number;
+            y: number;
+            // Pixels of the screen per unit of the interface
+            scale: number;
+            // A size handle is dragged: which sides it moves, what the size was, where the anchor is
+            side?: { h: number; v: number; width: number; height: number; ax: number; ay: number };
+        } | null = null;
+
+        const uiPlace = (id: string) => sceneStore.findEntity(id)?.components.find((component) => component.type === "ui");
+
+        // The size handle of the selected element under the mouse, if there is one
+        const uiHandleAt = (e: PointerEvent, rect: DOMRect) => {
+            const id = sceneStore.selectedId;
+            const object = id ? sceneStore.objectOf(id) : null;
+            const box = object && editorUi.placeOf(object);
+            const place = id && uiPlace(id);
+            if (!id || !box || !place) return null;
+            const scale = rect.height / box.units;
+            const reach = Math.max(7, (UI_HANDLE * scale) / 2 + 2);
+            for (const handle of UI_HANDLES) {
+                const hx = rect.left + (box.left + ((handle.h + 1) / 2) * box.width) * scale;
+                const hy = rect.top + (box.top + ((handle.v + 1) / 2) * box.height) * scale;
+                if (Math.abs(e.clientX - hx) > reach || Math.abs(e.clientY - hy) > reach) continue;
+                const [ax, ay] = anchorPoint((place.anchor as string | undefined) ?? "center");
+                // A size of 0 is "as the parent": the drag starts from what that comes to
+                return { id, place, scale, side: { ...handle, width: box.width, height: box.height, ax, ay } };
+            }
+            return null;
+        };
+
+        // In the capture phase, to turn the orbiting off before OrbitControls gets the press
+        const onUiDown = (e: PointerEvent) => {
+            uiPressed = false;
+            if (e.button !== 0 || e.shiftKey || sceneStore.playing || !sceneStore.uiVisible || !ctx.controls) return;
+            if (ctx.transform?.axis || handles.grabbed) return;
+            const rect = canvas.getBoundingClientRect();
+            // A handle first: it sticks out of its element, and may lie over another one
+            const grabbed = uiHandleAt(e, rect);
+            const object = grabbed ? null : editorUi.elementAt(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+            const id: string | undefined = grabbed?.id ?? object?.userData.entityId ?? object?.userData.innerId;
+            const place = grabbed?.place ?? (id && uiPlace(id));
+            // Pixels of the screen per unit of the canvas the element is in
+            const units = object && editorUi.placeOf(object)?.units;
+            const scale = grabbed?.scale ?? (units ? rect.height / units : 0);
+            if (!id || !place || scale <= 0) return;
+
+            uiPressed = true;
+            const adding = !grabbed && (e.ctrlKey || e.metaKey);
+            if (adding || !sceneStore.selectedIds.includes(id)) sceneStore.select(id, adding);
+            if (adding) return;
+            uiDrag = {
+                id,
+                pointerId: e.pointerId,
+                downX: e.clientX,
+                downY: e.clientY,
+                x: (place.x as number | undefined) ?? 0,
+                y: (place.y as number | undefined) ?? 0,
+                scale,
+                side: grabbed?.side,
+            };
+            ctx.controls.enabled = false;
+            canvas.setPointerCapture(e.pointerId);
+        };
+
+        const onUiMove = (e: PointerEvent) => {
+            if (!uiDrag) return;
+            const dx = e.clientX - uiDrag.downX;
+            const dy = e.clientY - uiDrag.downY;
+            if (Math.hypot(dx, dy) <= CLICK_THRESHOLD) return;
+            const drag = uiDrag;
+            const { side } = drag;
+            // Whole units: easier to line things up, and to read in the file
+            sceneStore.batch(() => {
+                if (!side) {
+                    sceneStore.setComponentField(drag.id, "ui", "x", Math.round(drag.x + dx / drag.scale));
+                    sceneStore.setComponentField(drag.id, "ui", "y", Math.round(drag.y + dy / drag.scale));
+                    return;
+                }
+                // The side under the handle follows the mouse and the opposite one stays. The place of an
+                // element is counted from its anchor, so its x (y) changes with its size, by as much as the
+                // anchor is away from the side that stays.
+                if (side.h !== 0) {
+                    const width = Math.max(1, Math.round(side.width + (side.h * dx) / drag.scale));
+                    const grown = width - side.width;
+                    sceneStore.setComponentField(drag.id, "ui", "width", width);
+                    sceneStore.setComponentField(drag.id, "ui", "x", drag.x + grown * (side.h > 0 ? side.ax : side.ax - 1));
+                }
+                if (side.v !== 0) {
+                    const height = Math.max(1, Math.round(side.height + (side.v * dy) / drag.scale));
+                    const grown = height - side.height;
+                    sceneStore.setComponentField(drag.id, "ui", "height", height);
+                    sceneStore.setComponentField(drag.id, "ui", "y", drag.y + grown * (side.v > 0 ? side.ay : side.ay - 1));
+                }
+            });
+        };
+
+        const onUiUp = () => {
+            if (!uiDrag) return;
+            if (canvas.hasPointerCapture(uiDrag.pointerId)) canvas.releasePointerCapture(uiDrag.pointerId);
+            uiDrag = null;
+            if (ctx.controls) ctx.controls.enabled = !sceneStore.gameView;
         };
 
         // =====================
@@ -232,6 +352,10 @@ export default function Viewport() {
         };
 
         const canvas = ctx.renderer.domElement;
+        canvas.addEventListener("pointerdown", onUiDown, true);
+        canvas.addEventListener("pointermove", onUiMove);
+        canvas.addEventListener("pointerup", onUiUp, true);
+        canvas.addEventListener("pointercancel", onUiUp);
         canvas.addEventListener("pointerdown", onMarqueeDown, true);
         canvas.addEventListener("pointermove", onMarqueeMove);
         canvas.addEventListener("pointercancel", onMarqueeCancel);
@@ -363,6 +487,9 @@ export default function Viewport() {
         };
         applyLook();
 
+        // The interface of the scene being edited, shown over it; a running game has its own
+        const editorUi = new UiLayer(sceneStore.registry, sceneStore.root);
+
         // The input of the running game the canvas is attached to now, and how to detach it
         let gameInput: Input | null = null;
         let detachInput = () => {};
@@ -413,7 +540,9 @@ export default function Viewport() {
             if (gizmo.parent !== sceneStore.viewScene) sceneStore.viewScene.add(gizmo);
             // While a collider is being edited its handles are there instead of the gizmo
             const editingCollider = sceneStore.colliderEdit && sceneStore.hasCollider && !sceneStore.playing;
-            const selected = sceneStore.gameView || editingCollider ? null : sceneStore.selectedViewObject;
+            // An element of the interface has no place in the world: it is moved by dragging it, not by the gizmo
+            const flat = sceneStore.selected?.components.some((component) => component.type === "ui" || component.type === "canvas") ?? false;
+            const selected = sceneStore.gameView || editingCollider || flat ? null : sceneStore.selectedViewObject;
             handles.update();
             // Looking through the camera of the scene: the editor camera stays where it was
             if (ctx.controls && !ctx.transform?.dragging) ctx.controls.enabled = !sceneStore.gameView;
@@ -438,6 +567,8 @@ export default function Viewport() {
             fly(Math.min(dt, 0.1));
             // Play mode: runs the behaviors; a long pause (hidden tab) must not become one huge step
             sceneStore.tick(Math.min(dt, 0.1));
+            // The game moves its own particles; those of the scene being edited are moved here
+            if (!sceneStore.playing) updateParticles(sceneStore.root, Math.min(dt, 0.1));
 
             if (flight && ctx.camera && ctx.controls) {
                 flight.t = Math.min(1, flight.t + dt / FOCUS_TIME);
@@ -477,7 +608,23 @@ export default function Viewport() {
                     renderer.setScissor(area.left, bottom, area.width, area.height);
                     renderer.setScissorTest(true);
                 }
-                pipeline.render(scene, camera, Math.min(dt, 0.1));
+                // The interface: of the running game in its Game view, of the scene while it is edited
+                let ui: UiLayer | null = null;
+                if (sceneStore.playing) {
+                    if (sceneStore.gameView) ui = sceneStore.gameUi;
+                } else if (sceneStore.uiVisible) {
+                    editorUi.registry = sceneStore.registry;
+                    editorUi.root = sceneStore.root;
+                    // The size handles are on the main selected element
+                    editorUi.handles = sceneStore.selectedId ? sceneStore.objectOf(sceneStore.selectedId) ?? null : null;
+                    editorUi.highlight.clear();
+                    for (const id of sceneStore.selectedIds) {
+                        const object = sceneStore.objectOf(id);
+                        if (object) editorUi.highlight.add(object);
+                    }
+                    ui = editorUi;
+                }
+                pipeline.render(scene, camera, Math.min(dt, 0.1), ui);
                 if (framed) {
                     renderer.setScissorTest(false);
                     renderer.setViewport(0, 0, canvas.clientWidth, canvas.clientHeight);
@@ -553,6 +700,7 @@ export default function Viewport() {
             stopFlying();
             detachInput();
             pipeline.dispose();
+            editorUi.dispose();
             sceneStore.focusHandler = null;
             handles.dispose();
             boxes.removeFromParent();
@@ -680,6 +828,15 @@ export default function Viewport() {
                             </button>
                         )}
                     </>
+                )}
+                {!store.playing && (
+                    <button
+                        className={`btn ghost ${store.uiVisible ? "active" : ""}`}
+                        title="Show the interface of the game (the UI elements of the scene) over the viewport"
+                        onClick={() => store.setUiVisible(!store.uiVisible)}
+                    >
+                        UI
+                    </button>
                 )}
                 {store.playing && (
                     <>

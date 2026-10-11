@@ -70,6 +70,11 @@ try {
     ? fs.readdirSync(assetsDir, { recursive: true }).map((f) => f.split(path.sep).join('/')).filter((f) => /\.(mp3|ogg|wav)$/i.test(f))
     : []
   registry.setSounds('', sounds)
+  // Text components name the font files of assets/
+  const fonts = fs.existsSync(assetsDir)
+    ? fs.readdirSync(assetsDir, { recursive: true }).map((f) => f.split(path.sep).join('/')).filter((f) => /\.(ttf|otf|woff2?)$/i.test(f))
+    : []
+  registry.setFonts('', fonts)
 
   for (const name of jsonNames('materials')) {
     try {

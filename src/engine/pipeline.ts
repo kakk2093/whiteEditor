@@ -4,6 +4,7 @@ import { paramDefaults } from "./Registry";
 import type { Registry } from "./Registry";
 import { uniformDeclaration, uniformNames, uniformValues } from "./shaderParams";
 import { Surfaces } from "./surface";
+import type { UiLayer } from "./ui";
 
 // Draws a scene through a look: with the surfaces of the look in its materials, into a (possibly smaller)
 // picture, through the screen effects of the look one after another, and onto the canvas. The editor viewport, Play and the built game all draw with this
@@ -62,6 +63,14 @@ void main() {
     gl_FragColor = vec4(toSRGB(clamp(c, 0.0, 1.0)), color.a);
 }`;
 
+// The interface of the game, laid over the finished picture: its canvas is in sRGB already
+const OVERLAY = `
+uniform sampler2D tUi;
+varying vec2 vUv;
+void main() {
+    gl_FragColor = texture2D(tUi, vUv);
+}`;
+
 const TONE_MAPPINGS = ["none", "reinhard", "aces"];
 
 interface Pass {
@@ -109,6 +118,15 @@ export class RenderPipeline {
         uniforms: { tColor: { value: null }, toneMapping: { value: 0 }, exposure: { value: 1 }, offset: { value: new THREE.Vector2() } },
         depthTest: false,
         depthWrite: false,
+    });
+
+    private overlayMaterial = new THREE.ShaderMaterial({
+        vertexShader: VERTEX,
+        fragmentShader: OVERLAY,
+        uniforms: { tUi: { value: null } },
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
     });
 
     private quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
@@ -225,8 +243,24 @@ export class RenderPipeline {
         };
     }
 
-    // dt (seconds) moves the `time` the effects see
-    render(scene: THREE.Scene, camera: THREE.Camera, dt = 0) {
+    // Lays the interface over what was drawn: after the effects, so they do not touch it, but in the big
+    // pixels of the picture if the look has them (and does not say otherwise)
+    private drawUi(ui: UiLayer) {
+        const { renderer, look } = this;
+        const area = renderer.getViewport(new THREE.Vector4()).multiplyScalar(renderer.getPixelRatio());
+        const pixel = look && look.pixelUi ? Math.max(1, look.pixelSize) : 1;
+        const texture = ui.draw(Math.max(1, Math.round(area.z / pixel)), Math.max(1, Math.round(area.w / pixel)));
+        if (!texture) return;
+        this.overlayMaterial.uniforms.tUi.value = texture;
+        // Onto the picture, not instead of it
+        const { autoClear } = renderer;
+        renderer.autoClear = false;
+        this.drawQuad(this.overlayMaterial, null);
+        renderer.autoClear = autoClear;
+    }
+
+    // dt (seconds) moves the `time` the effects see; `ui` is the interface of the game to draw on top
+    render(scene: THREE.Scene, camera: THREE.Camera, dt = 0, ui?: UiLayer | null) {
         const { renderer, look } = this;
         this.time += dt;
 
@@ -239,6 +273,7 @@ export class RenderPipeline {
         if (!look || (look.pixelSize <= 1 && this.passes.length === 0 && look.toneMapping === "none" && look.exposure === 1)) {
             renderer.setRenderTarget(null);
             renderer.render(scene, camera);
+            if (ui) this.drawUi(ui);
             return;
         }
 
@@ -256,6 +291,12 @@ export class RenderPipeline {
             const clearAlpha = renderer.getClearAlpha();
             // Moved vertices and flat faces must be in this picture too
             this.surfaces.patch(this.normalMaterial);
+            // What is not a surface has no normal: it is left out of this picture
+            const hidden: THREE.Object3D[] = [];
+            scene.traverse((object) => {
+                if (object.userData.skipNormal && object.visible) hidden.push(object);
+            });
+            hidden.forEach((object) => (object.visible = false));
             // Where there is no surface the "normal" looks at the camera
             scene.background = null;
             scene.overrideMaterial = this.normalMaterial;
@@ -264,6 +305,7 @@ export class RenderPipeline {
             renderer.render(scene, camera);
             scene.background = background;
             scene.overrideMaterial = overrideMaterial;
+            hidden.forEach((object) => (object.visible = true));
             renderer.setClearColor(clearColor, clearAlpha);
         }
         snap?.restore();
@@ -291,6 +333,7 @@ export class RenderPipeline {
         this.outputMaterial.uniforms.exposure.value = look.exposure;
         (this.outputMaterial.uniforms.offset.value as THREE.Vector2).copy(snap?.offset ?? new THREE.Vector2());
         this.drawQuad(this.outputMaterial, null);
+        if (ui) this.drawUi(ui);
     }
 
     dispose() {
@@ -302,6 +345,7 @@ export class RenderPipeline {
         });
         this.normalMaterial.dispose();
         this.outputMaterial.dispose();
+        this.overlayMaterial.dispose();
         this.quad.geometry.dispose();
     }
 }

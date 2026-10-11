@@ -1,4 +1,4 @@
-import { componentDefs, componentKey } from "./components";
+import { componentDefs, componentKey, UI_PARTS } from "./components";
 import { environmentFields } from "./environment";
 import { lookFields } from "./look";
 import type { LookData } from "./look";
@@ -36,6 +36,7 @@ function checkValue(def: ParamDef, value: unknown, registry: Registry): string |
                 if (value === DEFAULT_LAYER) return null;
                 return `there is no layer "${value}" in project.json (layers: ${[DEFAULT_LAYER, ...registry.settings.layers].join(", ")})`;
             }
+            if (def.kind === "font") return `there is no font "${value}" in assets/ (fonts: ${registry.fontNames().join(", ") || "none"})`;
             if (def.kind === "sound") return `there is no sound "${value}" in assets/ (sounds: ${registry.soundNames().join(", ") || "none"})`;
             return def.kind === "texture"
                 ? `there is no image "${value}" in assets/ (images: ${registry.textureNames().join(", ") || "none"})`
@@ -197,7 +198,8 @@ function checkOverrides(entity: EntityData, where: string, registry: Registry, i
     }
 }
 
-function checkEntity(entity: EntityData, path: string, registry: Registry, ids: Set<string>, problems: string[]) {
+// `canvas`: the entity is, or may be, inside a Canvas, where the elements of the interface are drawn
+function checkEntity(entity: EntityData, path: string, registry: Registry, ids: Set<string>, problems: string[], canvas = false) {
     const where = `${path}/${entity.name}`;
 
     if (ids.has(entity.id)) problems.push(`${where}: duplicate id "${entity.id}"`);
@@ -242,8 +244,21 @@ function checkEntity(entity: EntityData, path: string, registry: Registry, ids: 
 
         checkComponent(component, at, registry, problems);
     }
+    for (const part of UI_PARTS) {
+        if (keys.has(part) && !keys.has("ui")) problems.push(`${where} [${part}]: is drawn only with a UI Element next to it: add { "type": "ui" }`);
+    }
 
-    for (const child of entity.children) checkEntity(child, where, registry, ids, problems);
+    if (keys.has("body")) {
+        const collider = entity.components.find((component) => component.type === "collider");
+        if (!collider) problems.push(`${where} [body]: needs a shape: add a Collider, { "type": "collider" }`);
+        else if (collider.solid === false) problems.push(`${where} [body]: its Collider must be solid; a trigger is not a part of the physics`);
+    }
+    const inside = canvas || keys.has("canvas");
+    if (keys.has("ui") && !inside) {
+        problems.push(`${where} [ui]: is drawn only inside a Canvas: put the object under one that has { "type": "canvas" }`);
+    }
+
+    for (const child of entity.children) checkEntity(child, where, registry, ids, problems, inside);
 }
 
 // true if expanding the prefab would come back to one of `stack`
@@ -259,7 +274,8 @@ function containsItself(registry: Registry, entity: EntityData, stack: string[])
 export function validatePrefab(name: string, data: PrefabData, registry: Registry): string[] {
     const problems: string[] = [];
     if (data.root.prefab) problems.push(`root: the root of a prefab cannot itself be a prefab instance`);
-    checkEntity(data.root, "", registry, new Set(), problems);
+    // Where its instances will stand is not known here: a prefab of one button is fine
+    checkEntity(data.root, "", registry, new Set(), problems, true);
     if (containsItself(registry, data.root, [name])) problems.push(`prefab "${name}" contains itself`);
     return problems;
 }

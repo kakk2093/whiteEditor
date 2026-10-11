@@ -43,10 +43,18 @@ let context: AudioContext | null = null;
 // By address, so the files of a project are decoded once however many times it is played
 const files = new Map<string, Loaded | Promise<Loaded>>();
 
+// Where the page keeps that context. When this file is loaded again (the dev server replaces an edited module
+// without reloading the page), the copy before it leaves its context behind with whatever was playing, and
+// nobody can stop that any more: the new copy closes it.
+const page = globalThis as { whiteAudio?: AudioContext };
+page.whiteAudio?.close().catch(() => {});
+delete page.whiteAudio;
+
 function audioContext() {
     if (typeof AudioContext === "undefined") return null;
     if (!context) {
         context = new AudioContext();
+        page.whiteAudio = context;
         // A page may not make a sound before the user has touched it: the context waits, and what was
         // started in the meantime begins at the first key or click
         const unlock = () => {
@@ -220,7 +228,8 @@ class Voice implements SoundHandle {
     }
 }
 
-// Plays the sounds of one running scene; Game has one, the behaviors reach it through self.playSound()
+// Plays the sounds of a running game; the behaviors reach it through self.playSound(). A Game makes one for
+// itself, or is given the one of the scene before it: then the music goes on.
 export class SoundPlayer {
     // The loudness of everything, 0..1; the editor mutes Play with it
     volume = 1;
@@ -228,9 +237,12 @@ export class SoundPlayer {
     // false: nothing is loaded and nothing plays (a still picture of a scene needs no sound)
     enabled = true;
 
-    private registry: Registry;
+    readonly registry: Registry;
 
     private voices = new Set<Voice>();
+
+    // The music: one at a time, and the only sound that goes on when the scene changes
+    private track: { name: string; voice: Voice } | null = null;
 
     private paused = false;
 
@@ -272,6 +284,39 @@ export class SoundPlayer {
         return voice;
     }
 
+    // The file that plays as the music now, "" if none
+    get music() {
+        return this.track?.voice.playing ? this.track.name : "";
+    }
+
+    // Makes the file the music of the game: it loops (unless told otherwise) and goes on from scene to
+    // scene. The same file that is the music already is not started again, so a scene that names the music
+    // of the scene before it gets it unbroken; another file takes its place. It has no place in the world.
+    playMusic(name: string, options: SoundOptions = {}): SoundHandle {
+        if (this.track?.voice.playing && this.track.name === name) {
+            this.track.voice.volume = options.volume ?? 1;
+            return this.track.voice;
+        }
+        const voice = this.play(name, { loop: true, ...options, at: undefined }) as Voice;
+        // A file that does not exist leaves the music as it is
+        if (!voice.playing) return voice;
+        this.track?.voice.stop();
+        this.track = { name, voice };
+        return voice;
+    }
+
+    stopMusic() {
+        this.track?.voice.stop();
+        this.track = null;
+    }
+
+    // The scene is over: its sounds end, the music goes on into the next one
+    endScene() {
+        for (const voice of [...this.voices]) {
+            if (voice !== this.track?.voice) voice.stop();
+        }
+    }
+
     // Once a frame: the sounds that have a place get louder, quieter and move from ear to ear as their
     // objects and the listener move; a changed volume is applied. `ears` is where the distance is counted
     // from, the camera itself if not given; left and right are always those of the camera.
@@ -295,5 +340,6 @@ export class SoundPlayer {
 
     dispose() {
         this.stopAll();
+        this.track = null;
     }
 }

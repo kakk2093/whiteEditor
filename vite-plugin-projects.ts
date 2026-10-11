@@ -22,8 +22,8 @@ import { buildGame } from './tools/buildGame'
 
 const NAME = /^[\w-]+$/
 
-// A file an editor may put into assets/: an image (a texture) or an audio file (a sound)
-const IMAGE_NAME = /^[\w-]+\.(png|jpe?g|webp|mp3|ogg|wav)$/i
+// A file an editor may put into assets/: an image (a texture), an audio file (a sound) or a font
+const IMAGE_NAME = /^[\w-]+\.(png|jpe?g|webp|mp3|ogg|wav|ttf|otf|woff2?)$/i
 
 // Folders whose files are JSON assets addressed by name
 const JSON_SECTIONS = ['scenes', 'materials', 'prefabs', 'looks']
@@ -91,6 +91,10 @@ const MIME: Record<string, string> = {
   '.mp3': 'audio/mpeg',
   '.ogg': 'audio/ogg',
   '.wav': 'audio/wav',
+  '.ttf': 'font/ttf',
+  '.otf': 'font/otf',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
 }
 
 class HttpError extends Error {
@@ -139,6 +143,12 @@ export async function listImages(assetsDir: string) {
 export async function listSounds(assetsDir: string) {
   const files = await fs.readdir(assetsDir, { recursive: true }).catch(() => [] as string[])
   return files.map(toPosix).filter((f) => /\.(mp3|ogg|wav)$/i.test(f)).sort()
+}
+
+// The font files of assets/, which Text components name
+export async function listFonts(assetsDir: string) {
+  const files = await fs.readdir(assetsDir, { recursive: true }).catch(() => [] as string[])
+  return files.map(toPosix).filter((f) => /\.(ttf|otf|woff2?)$/i.test(f)).sort()
 }
 
 // Opens the file manager of the system with the file selected (or, for a folder, inside it)
@@ -260,6 +270,7 @@ export function projectsPlugin(dir = 'projects'): Plugin {
         // GET /__api/projects/demo/assets -> the images of assets/, as materials name them: ["bricks.png", "walls/stone.png"]
         // GET /__api/projects/demo/assets?kind=sound -> its audio files: ["coin.wav"]
         if (section === 'assets' && !item) {
+          if (query.get('kind') === 'font') return listFonts(path.join(projectDir, 'assets'))
           return query.get('kind') === 'sound' ? listSounds(path.join(projectDir, 'assets')) : listImages(path.join(projectDir, 'assets'))
         }
 
@@ -353,7 +364,7 @@ export function projectsPlugin(dir = 'projects'): Plugin {
           // is the file itself) or removed. The watcher then tells the editors that the project changed.
           if (segments.length === 3 && segments[1] === 'assets' && req.method !== 'GET') {
             const [project, , file] = segments
-            if (!NAME.test(project) || !IMAGE_NAME.test(file)) throw new HttpError(400, 'A file name can have only Latin letters, digits, _ and -, and ends in .png, .jpg, .webp, .mp3, .ogg or .wav')
+            if (!NAME.test(project) || !IMAGE_NAME.test(file)) throw new HttpError(400, 'A file name can have only Latin letters, digits, _ and -, and is an image (.png, .jpg, .webp), a sound (.mp3, .ogg, .wav) or a font (.ttf, .otf, .woff, .woff2)')
             const assetsDir = path.join(root, project, 'assets')
             if (!(await fs.stat(path.join(root, project)).then((s) => s.isDirectory(), () => false))) throw new HttpError(404, `Project "${project}" not found`)
             if (req.method === 'DELETE') {

@@ -1,5 +1,5 @@
 import {
-    applyToPrefab, parsePrefab, parseScene, renameLayerIn, resolveLook, SOUND_FILE, validateLook, validateMaterial, validatePrefab, validateScene
+    applyToPrefab, FONT_FILE, parsePrefab, parseScene, renameLayerIn, resolveLook, SOUND_FILE, validateLook, validateMaterial, validatePrefab, validateScene
 } from "../../engine";
 import type { LookData, MaterialData, ProjectSettings, SceneData } from "../../engine";
 import { renameInEntities, renameInScene } from "./references";
@@ -559,14 +559,15 @@ export function updateMaterial<K extends keyof MaterialData>(name: string, key: 
     }, 300));
 }
 
-// Image and audio files (dropped into the Project panel) go into assets/ and become textures and sounds. A
-// name the project cannot keep is tidied up; a file with the name of an existing one replaces it.
-// Tells what the last of them is, null if none was taken.
+// Image, audio and font files (dropped into the Project panel) go into assets/ and become textures, sounds
+// and the fonts a Text can pick. A name the project cannot keep is tidied up; a file with the name of an
+// existing one replaces it. Tells what the last of them is, null if none was taken or it has no place in
+// the panel (a font).
 export async function uploadFiles(files: File[]): Promise<"texture" | "sound" | null> {
     const { project } = sceneStore;
-    const images = files.filter((file) => /\.(png|jpe?g|webp)$/i.test(file.name) || SOUND_FILE.test(file.name));
+    const images = files.filter((file) => /\.(png|jpe?g|webp)$/i.test(file.name) || SOUND_FILE.test(file.name) || FONT_FILE.test(file.name));
     if (images.length === 0) {
-        sceneStore.update({ status: "Only images (.png, .jpg, .webp) and sounds (.mp3, .ogg, .wav) can be added" });
+        sceneStore.update({ status: "Only images (.png, .jpg, .webp), sounds (.mp3, .ogg, .wav) and fonts (.ttf, .otf, .woff, .woff2) can be added" });
         return null;
     }
     try {
@@ -581,9 +582,11 @@ export async function uploadFiles(files: File[]): Promise<"texture" | "sound" | 
         // The same reload as after an edit of scripts: the registry gets the new list of images
         await loadScripts(project);
         const last = names[names.length - 1];
+        sceneStore.update({ status: `Added to assets/: ${names.join(", ")}` });
+        // A font is picked in the Font field of a Text; the panel has no place for it
+        if (FONT_FILE.test(last)) return null;
         const kind = SOUND_FILE.test(last) ? "sound" : "texture";
         sceneStore.selectAsset({ kind, name: last });
-        sceneStore.update({ status: `Added to assets/: ${names.join(", ")}` });
         return kind;
     } catch (e) {
         report(e);

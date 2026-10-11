@@ -135,3 +135,51 @@ export const pickup = defineBehavior({
         self.destroy();
     },
 });
+
+// Put it on an object with a Button: every click adds one to the number a Text shows.
+// click() is called when the mouse (or a finger) goes down and up on the button.
+export const clicker = defineBehavior({
+    name: "clicker",
+    label: "Clicker",
+    params: {
+        // Name of the object whose Text shows the count
+        label: { type: "string", default: "Score" },
+        sound: { type: "asset", kind: "sound", default: "coin.wav" },
+    },
+    start: () => ({ count: 0 }),
+    click: (self) => {
+        self.state.count++;
+        const label = self.find({ name: self.params.label });
+        if (label) self.setText(`Score: ${self.state.count}`, label);
+        if (self.params.sound) self.playSound(self.params.sound, { volume: 0.4 });
+    },
+});
+
+// A character: walks with W A S D, the arrows or the left stick of a gamepad, jumps with Space or the A
+// button, falls, and walks up onto ledges not higher than `step`. The object needs a solid Collider.
+export const walker = defineBehavior({
+    name: "walker",
+    label: "Walker",
+    params: {
+        // Meters per second
+        speed: { type: "number", default: 4, min: 0, step: 0.5 },
+        // The speed a jump starts with, meters per second; 0 for no jumping
+        jump: { type: "number", default: 7, min: 0, step: 0.5 },
+        // How high a ledge it walks onto without jumping, meters
+        step: { type: "number", default: 0.3, min: 0, step: 0.05 },
+    },
+    update: (self, dt) => {
+        const { input, params } = self;
+        const stick = input.stick("left");
+        const x = input.axis("KeyA", "KeyD") + input.axis("ArrowLeft", "ArrowRight") + stick.x;
+        const z = input.axis("KeyW", "KeyS") + input.axis("ArrowUp", "ArrowDown") - stick.y;
+        const length = Math.hypot(x, z);
+        if (length > 0) {
+            // Not faster along a diagonal; a stick pushed halfway walks at half the speed
+            const pace = (params.speed * dt) / Math.max(1, length);
+            self.move(x * pace, 0, z * pace, params.step);
+        }
+        if (params.jump > 0 && (input.keyPressed("Space") || input.keyPressed("Pad0")) && self.grounded()) self.jump(params.jump);
+        self.fall(dt);
+    },
+});

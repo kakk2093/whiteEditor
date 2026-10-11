@@ -91,6 +91,7 @@ export async function loadRegistry(project: string) {
 
     // The time in the address gets an image that was edited past the cache of the browser
     registry.setTextures(`/projects/${project}/assets/`, await request(`${project}/assets`), `?t=${Date.now()}`);
+    registry.setFonts(`/projects/${project}/assets/`, await request(`${project}/assets?kind=font`), `?t=${Date.now()}`);
     registry.setSounds(`/projects/${project}/assets/`, await request(`${project}/assets?kind=sound`), `?t=${Date.now()}`);
     try {
         registry.setSettings(parseSettings(await request(`${project}/settings`)));

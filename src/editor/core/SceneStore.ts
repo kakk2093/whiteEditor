@@ -25,7 +25,9 @@ import {
     parseScene,
     rebuildComponentObject,
     Registry,
-    ROOT_PATH
+    ROOT_PATH,
+    SoundPlayer,
+    UI_PARTS
 } from "../../engine";
 import type {
     ComponentData, EntityData, EntityOverride, EnvironmentData, ParamValue, Params, PrefabData, SceneData
@@ -140,12 +142,18 @@ const UNDO_MERGE_MS = 400;
 // cameras. The viewport draws this layer after the look of the scene, sharp and untouched by its effects.
 export const EDITOR_LAYER = 1;
 
-// Lights and cameras draw nothing, so the editor gives them a clickable marker; a collider gets its outline
+// The color of the markers of sounds and of the sound listener
+const SOUND_COLOR = 0x5fe0c8;
+
+// Lights, cameras, sounds and the sound listener draw nothing, so the editor gives them a clickable marker;
+// a collider gets its outline
 function createHelper(entity: EntityData): THREE.Object3D | null {
     const light = getComponent(entity, "light");
     const camera = getComponent(entity, "camera");
     const collider = getComponent(entity, "collider");
-    if (!light && !camera && !collider) return null;
+    const sound = getComponent(entity, "sound");
+    const listener = getComponent(entity, "listener");
+    if (!light && !camera && !collider && !sound && !listener) return null;
 
     const helper = new THREE.Group();
     const material = new THREE.MeshBasicMaterial({ color: light ? 0xffd54a : 0x9ecbff, wireframe: true, fog: false });
@@ -181,6 +189,43 @@ function createHelper(entity: EntityData): THREE.Object3D | null {
         const cone = new THREE.Mesh(new THREE.ConeGeometry(0.25, 0.35, 4), material);
         cone.rotation.set(Math.PI / 2, Math.PI / 4, 0);
         helper.add(cone);
+    }
+
+    // A sound on an entity that already has a marker of its own gets none: the marker is there to be clicked
+    if (sound && !light && !camera) {
+        // A loudspeaker: a small box with a horn opening upwards
+        const tone = new THREE.MeshBasicMaterial({ color: SOUND_COLOR, wireframe: true, fog: false });
+        const box = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.12, 0.14), tone);
+        const horn = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.07, 0.16, 8, 1, true), tone);
+        horn.position.y = 0.14;
+        helper.add(box, horn);
+    } else if (listener && !light && !camera) {
+        helper.add(new THREE.Mesh(new THREE.OctahedronGeometry(0.16), new THREE.MeshBasicMaterial({ color: SOUND_COLOR, wireframe: true, fog: false })));
+    }
+    if (sound?.spatial) {
+        // How far a spatial sound is heard: a circle on the ground and one upright. Not for clicking.
+        // The range is in meters of the world whatever the scale of the entity, so the circles take only
+        // their place from it: not its scale, nor its rotation.
+        const range = (sound.range as number | undefined) ?? (componentDefs.sound.fields.range.default as number);
+        const points = Array.from({ length: 49 }, (_, i) => {
+            const angle = (i / 48) * Math.PI * 2;
+            return new THREE.Vector3(Math.cos(angle) * range, 0, Math.sin(angle) * range);
+        });
+        const circle = new THREE.Line(
+            new THREE.BufferGeometry().setFromPoints(points),
+            new THREE.LineBasicMaterial({ color: SOUND_COLOR, fog: false, transparent: true, opacity: 0.5 })
+        );
+        circle.raycast = () => {};
+        const upright = circle.clone();
+        upright.rotation.x = Math.PI / 2;
+        upright.raycast = () => {};
+        const reach = new THREE.Group();
+        reach.add(circle, upright);
+        reach.updateMatrixWorld = () => {
+            if (reach.parent) reach.matrixWorld.identity().copyPosition(reach.parent.matrixWorld);
+            reach.children.forEach((child) => child.updateMatrixWorld(true));
+        };
+        helper.add(reach);
     }
 
     // Shows where a directional or spot light points
@@ -339,6 +384,10 @@ class SceneStore {
     // The game itself always has its look.
     lookEnabled = savedOptions.lookEnabled !== false;
 
+    // true: the viewport shows the interface of the game (the UI elements of the scene) over the scene
+    // while it is edited. The Game view of Play always shows it.
+    uiVisible = savedOptions.uiVisible !== false;
+
     // true: Play makes no sound in the editor. The built game is not affected.
     muted = savedOptions.muted === true;
 
@@ -364,6 +413,9 @@ class SceneStore {
 
     // What the behaviors keep from scene to scene during one Play (self.globals)
     private playGlobals: Record<string, unknown> = {};
+
+    // The sounds of Play, one player for every scene it goes through, so that the music goes on
+    private playSounds: SoundPlayer | null = null;
 
     // Set by the Viewport: moves the editor camera to look at an object
     focusHandler: ((obj: THREE.Object3D) => void) | null = null;
@@ -844,6 +896,17 @@ class SceneStore {
         this.notify();
     }
 
+    setUiVisible(visible: boolean) {
+        this.uiVisible = visible;
+        this.saveOptions();
+        this.notify();
+    }
+
+    // The interface of the running game, for the viewport to draw; null if nothing runs
+    get gameUi() {
+        return this.game?.ui ?? null;
+    }
+
     setMuted(muted: boolean) {
         this.muted = muted;
         if (this.game) this.game.sound.volume = muted ? 0 : 1;
@@ -853,7 +916,7 @@ class SceneStore {
 
     // The options of the editor itself (Settings, Editor page) are kept in the browser between runs
     private saveOptions() {
-        const options = { gizmoSpace: this.gizmoSpace, snap: this.snap, snapStep: this.snapStep, lookEnabled: this.lookEnabled, muted: this.muted };
+        const options = { gizmoSpace: this.gizmoSpace, snap: this.snap, snapStep: this.snapStep, lookEnabled: this.lookEnabled, muted: this.muted, uiVisible: this.uiVisible };
         localStorage.setItem(OPTIONS_KEY, JSON.stringify(options));
     }
 
@@ -895,7 +958,12 @@ class SceneStore {
     // `scene`: another scene of the project a behavior has asked for (self.loadScene); without it the open one
     private startGame(scene?: { name: string; data: SceneData }) {
         this.game?.dispose();
-        const game = new Game(this.registry, scene?.data ?? this.toJSON(), this.playGlobals);
+        // The project was loaded again (a script was edited): its sounds are new files
+        if (this.playSounds?.registry !== this.registry) {
+            this.playSounds?.dispose();
+            this.playSounds = new SoundPlayer(this.registry);
+        }
+        const game = new Game(this.registry, scene?.data ?? this.toJSON(), this.playGlobals, this.playSounds);
         game.runtime.onError = (message) => this.update({ status: message });
         game.sound.volume = this.muted ? 0 : 1;
         // A scene entered while Play is paused waits in silence too
@@ -979,6 +1047,8 @@ class SceneStore {
         const changed = this.playChanged;
         const snapshot = this.playSnapshot;
         this.game.dispose();
+        this.playSounds?.dispose();
+        this.playSounds = null;
         this.game = null;
         this.playScene = null;
         this.playSnapshot = null;
@@ -1600,6 +1670,11 @@ class SceneStore {
         const component: ComponentData = { type, ...(def.source && source ? { [def.source.key]: source } : {}) };
         const key = componentKey(component);
         if (getComponent(entity, key)) return;
+        // A text, an image or a button is drawn in the place a UI Element gives it
+        if (UI_PARTS.includes(type) && !getComponent(entity, "ui")) {
+            entity.components.push({ type: "ui" });
+            this.rebuildComponent(entity, "ui");
+        }
         entity.components.push(component);
         this.rebuildComponent(entity, key);
         // For an instance or what is inside one: a component the instance adds

@@ -32,13 +32,47 @@ export const CREATE_MENU: { title?: string; items: CreateItem[] }[] = [
         ]
     },
     {
+        // The interface of the game: flat, over the picture. Its elements live inside a Canvas.
+        title: "UI",
+        items: [
+            { label: "Canvas", icon: "image", components: [{ type: "canvas" }] },
+            { label: "Text", icon: "image", components: [{ type: "ui", width: 200, height: 40 }, { type: "text" }] },
+            { label: "Image", icon: "image", components: [{ type: "ui", width: 100, height: 100 }, { type: "image" }] },
+            {
+                label: "Button",
+                icon: "image",
+                components: [{ type: "ui", width: 160, height: 44 }, { type: "image", color: "#2d6cdf" }, { type: "text", text: "Button" }, { type: "button" }]
+            }
+        ]
+    },
+    {
         title: "Other",
         items: [{ label: "Camera", icon: "camera", components: [{ type: "camera" }] }]
     }
 ];
 
+// Where a new element of the interface goes, like in Unity: under `parentId` if that is inside a canvas (or
+// is one), otherwise into the first canvas of the scene; if the scene has none, one is made
+function canvasFor(parentId: string | null): string {
+    let first: string | null = null;
+    let fits = false;
+    const visit = (list: EntityData[], inCanvas: boolean) => {
+        for (const entity of list) {
+            const shown = sceneStore.expand(entity) ?? entity;
+            const inside = inCanvas || shown.components.some((component) => component.type === "canvas");
+            if (inside && first === null) first = shown.id;
+            if (inside && shown.id === parentId) fits = true;
+            visit(shown.children, inside);
+        }
+    };
+    visit(sceneStore.entities, false);
+    if (fits && parentId) return parentId;
+    return first ?? sceneStore.addEntity("Canvas", [{ type: "canvas" }], null).id;
+}
+
 export function createObject(item: CreateItem, parentId: string | null = null) {
     const name = item.components.length === 0 ? "GameObject" : item.label;
+    if (item.components.some((component) => component.type === "ui")) parentId = canvasFor(parentId);
     sceneStore.select(sceneStore.addEntity(name, structuredClone(item.components), parentId).id);
 }
 

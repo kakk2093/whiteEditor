@@ -3,10 +3,14 @@ import { disposeObject } from "./components";
 import { Input } from "./input";
 import { createEntityObject, createPrefabInstance } from "./loadScene";
 import { paramDefaults } from "./Registry";
-import type { BehaviorDef, BehaviorSelf, FindQuery, RayHit, RayOptions, Registry, SoundSource, VectorLike } from "./Registry";
+import { particlesOf, updateParticles } from "./particles";
+import { Physics } from "./physics";
+import type { BehaviorDef, BehaviorSelf, Ease, FindQuery, RayHit, RayOptions, Registry, Running, SoundSource, TweenOptions, VectorLike } from "./Registry";
 import { layerOf } from "./settings";
 import { SoundPlayer } from "./sound";
 import type { SoundHandle } from "./sound";
+import { setLabelText } from "./sprites";
+import { uiOf } from "./ui";
 import type { ComponentData, Params, Vec3 } from "./types";
 
 interface Instance {
@@ -28,6 +32,8 @@ interface Body {
     solid: boolean;
     // Its collision layer: colliders of layers that are set not to collide do not notice each other
     layer: string;
+    // The entity has a Body: the physics moves it, and it gives way to what walks into it
+    dynamic: boolean;
     // Either a box along the axes of the world...
     box?: THREE.Box3;
     // ...or an upright capsule: everything within `radius` of the vertical line from `bottom` up to `top`.
@@ -122,6 +128,22 @@ function rayBody(origin: THREE.Vector3, direction: THREE.Vector3, body: Body): {
     return best;
 }
 
+const EASES: Record<Ease, (t: number) => number> = {
+    linear: (t) => t,
+    in: (t) => t * t,
+    out: (t) => 1 - (1 - t) * (1 - t),
+    inOut: (t) => (t < 0.5 ? 2 * t * t : 1 - 2 * (1 - t) * (1 - t)),
+};
+
+// Something that goes on by itself once a behavior has started it: a tween or a timer
+interface Process {
+    // The entity object of the behavior that started it: it ends with that object
+    owner: THREE.Object3D;
+    running: boolean;
+    // Moves it on by dt seconds; false when it is over
+    advance: (dt: number) => boolean;
+}
+
 // The longest step a moving collider makes at once, meters: a fast object goes in several, so it does not
 // jump over a thin wall
 const MAX_STEP = 0.25;
@@ -156,8 +178,14 @@ export class Runtime {
     // What the behaviors read the keyboard and the mouse from
     readonly input: Input;
 
+    // The tweens and timers that are going on
+    private processes: Process[] = [];
+
     // What the sounds are played with
     readonly sound: SoundPlayer;
+
+    // The bodies: what falls, rolls and is pushed
+    readonly physics: Physics;
 
     // The Sound components that were noticed, by their marker objects, with what each of them plays now
     private sources = new Map<THREE.Object3D, SoundHandle | null>();
@@ -181,6 +209,7 @@ export class Runtime {
         this.root = root;
         this.input = input;
         this.sound = sound;
+        this.physics = new Physics(registry);
         root.traverse((obj) => this.attach(obj));
     }
 
@@ -214,7 +243,7 @@ export class Runtime {
                 spawn: (prefab, position, parent) => this.spawn(prefab, position, parent),
                 destroy: (object = obj) => this.destroy(object),
                 get: <S>(behavior: string, object = obj) => this.get(behavior, object) as BehaviorSelf<Params, S> | null,
-                move: (x, y, z) => this.move(obj, x, y, z),
+                move: (x, y, z, step) => this.move(obj, x, y, z, step),
                 touching: () => [...(this.contacts.get(obj) ?? [])],
                 raycast: (origin, direction, options) => this.raycast(origin, direction, { ignore: obj, ...options }),
                 screenRay: (x, y) => this.screenRay(x, y),
@@ -225,7 +254,20 @@ export class Runtime {
                 grounded: () => this.grounded(obj),
                 loadScene: (scene) => this.loadScene(scene),
                 playSound: (sound, options) => this.sound.play(sound, options),
+                playMusic: (sound, options) => this.sound.playMusic(sound, options),
+                stopMusic: () => this.sound.stopMusic(),
                 sound: (object = obj) => this.soundOf(object),
+                body: (object = obj) => this.physics.handle(object),
+                tween: (target, to, seconds, options) => this.tween(obj, target as Record<string, number>, to, seconds, options),
+                after: (seconds, call) => this.timer(obj, seconds, call, false),
+                every: (seconds, call) => this.timer(obj, seconds, call, true),
+                ui: (object = obj) => uiOf(object),
+                setText: (text, object = obj) => {
+                    const element = uiOf(object);
+                    if (element?.text) element.text.text = String(text);
+                    setLabelText(object, String(text));
+                },
+                particles: (object = obj) => particlesOf(object),
                 // Read through the runtime: the object is given after the behaviors are attached
                 get globals() {
                     return runtime.globals;
@@ -279,11 +321,12 @@ export class Runtime {
         const f = marker.userData.collider as { shape: string; sizeX: number; sizeY: number; sizeZ: number; radius: number; height: number; solid: boolean };
         const { shape, solid } = f;
         const layer = layerOf((f as { layer?: unknown }).layer);
+        const dynamic = object.children.some((child) => child.userData.body);
         if (shape === "sphere" || shape === "capsule") {
             const scale = new THREE.Vector3().setFromMatrixScale(marker.matrixWorld);
             const center = new THREE.Vector3().setFromMatrixPosition(marker.matrixWorld);
             if (shape === "sphere") {
-                return { object, solid, layer, capsule: { bottom: center, top: center, radius: f.radius * Math.max(scale.x, scale.y, scale.z) } };
+                return { object, solid, layer, dynamic, capsule: { bottom: center, top: center, radius: f.radius * Math.max(scale.x, scale.y, scale.z) } };
             }
             // The line of the capsule ends where its round ends begin
             const radius = f.radius * Math.max(scale.x, scale.z);
@@ -292,11 +335,12 @@ export class Runtime {
                 object,
                 solid,
                 layer,
+                dynamic,
                 capsule: { bottom: center.clone().setY(center.y - half), top: center.clone().setY(center.y + half), radius },
             };
         }
         const half = new THREE.Vector3(f.sizeX, f.sizeY, f.sizeZ).multiplyScalar(0.5);
-        return { object, solid, layer, box: new THREE.Box3(half.clone().negate(), half).applyMatrix4(marker.matrixWorld) };
+        return { object, solid, layer, dynamic, box: new THREE.Box3(half.clone().negate(), half).applyMatrix4(marker.matrixWorld) };
     }
 
     // Every collider of the active entities
@@ -312,8 +356,9 @@ export class Runtime {
     }
 
     // What a behavior calls as self.move(): one axis at a time, so that an object pushed into a wall at an
-    // angle slides along it instead of stopping dead
-    move(object: THREE.Object3D, x: number, y: number, z: number) {
+    // angle slides along it instead of stopping dead. `step`: how high a ledge the object walks up onto
+    // instead of stopping at it (a stair, a curb), meters; 0 for none.
+    move(object: THREE.Object3D, x: number, y: number, z: number, step = 0) {
         const obstacles = this.obstacles(object);
         if (!obstacles) {
             object.position.x += x;
@@ -330,15 +375,20 @@ export class Runtime {
             for (let i = 0; i < steps; i++) {
                 object.position[axis] += delta / steps;
                 object.updateWorldMatrix(true, true);
-                if (obstacles(this.bodyOf(object)!)) {
+                // Sideways a body of the physics is not a wall: the object walks into it, and the physics
+                // pushes it away. From above it is: the object can stand on it.
+                const firm = axis === "y";
+                if (obstacles(this.bodyOf(object)!, firm)) {
                     // Back to before the step, then as near to the obstacle as halving the step gets
                     let part = delta / steps;
                     object.position[axis] -= part;
+                    // Unless it is low enough to step onto
+                    if (step > 0 && axis !== "y" && this.stepUp(object, axis, part, step, obstacles)) continue;
                     for (let n = 0; n < 6; n++) {
                         part /= 2;
                         object.position[axis] += part;
                         object.updateWorldMatrix(true, true);
-                        if (obstacles(this.bodyOf(object)!)) object.position[axis] -= part;
+                        if (obstacles(this.bodyOf(object)!, firm)) object.position[axis] -= part;
                     }
                     free = false;
                     break;
@@ -347,6 +397,43 @@ export class Runtime {
         }
         object.updateWorldMatrix(true, true);
         return free;
+    }
+
+    // An object that stands on something was stopped going `part` along `axis`: tries the same move
+    // `height` higher and, if the way is free there, comes down onto what was in the way. false, with the
+    // object left where it was, if it cannot.
+    private stepUp(object: THREE.Object3D, axis: "x" | "z", part: number, height: number, obstacles: (moved: Body, firm?: boolean) => boolean) {
+        const blocked = () => {
+            object.updateWorldMatrix(true, true);
+            return obstacles(this.bodyOf(object)!);
+        };
+        // Only from the ground: a jump does not climb walls
+        object.position.y -= GROUND_REACH;
+        const standing = blocked();
+        object.position.y += GROUND_REACH;
+        if (!standing) return false;
+
+        object.position.y += height;
+        object.position[axis] += part;
+        if (blocked()) {
+            object.position.y -= height;
+            object.position[axis] -= part;
+            object.updateWorldMatrix(true, true);
+            return false;
+        }
+        // Down onto the ledge: all the way if nothing is there, otherwise as near as halving gets
+        object.position.y -= height;
+        if (blocked()) {
+            object.position.y += height;
+            let drop = height;
+            for (let n = 0; n < 6; n++) {
+                drop /= 2;
+                object.position.y -= drop;
+                if (blocked()) object.position.y += drop;
+            }
+        }
+        object.updateWorldMatrix(true, true);
+        return true;
     }
 
     // For an object with a solid collider: a test that tells whether its collider, wherever it has got to, is
@@ -361,7 +448,8 @@ export class Runtime {
         );
         // What it is stuck in already does not hold it: otherwise it could never get out
         const stuck = new Set(others.filter((other) => overlaps(mine, other)));
-        return (moved: Body) => others.some((other) => !stuck.has(other) && overlaps(moved, other));
+        // `firm`: the bodies of the physics count too (see move())
+        return (moved: Body, firm = true) => others.some((other) => !stuck.has(other) && (firm || !other.dynamic) && overlaps(moved, other));
     }
 
     // What a behavior calls as self.fall(): gravity, one frame of it
@@ -399,9 +487,15 @@ export class Runtime {
 
     // Starts the Sound component whose marker object this is, from the beginning
     private playSource(marker: THREE.Object3D) {
-        const f = marker.userData.sound as { sound: string; volume: number; pitch: number; loop: boolean; spatial: boolean; range: number };
+        const f = marker.userData.sound as { sound: string; volume: number; pitch: number; loop: boolean; music: boolean; spatial: boolean; range: number };
         this.sources.get(marker)?.stop();
         const { volume, pitch, loop, range } = f;
+        if (f.music) {
+            // The music is not this entity's to stop: it goes on without it, and into the next scene
+            if (f.sound) this.sound.playMusic(f.sound, { volume, pitch });
+            this.sources.set(marker, null);
+            return;
+        }
         this.sources.set(marker, f.sound ? this.sound.play(f.sound, { volume, pitch, loop, range, at: f.spatial ? marker : undefined }) : null);
     }
 
@@ -409,12 +503,13 @@ export class Runtime {
     soundOf(object: THREE.Object3D): SoundSource | null {
         const marker = object.children.find((child) => child.userData.sound);
         if (!marker) return null;
-        const { sources } = this;
+        const { sources, sound } = this;
+        const f = marker.userData.sound as { sound: string; music: boolean };
         return {
             play: () => this.playSource(marker),
-            stop: () => sources.get(marker)?.stop(),
+            stop: () => (f.music ? sound.music === f.sound && sound.stopMusic() : sources.get(marker)?.stop()),
             get playing() {
-                return sources.get(marker)?.playing ?? false;
+                return f.music ? f.sound !== "" && sound.music === f.sound : sources.get(marker)?.playing ?? false;
             },
         };
     }
@@ -517,6 +612,91 @@ export class Runtime {
         }
     }
 
+    private run(owner: THREE.Object3D, advance: Process["advance"]): Running {
+        const process: Process = { owner, running: true, advance };
+        this.processes.push(process);
+        return {
+            stop: () => {
+                process.running = false;
+            },
+            get running() {
+                return process.running;
+            },
+        };
+    }
+
+    // What a behavior calls as self.tween()
+    tween(owner: THREE.Object3D, target: Record<string, number>, to: Record<string, number>, seconds: number, options: TweenOptions = {}) {
+        const ease = EASES[options.ease ?? "linear"] ?? EASES.linear;
+        const loop = options.loop ?? "none";
+        let wait = options.delay ?? 0;
+        let time = 0;
+        // Where it starts from is what the numbers are when it starts, after the delay
+        let from: Record<string, number> | null = null;
+        return this.run(owner, (dt) => {
+            if (wait > 0) {
+                wait -= dt;
+                if (wait > 0) return true;
+                dt = -wait;
+            }
+            from ??= Object.fromEntries(Object.keys(to).map((key) => [key, Number(target[key]) || 0]));
+            time += dt;
+            let t = seconds > 0 ? time / seconds : 1;
+            const over = t >= 1 && loop === "none";
+            if (loop === "repeat") t %= 1;
+            // There and back: 0..1, then 1..0
+            else if (loop === "yoyo") t = 1 - Math.abs((t % 2) - 1);
+            else t = Math.min(1, t);
+            const k = ease(t);
+            for (const key of Object.keys(to)) target[key] = from[key] + (to[key] - from[key]) * k;
+            if (over) options.done?.();
+            return !over;
+        });
+    }
+
+    // What a behavior calls as self.after() and self.every()
+    timer(owner: THREE.Object3D, seconds: number, call: () => void, repeat: boolean) {
+        let left = seconds;
+        return this.run(owner, (dt) => {
+            left -= dt;
+            if (left > 0) return true;
+            call();
+            // Never faster than once a frame
+            left = Math.max(left + seconds, 0);
+            return repeat;
+        });
+    }
+
+    // Moves the tweens and timers on; a behavior on an inactive entity waits, and so do they
+    private advance(dt: number) {
+        // A plain loop: a timer may start another one
+        for (let i = 0; i < this.processes.length; i++) {
+            const process = this.processes[i];
+            if (!process.running || !this.isActive(process.owner)) continue;
+            try {
+                process.running = process.advance(dt) && process.running;
+            } catch (e) {
+                process.running = false;
+                console.error(`A tween or a timer of "${process.owner.name}" stopped:`, e);
+                this.onError(`A tween or a timer of "${process.owner.name}" stopped: ${e instanceof Error ? e.message : String(e)}`);
+            }
+        }
+        this.processes = this.processes.filter((process) => process.running);
+    }
+
+    // The Button of the object was clicked: its behaviors are told
+    click(object: THREE.Object3D) {
+        for (const instance of [...this.instances]) {
+            if (instance.self.object !== object || !instance.started || instance.failed) continue;
+            try {
+                instance.def.click?.(instance.self);
+            } catch (e) {
+                instance.failed = true;
+                this.report(instance, e);
+            }
+        }
+    }
+
     // An inactive entity is hidden with its children, and their behaviors wait until it is shown
     private isActive(obj: THREE.Object3D) {
         for (let o: THREE.Object3D | null = obj; o; o = o.parent) {
@@ -577,6 +757,7 @@ export class Runtime {
             object.traverse((obj) => inside.add(obj));
             const gone = this.instances.filter((i) => inside.has(i.self.object));
             this.instances = this.instances.filter((i) => !inside.has(i.self.object));
+            this.processes = this.processes.filter((process) => !inside.has(process.owner));
             gone.forEach((instance) => this.end(instance));
 
             object.removeFromParent();
@@ -598,9 +779,13 @@ export class Runtime {
             instance.self.time = this.time;
             this.step(instance, dt);
         }
+        this.advance(dt);
+        // After the behaviors: what they have moved pushes the bodies in this same frame
+        this.physics.step(this.root, dt, (object) => this.isActive(object));
         this.collide();
         this.sweep();
         this.sounds();
+        updateParticles(this.root, dt, (object) => this.isActive(object));
     }
 
     // The scene stops: every behavior gets its destroy()
@@ -608,6 +793,7 @@ export class Runtime {
         this.instances.forEach((instance) => this.end(instance));
         this.instances = [];
         this.doomed.clear();
+        this.processes = [];
         this.contacts.clear();
         this.sources.forEach((playing) => playing?.stop());
         this.sources.clear();

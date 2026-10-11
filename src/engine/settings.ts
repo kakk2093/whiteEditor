@@ -2,6 +2,7 @@
 //   {
 //     "startScene": "menu",
 //     "aspect": "16:9",
+//     "gravity": 20,
 //     "tags": ["player", "enemy"],
 //     "layers": ["Player", "Enemy", "Pickup"],
 //     "noCollision": [["Player", "Pickup"], ["Enemy", "Enemy"]]
@@ -21,6 +22,9 @@ export interface ProjectSettings {
     startScene: string;
     // The shape of the picture of the game, one of ASPECTS; the rest of the window stays black
     aspect: string;
+    // How fast the bodies of the physics gain speed downwards, meters per second squared. 20 by default, like
+    // self.fall(): games feel better heavier than the real 9.8.
+    gravity: number;
     // The tags of the project. With a list, a tag that is not in it is a mistake (check tells); an empty
     // list lets any tag be.
     tags: string[];
@@ -30,7 +34,9 @@ export interface ProjectSettings {
     noCollision: [string, string][];
 }
 
-export const defaultSettings: ProjectSettings = { startScene: "", aspect: "free", tags: [], layers: [], noCollision: [] };
+export const DEFAULT_GRAVITY = 20;
+
+export const defaultSettings: ProjectSettings = { startScene: "", aspect: "free", gravity: DEFAULT_GRAVITY, tags: [], layers: [], noCollision: [] };
 
 const names = (value: unknown) => (Array.isArray(value) ? [...new Set(value.filter((name): name is string => typeof name === "string" && name !== ""))] : []);
 
@@ -41,6 +47,7 @@ export function parseSettings(data: unknown): ProjectSettings {
     return {
         startScene: typeof raw.startScene === "string" ? raw.startScene : "",
         aspect: typeof raw.aspect === "string" && (ASPECTS as readonly string[]).includes(raw.aspect) ? raw.aspect : "free",
+        gravity: typeof raw.gravity === "number" && !Number.isNaN(raw.gravity) ? raw.gravity : DEFAULT_GRAVITY,
         tags: names(raw.tags),
         layers: names(raw.layers).filter((name) => name !== DEFAULT_LAYER),
         noCollision: pairs.filter(
@@ -54,6 +61,7 @@ export function serializeSettings(settings: ProjectSettings) {
     return {
         ...(settings.startScene ? { startScene: settings.startScene } : {}),
         ...(settings.aspect !== "free" ? { aspect: settings.aspect } : {}),
+        ...(settings.gravity !== DEFAULT_GRAVITY ? { gravity: settings.gravity } : {}),
         ...(settings.tags.length > 0 ? { tags: settings.tags } : {}),
         ...(settings.layers.length > 0 ? { layers: settings.layers } : {}),
         ...(settings.noCollision.length > 0 ? { noCollision: settings.noCollision } : {}),
@@ -101,7 +109,7 @@ export function validateSettings(data: unknown, scenes?: string[]): string[] {
     const problems: string[] = [];
     if (typeof data !== "object" || data === null || Array.isArray(data)) return ["must be an object: { \"layers\": [...], \"noCollision\": [...] }"];
     const raw = data as Record<string, unknown>;
-    const known = ["startScene", "aspect", "tags", "layers", "noCollision"];
+    const known = ["startScene", "aspect", "gravity", "tags", "layers", "noCollision"];
     for (const key of Object.keys(raw)) {
         if (!known.includes(key)) problems.push(`unknown field "${key}" (known: ${known.join(", ")})`);
     }
@@ -114,6 +122,9 @@ export function validateSettings(data: unknown, scenes?: string[]): string[] {
     }
     if (raw.aspect !== undefined && !(ASPECTS as readonly unknown[]).includes(raw.aspect)) {
         problems.push(`aspect: must be one of: ${ASPECTS.join(", ")}`);
+    }
+    if (raw.gravity !== undefined && (typeof raw.gravity !== "number" || Number.isNaN(raw.gravity))) {
+        problems.push("gravity: must be a number, e.g. 20");
     }
     const tags = raw.tags ?? [];
     if (!Array.isArray(tags) || tags.some((name) => typeof name !== "string" || name === "")) {

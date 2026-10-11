@@ -5,7 +5,9 @@ import { resolveLook } from "./look";
 import { RenderPipeline } from "./pipeline";
 import type { Registry } from "./Registry";
 import { fitAspect } from "./settings";
+import { SoundPlayer } from "./sound";
 import type { SceneData, Vec3 } from "./types";
+import { uiOf } from "./ui";
 
 // The renderer of the editor viewport and of the built game: one place for its settings, so both look the same.
 // `keepPicture` is for reading the canvas back as an image after it was drawn.
@@ -13,6 +15,28 @@ export function createRenderer(keepPicture = false) {
     const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: keepPicture });
     renderer.shadowMap.enabled = true;
     return renderer;
+}
+
+// Something the player does at a moment of a scripted run (see StillOptions.inputs)
+export interface PlayEvent {
+    // Seconds from the start of the scene
+    at: number;
+    // A key ("KeyD", "Space", "Pad0") or a mouse button ("Mouse0") that goes down or up
+    key?: string;
+    down?: boolean;
+    // Where the mouse goes: a point of the screen (-1..1, as Input gives it), or the name of an object: the
+    // middle of its interface element, or the place of the object on the screen
+    mouse?: [number, number] | string;
+}
+
+// One entity of the scene after a run, for checking what the game has come to
+export interface EntityState {
+    name: string;
+    // In the world, rounded to millimeters
+    position: Vec3;
+    active: boolean;
+    // What its Text says, if it has one
+    text?: string;
 }
 
 export interface StillOptions {
@@ -25,6 +49,10 @@ export interface StillOptions {
     camera?: { position: Vec3; target: Vec3; fov?: number };
     // The look to draw with instead of the one of the scene; "" for none
     look?: string;
+    // What the player does while the scene runs (within `time`): keys, the mouse, clicks
+    inputs?: PlayEvent[];
+    // true: the result tells where every entity is after the run and what the texts say
+    state?: boolean;
 }
 
 export interface Still {
@@ -37,6 +65,8 @@ export interface Still {
     camera: "scene" | "given" | "auto";
     // What went wrong on the way without stopping it: behaviors that threw, shaders that did not compile
     problems: string[];
+    // With `state` in the options: the entities after the run, and what the behaviors keep in self.globals
+    state?: { entities: EntityState[]; globals: Record<string, unknown> };
 }
 
 // One picture of a scene, drawn exactly as the game draws it: the same Game, look and pipeline as runGame().
@@ -64,10 +94,70 @@ export function renderStill(registry: Registry, data: SceneData, options: StillO
     if (look && !registry.getLookData(look)) problems.push(`Look "${look}" does not exist`);
     pipeline.setLook(look ? resolveLook(registry, look) : null, registry);
 
+    // The player of a scripted run: what is due by the time `t` is fed to the input of the game
+    game.resize(width, height);
+    const events = [...(options.inputs ?? [])].sort((a, b) => a.at - b.at);
+    const act = (t: number) => {
+        while (events.length > 0 && events[0].at <= t + 1e-6) {
+            const event = events.shift()!;
+            if (typeof event.mouse === "string") {
+                const object = game.root.getObjectByName(event.mouse);
+                game.ui.layout(width / height);
+                const place = object && game.ui.placeOf(object);
+                if (!object) {
+                    problems.push(`Input: there is no object "${event.mouse}" at ${event.at} s`);
+                } else if (place) {
+                    game.input.setMouse(((place.left + place.width / 2) / (place.units * (width / height))) * 2 - 1, 1 - ((place.top + place.height / 2) / place.units) * 2);
+                } else if (game.camera) {
+                    game.camera.updateMatrixWorld();
+                    const point = object.getWorldPosition(new THREE.Vector3()).project(game.camera);
+                    game.input.setMouse(point.x, point.y);
+                }
+            } else if (event.mouse) {
+                game.input.setMouse(event.mouse[0], event.mouse[1]);
+            }
+            const button = /^Mouse(\d)$/.exec(event.key ?? "");
+            if (button) game.input.setMouseButton(Number(button[1]), event.down ?? true);
+            else if (event.key) game.input.setKey(event.key, event.down ?? true);
+        }
+    };
+
     // The same steps a game running at 60 frames a second would make
     game.start();
     const dt = 1 / 60;
-    for (let t = dt; t <= time + 1e-6; t += dt) game.update(dt);
+    for (let t = dt; t <= time + 1e-6; t += dt) {
+        act(t - dt);
+        game.update(dt);
+    }
+    // What falls on the very end of the run (a key let go then) is not too late
+    act(time);
+    for (const event of events) problems.push(`Input: ${event.key ?? "mouse"} at ${event.at} s is after the end of the run (${time} s)`);
+
+    let state: Still["state"];
+    if (options.state) {
+        const entities: EntityState[] = [];
+        const visit = (object: THREE.Object3D, active: boolean) => {
+            const shown = active && object.visible;
+            if (object.userData.entityId !== undefined || object.userData.innerId !== undefined) {
+                const text = uiOf(object)?.text?.text;
+                const position = object.getWorldPosition(new THREE.Vector3()).toArray().map((n) => Math.round(n * 1000) / 1000) as Vec3;
+                entities.push({ name: object.name, position, active: shown, ...(text !== undefined ? { text } : {}) });
+            }
+            for (const child of object.children) {
+                if (child.userData.component === undefined) visit(child, shown);
+            }
+        };
+        game.root.updateMatrixWorld(true);
+        visit(game.root, true);
+        // Only what can be written down
+        let globals: Record<string, unknown> = {};
+        try {
+            globals = JSON.parse(JSON.stringify(game.runtime.globals));
+        } catch {
+            problems.push("State: self.globals cannot be written as JSON");
+        }
+        state = { entities, globals };
+    }
 
     let camera: SceneCamera;
     let kind: Still["camera"];
@@ -78,6 +168,7 @@ export function renderStill(registry: Registry, data: SceneData, options: StillO
         camera.lookAt(new THREE.Vector3(...options.camera.target));
     } else if (game.camera) {
         kind = "scene";
+        // A behavior may have switched to another camera
         game.resize(width, height);
         camera = game.camera;
     } else {
@@ -92,13 +183,13 @@ export function renderStill(registry: Registry, data: SceneData, options: StillO
     }
     camera.updateMatrixWorld();
 
-    pipeline.render(game.scene, camera, time);
+    pipeline.render(game.scene, camera, time, game.ui);
     const png = renderer.domElement.toDataURL("image/png");
 
     game.dispose();
     pipeline.dispose();
     renderer.dispose();
-    return { png, width, height, camera: kind, problems };
+    return { png, width, height, camera: kind, problems, state };
 }
 
 // Shows a line of text over the game: a script error, or why there is nothing to see
@@ -137,6 +228,8 @@ export function runGame(container: HTMLElement, registry: Registry, scenes: Scen
     const pipeline = new RenderPipeline(renderer);
     // What the behaviors keep from scene to scene
     const globals: Record<string, unknown> = {};
+    // One for all the scenes: the music goes on from one to the next
+    const sound = new SoundPlayer(registry);
     let game: Game;
     let detachInput = () => {};
 
@@ -153,7 +246,7 @@ export function runGame(container: HTMLElement, registry: Registry, scenes: Scen
         const data = all[name];
         detachInput();
         game?.dispose();
-        game = new Game(registry, data, globals);
+        game = new Game(registry, data, globals, sound);
         const look = data.environment?.look;
         pipeline.setLook(look ? resolveLook(registry, look) : null, registry);
         game.runtime.onError = (message) => showMessage(container, message);
@@ -186,7 +279,7 @@ export function runGame(container: HTMLElement, registry: Registry, scenes: Scen
         }
         // A script may have switched the camera on, off or replaced it
         game.resize(canvas.clientWidth, canvas.clientHeight);
-        if (game.camera) pipeline.render(game.scene, game.camera, dt);
+        if (game.camera) pipeline.render(game.scene, game.camera, dt, game.ui);
     };
     animate();
 
@@ -199,6 +292,7 @@ export function runGame(container: HTMLElement, registry: Registry, scenes: Scen
             observer.disconnect();
             detachInput();
             game.dispose();
+            sound.dispose();
             pipeline.dispose();
             renderer.dispose();
             canvas.remove();
