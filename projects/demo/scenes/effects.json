@@ -1,0 +1,58 @@
+{
+  "version": 3,
+  "environment": { "sky": true, "ambientIntensity": 0.7, "look": "Glow" },
+  "entities": [
+    { "name": "Camera", "position": [0, 2.4, 8], "rotation": [-12, 0, 0], "components": [{ "type": "camera" }] },
+    {
+      "name": "Sun",
+      "position": [3, 6, 4],
+      "rotation": [-50, 30, 0],
+      "components": [{ "type": "light", "kind": "directional", "castShadow": true }]
+    },
+    { "name": "Floor", "scale": [14, 1, 14], "components": [{ "type": "mesh", "shape": "plane", "material": "Tiles" }] },
+    {
+      "name": "Lamp",
+      "position": [-3, 0.6, 0],
+      "components": [{ "type": "mesh", "shape": "sphere", "material": "Glowing" }]
+    },
+    {
+      "name": "Fire",
+      "position": [0, 0.1, 0],
+      "components": [
+        { "type": "particles", "rate": 60, "lifetime": 1.2, "speed": 1.6, "spread": 18, "radius": 0.15, "gravity": -1.5, "size": 0.22, "sizeEnd": 0.04, "additive": true, "shape": "soft" }
+      ]
+    },
+    {
+      "name": "Fountain",
+      "position": [3, 0.1, 0],
+      "components": [
+        { "type": "particles", "playing": false, "max": 300, "lifetime": 1.4, "speed": 5, "spread": 30, "gravity": 9, "size": 0.12, "sizeEnd": 0.12, "color": "#7fd4ff", "colorEnd": "#ffffff" },
+        { "type": "label", "text": "x0", "size": 0.35 },
+        { "type": "script", "script": "burst", "params": { "seconds": 0.5 } }
+      ]
+    },
+    {
+      "name": "Tree",
+      "position": [-1.5, 0.75, -2],
+      "components": [{ "type": "sprite", "texture": "tiles.png", "color": "#7ad36b", "width": 1.5, "height": 1.5 }]
+    },
+    {
+      "name": "Sign",
+      "position": [1.5, 1.6, -2],
+      "components": [{ "type": "label", "text": "Text in the world\nstays readable", "size": 0.3 }]
+    },
+    {
+      "name": "Heart",
+      "position": [1.5, 0.5, -2],
+      "components": [
+        { "type": "mesh", "material": "Bricks" },
+        { "type": "script", "script": "pulse" }
+      ]
+    },
+    {
+      "name": "Cave",
+      "position": [-20, 2, 0],
+      "components": [{ "type": "zone", "sizeX": 6, "sizeY": 4, "sizeZ": 6, "fogColor": "#101820", "background": "#101820", "fogFar": 12, "ambientIntensity": 0.3 }]
+    }
+  ]
+}

@@ -16,6 +16,13 @@ export interface MaterialData {
     tilingY: number;
     // nearest keeps the pixels of the image sharp (pixel art), linear blends them
     filter: string;
+    // An image that tells which way each point of the surface faces (the usual bluish normal map): relief
+    // under the light without more geometry. Tiled and filtered like the texture.
+    normalMap: string;
+    // How deep that relief looks; below zero turns it inside out
+    normalScale: number;
+    // An image of where the surface is rough (light) and where it shines (dark); multiplied by `roughness`
+    roughnessMap: string;
 }
 
 export const materialFields: Record<keyof MaterialData, ParamDef> = {
@@ -29,6 +36,9 @@ export const materialFields: Record<keyof MaterialData, ParamDef> = {
     tilingX: { type: "number", default: 1, min: 0.01, step: 0.5 },
     tilingY: { type: "number", default: 1, min: 0.01, step: 0.5 },
     filter: { type: "select", default: "nearest", options: ["nearest", "linear"] },
+    normalMap: { type: "asset", kind: "texture", default: "" },
+    normalScale: { type: "number", default: 1, step: 0.1 },
+    roughnessMap: { type: "asset", kind: "texture", default: "" },
 };
 
 export const defaultMaterialData = Object.fromEntries(
@@ -53,27 +63,34 @@ function configureMap(map: THREE.Texture, m: MaterialData) {
 export function applyMaterialData(material: THREE.MeshStandardMaterial, data: Partial<MaterialData>, images?: ImageSource) {
     const m = { ...defaultMaterialData, ...data };
 
-    // The image arrives later: until then, and if it fails, the material has its color alone
+    // An image arrives later: until then, and if it fails, the material is as it is without it
     material.userData.mapSettings = m;
-    if (material.userData.texture !== m.texture) {
-        material.userData.texture = m.texture;
-        material.map?.dispose();
-        material.map = null;
-        const setMap = (image: HTMLImageElement) => {
-            // The material may have got another texture, or none, in the meantime
-            if (material.userData.texture !== m.texture) return;
-            const map = new THREE.Texture(image);
-            map.colorSpace = THREE.SRGBColorSpace;
-            configureMap(map, material.userData.mapSettings as MaterialData);
-            material.map = map;
-            material.needsUpdate = true;
-        };
-        const image = images?.(m.texture);
-        if (image instanceof Promise) image.then(setMap).catch(() => console.warn(`Texture "${m.texture}" could not be loaded`));
-        else if (image) setMap(image);
-    } else if (material.map) {
-        configureMap(material.map, m);
+    // The images of the material: the field that names the file, where three.js keeps the map, and whether
+    // it is a picture of colors (the others are pictures of numbers)
+    for (const [field, slot, colors] of [["texture", "map", true], ["normalMap", "normalMap", false], ["roughnessMap", "roughnessMap", false]] as const) {
+        const name = m[field];
+        const key = `image:${slot}`;
+        if (material.userData[key] !== name) {
+            material.userData[key] = name;
+            material[slot]?.dispose();
+            material[slot] = null;
+            const setMap = (image: HTMLImageElement) => {
+                // The material may have got another image, or none, in the meantime
+                if (material.userData[key] !== name) return;
+                const map = new THREE.Texture(image);
+                if (colors) map.colorSpace = THREE.SRGBColorSpace;
+                configureMap(map, material.userData.mapSettings as MaterialData);
+                material[slot] = map;
+                material.needsUpdate = true;
+            };
+            const image = images?.(name);
+            if (image instanceof Promise) image.then(setMap).catch(() => console.warn(`Texture "${name}" could not be loaded`));
+            else if (image) setMap(image);
+        } else if (material[slot]) {
+            configureMap(material[slot], m);
+        }
     }
+    material.normalScale.set(m.normalScale, m.normalScale);
 
     material.color.set(m.color);
     material.roughness = m.roughness;

@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { disposeObject } from "./components";
+import type { EnvironmentData } from "./environment";
 import { Input } from "./input";
 import { createEntityObject, createPrefabInstance } from "./loadScene";
 import { paramDefaults } from "./Registry";
@@ -178,6 +179,12 @@ export class Runtime {
     // What the behaviors read the keyboard and the mouse from
     readonly input: Input;
 
+    // The environment of the scene, for self.environment; whoever runs the scene keeps it up to date and
+    // takes the changes of self.setEnvironment()
+    environment: EnvironmentData | null = null;
+
+    onEnvironment: (change: Partial<EnvironmentData>) => void = () => {};
+
     // The tweens and timers that are going on
     private processes: Process[] = [];
 
@@ -268,6 +275,10 @@ export class Runtime {
                     setLabelText(object, String(text));
                 },
                 particles: (object = obj) => particlesOf(object),
+                setEnvironment: (change) => this.onEnvironment(change),
+                get environment() {
+                    return runtime.environment;
+                },
                 // Read through the runtime: the object is given after the behaviors are attached
                 get globals() {
                     return runtime.globals;

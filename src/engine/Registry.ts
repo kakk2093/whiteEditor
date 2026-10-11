@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import type { EnvironmentData } from "./environment";
 import type { Input } from "./input";
 import { builtinEffects, isEffectDef } from "./look";
 import type { EffectDef, LookData } from "./look";
@@ -199,6 +200,11 @@ export interface BehaviorSelf<P = Params, S = unknown> {
     after: (seconds: number, call: () => void) => Running;
     // Calls the function every `seconds`, until it is stopped or the object of the behavior goes
     every: (seconds: number, call: () => void) => Running;
+    // The environment of the scene (background, sky, ambient light, fog, look) as it is now, and a way to
+    // change it while the game runs: self.setEnvironment({ ambientIntensity: 0.2, fogColor: "#101830" }).
+    // What is not named stays. A zone the camera is in still has its say over what it changes.
+    environment: EnvironmentData | null;
+    setEnvironment: (change: Partial<EnvironmentData>) => void;
     // The Particles component of this object, or of the one given: emit(20) throws out a burst,
     // `playing` switches its steady stream. null if the object has no Particles component.
     particles: (object?: THREE.Object3D) => ParticleHandle | null;

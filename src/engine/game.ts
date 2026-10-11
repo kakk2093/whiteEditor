@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { disposeObject, rebuildComponentObject } from "./components";
-import { applyEnvironment } from "./environment";
+import { applyEnvironment, blendEnvironment, defaultEnvironment, withZone, zoneAt } from "./environment";
 import { Input } from "./input";
 import type { EnvironmentData } from "./environment";
 import { applyTransform, loadScene } from "./loadScene";
@@ -69,8 +69,19 @@ export class Game {
     // What the sounds of the scene are played with; they are heard from where the camera is
     readonly sound: SoundPlayer;
 
+    // The environment of the scene as its file and the behaviors (self.setEnvironment) have it
+    private environment: EnvironmentData;
+
+    // ... and as it is shown now: changed by the zone the camera is in, on its way there
+    private shown: EnvironmentData;
+
+    private shownKey = "";
+
     // The interface of the game: whoever draws the scene gives it to the pipeline (pipeline.render(..., game.ui))
     readonly ui: UiLayer;
+
+    // The blend time of the zone the camera was in last: it leaves that zone as slowly as it came in
+    private leaving = 0;
 
     // Width / height of the picture, as of the last resize(): the buttons are found by it
     private aspect = 16 / 9;
@@ -91,7 +102,9 @@ export class Game {
     // player of the scene before, the music goes on.
     constructor(registry: Registry, data: SceneData, globals: Record<string, unknown> = {}, sound?: SoundPlayer) {
         this.registry = registry;
-        applyEnvironment(this.scene, data.environment);
+        this.environment = { ...defaultEnvironment, ...data.environment };
+        this.shown = this.environment;
+        applyEnvironment(this.scene, this.environment);
         this.root = loadScene(registry, data);
         this.scene.add(this.root);
         this.root.traverse((obj) => {
@@ -105,6 +118,8 @@ export class Game {
         this.runtime = new Runtime(registry, this.root, this.input, this.sound);
         this.runtime.camera = this.camera;
         this.runtime.globals = globals;
+        this.runtime.environment = this.environment;
+        this.runtime.onEnvironment = (change) => this.setEnvironment(change);
     }
 
     start() {
@@ -125,6 +140,31 @@ export class Game {
         this.camera = findCamera(this.root);
         this.runtime.camera = this.camera;
         this.hear();
+        this.look(dt);
+    }
+
+    // The name of the look the scene is to be drawn with now: of the zone the camera is in, if that zone
+    // names one, otherwise of the scene. Whoever draws the scene gives it to the pipeline when it changes.
+    get lookName() {
+        return this.shown.look;
+    }
+
+    // The environment follows the camera into the zones and out of them
+    private look(dt: number) {
+        let zone = null;
+        if (this.camera) {
+            this.root.updateMatrixWorld();
+            zone = zoneAt(this.root, this.camera.getWorldPosition(new THREE.Vector3()));
+        }
+        const target = withZone(this.environment, zone);
+        // Into a zone at its speed; out of it, and after a change by a behavior, at once
+        const blend = zone ? zone.blend : this.leaving;
+        this.leaving = zone ? zone.blend : this.leaving;
+        this.shown = blendEnvironment(this.shown, target, blend > 0 ? Math.min(1, (dt * 3) / blend) : 1);
+        const key = JSON.stringify(this.shown);
+        if (key === this.shownKey) return;
+        this.shownKey = key;
+        applyEnvironment(this.scene, this.shown);
     }
 
     // The sounds are heard by the entity with a Sound Listener, by the camera if there is none
@@ -175,8 +215,12 @@ export class Game {
         this.runtime.camera = this.camera;
     }
 
+    // Changes the environment of the scene: the editor (an edit during Play) and the behaviors
+    // (self.setEnvironment) both come here
     setEnvironment(data: Partial<EnvironmentData>) {
-        applyEnvironment(this.scene, data);
+        this.environment = { ...this.environment, ...data };
+        this.runtime.environment = this.environment;
+        this.look(0);
     }
 
     dispose() {

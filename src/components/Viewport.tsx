@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
-import { anchorPoint, aspectRatio, createRenderer, RenderPipeline, resolveLook, setCameraAspect, UI_HANDLE, UI_HANDLES, UiLayer, updateParticles } from "../engine";
+import { anchorPoint, applyEnvironment, aspectRatio, createRenderer, withZone, zoneAt, RenderPipeline, resolveLook, setCameraAspect, UI_HANDLE, UI_HANDLES, UiLayer, updateParticles } from "../engine";
 import type { Input } from "../engine";
 import { dropAsset, getDraggedAsset } from "../editor/core/dnd";
 import { ColliderHandles } from "./colliderHandles";
@@ -481,8 +481,14 @@ export default function Viewport() {
         // =====================
         // The viewport draws through the look of the scene, with the same code as the game
         const pipeline = new RenderPipeline(ctx.renderer);
+        // The look that is shown, and the zone the editor camera is in (as a string of its fields): the
+        // viewport shows the scene the way a camera at this place would see it in the game
+        let shownLook = "";
+        let shownZone = "";
         const applyLook = () => {
-            const name = sceneStore.lookEnabled ? sceneStore.environment.look : "";
+            const zone = !sceneStore.playing && ctx.camera ? zoneAt(sceneStore.root, ctx.camera.position) : null;
+            shownLook = sceneStore.gameLook ?? (zone?.look || sceneStore.environment.look);
+            const name = sceneStore.lookEnabled ? shownLook : "";
             pipeline.setLook(name ? resolveLook(sceneStore.registry, name) : null, sceneStore.registry);
         };
         applyLook();
@@ -525,6 +531,8 @@ export default function Viewport() {
             ctx.transform?.setScaleSnap(sceneStore.snap ? 0.25 : null);
             updateBoxes();
             applyLook();
+            // The store may have put the environment of the scene back: the zone is looked at again
+            shownZone = "?";
 
             // Game view: the keyboard and the mouse go to the behaviors of the scene
             if (sceneStore.gameInput !== gameInput) {
@@ -579,6 +587,20 @@ export default function Viewport() {
             }
 
             if (ctx.controls) ctx.controls.update();
+            if (sceneStore.playing) {
+                // A zone the camera of the game has entered may bring its own look
+                if (sceneStore.gameLook !== shownLook) applyLook();
+            } else if (ctx.camera) {
+                // While the scene is edited the editor camera is what walks into the zones
+                sceneStore.root.updateMatrixWorld();
+                const zone = zoneAt(sceneStore.root, ctx.camera.position);
+                const key = zone ? JSON.stringify(zone) : "";
+                if (key !== shownZone) {
+                    shownZone = key;
+                    applyEnvironment(sceneStore.scene, withZone(sceneStore.environment, zone));
+                    applyLook();
+                }
+            }
             handles.frame();
             // The boxes follow what is being dragged
             for (const box of boxes.children as THREE.BoxHelper[]) box.update();

@@ -174,6 +174,29 @@ export const componentDefs: Record<string, ComponentDef> = {
             return marker;
         },
     },
+    // A box of the world with an environment of its own (see environment.ts): while the camera is inside
+    // it, the scene has the fog, the light and the look written here. Under water, a cave, a room.
+    zone: {
+        label: "Zone",
+        fields: {
+            // The box, in the units of the entity, around its middle; it turns and grows with the entity
+            sizeX: { type: "number", default: 4, min: 0.01, step: 0.5 },
+            sizeY: { type: "number", default: 3, min: 0.01, step: 0.5 },
+            sizeZ: { type: "number", default: 4, min: 0.01, step: 0.5 },
+            // Seconds the colors and the numbers take to change when the camera comes in or goes out
+            blend: { type: "number", default: 0.5, min: 0, step: 0.1 },
+            background: { type: "color", default: "#0b4a5c" },
+            ambientColor: { type: "color", default: "#ffffff" },
+            ambientIntensity: { type: "number", default: 1, min: 0, step: 0.1 },
+            fog: { type: "boolean", default: true },
+            fogColor: { type: "color", default: "#0b4a5c" },
+            fogNear: { type: "number", default: 1, min: 0, step: 1 },
+            fogFar: { type: "number", default: 20, min: 0, step: 1 },
+            // The look inside the zone; none keeps the look of the scene
+            look: { type: "asset", kind: "look", default: "" },
+        },
+        create: (f) => marker("zone", f),
+    },
     // An emitter of particles (see particles.ts): sparks, smoke, dust. They fly off along the "up" of the
     // entity (its local Y) and stay in the world when it moves on.
     particles: {

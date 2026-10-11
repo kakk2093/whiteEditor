@@ -1,0 +1,5 @@
+{
+  "effects": [
+    { "effect": "glow", "threshold": 0.9, "strength": 1.2, "radius": 14 }
+  ]
+}

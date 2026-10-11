@@ -35,6 +35,8 @@ export interface EntityState {
     // In the world, rounded to millimeters
     position: Vec3;
     active: boolean;
+    // Its size in the world, if it is not 1, 1, 1
+    scale?: Vec3;
     // What its Text says, if it has one
     text?: string;
 }
@@ -90,9 +92,6 @@ export function renderStill(registry: Registry, data: SceneData, options: StillO
     game.sound.enabled = false;
     game.runtime.onError = (message) => problems.push(message);
     const pipeline = new RenderPipeline(renderer);
-    const look = options.look ?? data.environment?.look;
-    if (look && !registry.getLookData(look)) problems.push(`Look "${look}" does not exist`);
-    pipeline.setLook(look ? resolveLook(registry, look) : null, registry);
 
     // The player of a scripted run: what is due by the time `t` is fed to the input of the game
     game.resize(width, height);
@@ -141,7 +140,9 @@ export function renderStill(registry: Registry, data: SceneData, options: StillO
             if (object.userData.entityId !== undefined || object.userData.innerId !== undefined) {
                 const text = uiOf(object)?.text?.text;
                 const position = object.getWorldPosition(new THREE.Vector3()).toArray().map((n) => Math.round(n * 1000) / 1000) as Vec3;
-                entities.push({ name: object.name, position, active: shown, ...(text !== undefined ? { text } : {}) });
+                const scale = object.getWorldScale(new THREE.Vector3()).toArray().map((n) => Math.round(n * 1000) / 1000) as Vec3;
+                const scaled = scale.some((n) => n !== 1);
+                entities.push({ name: object.name, position, active: shown, ...(scaled ? { scale } : {}), ...(text !== undefined ? { text } : {}) });
             }
             for (const child of object.children) {
                 if (child.userData.component === undefined) visit(child, shown);
@@ -158,6 +159,11 @@ export function renderStill(registry: Registry, data: SceneData, options: StillO
         }
         state = { entities, globals };
     }
+
+    // The look after the run: the camera may stand in a zone that has its own
+    const look = options.look ?? game.lookName;
+    if (look && !registry.getLookData(look)) problems.push(`Look "${look}" does not exist`);
+    pipeline.setLook(look ? resolveLook(registry, look) : null, registry);
 
     let camera: SceneCamera;
     let kind: Still["camera"];
@@ -231,6 +237,8 @@ export function runGame(container: HTMLElement, registry: Registry, scenes: Scen
     // One for all the scenes: the music goes on from one to the next
     const sound = new SoundPlayer(registry);
     let game: Game;
+    // The look the pipeline has now; a zone the camera enters may bring another
+    let shownLook = "";
     let detachInput = () => {};
 
     const resize = () => {
@@ -247,8 +255,8 @@ export function runGame(container: HTMLElement, registry: Registry, scenes: Scen
         detachInput();
         game?.dispose();
         game = new Game(registry, data, globals, sound);
-        const look = data.environment?.look;
-        pipeline.setLook(look ? resolveLook(registry, look) : null, registry);
+        shownLook = game.lookName;
+        pipeline.setLook(shownLook ? resolveLook(registry, shownLook) : null, registry);
         game.runtime.onError = (message) => showMessage(container, message);
         detachInput = game.input.attach(canvas);
         showMessage(container, game.camera ? "" : `The scene "${name}" has no active object with a Camera component.`);
@@ -276,6 +284,10 @@ export function runGame(container: HTMLElement, registry: Registry, scenes: Scen
             if (all[next]) enter(next);
             else showMessage(container, `loadScene: there is no scene "${next}" in this game.`);
             game.runtime.requestedScene = null;
+        }
+        if (game.lookName !== shownLook) {
+            shownLook = game.lookName;
+            pipeline.setLook(shownLook ? resolveLook(registry, shownLook) : null, registry);
         }
         // A script may have switched the camera on, off or replaced it
         game.resize(canvas.clientWidth, canvas.clientHeight);

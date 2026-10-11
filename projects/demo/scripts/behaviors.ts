@@ -183,3 +183,72 @@ export const walker = defineBehavior({
         self.fall(dt);
     },
 });
+
+// Grows and shrinks its object for ever: a tween that goes there and back (self.tween with loop "yoyo")
+export const pulse = defineBehavior({
+    name: "pulse",
+    label: "Pulse",
+    params: {
+        // How many times bigger it gets
+        scale: { type: "number", default: 1.4, min: 0.1, step: 0.1 },
+        // Seconds one way
+        seconds: { type: "number", default: 0.6, min: 0.05, step: 0.05 },
+    },
+    start: (self) => {
+        const { x, y, z } = self.object.scale;
+        const k = self.params.scale;
+        self.tween(self.object.scale, { x: x * k, y: y * k, z: z * k }, self.params.seconds, { ease: "inOut", loop: "yoyo" });
+    },
+});
+
+// Every few seconds throws out a burst of its Particles and counts them on its Label (self.every)
+export const burst = defineBehavior({
+    name: "burst",
+    label: "Burst",
+    params: {
+        seconds: { type: "number", default: 1, min: 0.1, step: 0.1 },
+        count: { type: "number", default: 30, min: 1, step: 5 },
+    },
+    start: (self) => {
+        const state = { bursts: 0 };
+        self.every(self.params.seconds, () => {
+            state.bursts++;
+            self.particles()?.emit(self.params.count);
+            self.setText(`x${state.bursts}`);
+        });
+        return state;
+    },
+});
+
+// Day and night: put it on the sun. Turns the light around and changes the sky and the ambient light with
+// its height (self.setEnvironment).
+export const dayNight = defineBehavior({
+    name: "dayNight",
+    label: "Day and Night",
+    params: {
+        // Seconds a whole day takes
+        period: { type: "number", default: 60, min: 1, step: 5 },
+        // Where the day starts: 0 sunrise, 0.25 noon, 0.5 sunset, 0.75 midnight
+        start: { type: "number", default: 0.25, min: 0, max: 1, step: 0.05 },
+    },
+    // The light of the Light component of the same object, and how bright it is at noon
+    start: (self) => {
+        const light = self.object.children.find((child) => (child as THREE.Light).isLight) as THREE.Light | undefined;
+        return { light, noon: light?.intensity ?? 0 };
+    },
+    update: (self) => {
+        const day = (self.params.start + self.time / self.params.period) % 1;
+        // The sun goes over the scene from one side to the other; a light shines along its own -Z
+        self.object.rotation.set(-day * Math.PI * 2, THREE.MathUtils.degToRad(30), 0, "YXZ");
+        // 1 at noon, 0 at the horizon and all night
+        const height = Math.max(0, Math.sin(day * Math.PI * 2));
+        const mix = (night: string, noon: string) => `#${new THREE.Color(night).lerp(new THREE.Color(noon), height).getHexString()}`;
+        self.setEnvironment({
+            skyTop: mix("#05070f", "#2f6fc4"),
+            skyHorizon: mix("#1a1f3a", "#bfd9ee"),
+            ambientIntensity: 0.15 + 0.85 * height,
+        });
+        // Not object.visible: a hidden object is an inactive one, and this behavior would stop with it
+        if (self.state.light) self.state.light.intensity = self.state.noon * height;
+    },
+});

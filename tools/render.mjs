@@ -274,7 +274,7 @@ try {
     for (const line of result.logs ?? []) console.log(`  ${line}`)
     if (result.state) {
       for (const e of result.state.entities) {
-        console.log(`  state: ${e.name}  [${e.position.join(', ')}]${e.active ? '' : '  inactive'}${e.text !== undefined ? `  text ${JSON.stringify(e.text)}` : ''}`)
+        console.log(`  state: ${e.name}  [${e.position.join(', ')}]${e.scale ? `  scale [${e.scale.join(', ')}]` : ''}${e.active ? '' : '  inactive'}${e.text !== undefined ? `  text ${JSON.stringify(e.text)}` : ''}`)
       }
       if (Object.keys(result.state.globals).length > 0) console.log(`  globals: ${JSON.stringify(result.state.globals)}`)
     }

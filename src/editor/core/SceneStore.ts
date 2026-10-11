@@ -902,6 +902,11 @@ class SceneStore {
         this.notify();
     }
 
+    // The look the running game is to be drawn with now (a zone may have changed it); null if nothing runs
+    get gameLook() {
+        return this.game ? this.game.lookName : null;
+    }
+
     // The interface of the running game, for the viewport to draw; null if nothing runs
     get gameUi() {
         return this.game?.ui ?? null;

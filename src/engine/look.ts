@@ -205,8 +205,40 @@ vec4 effect(vec2 uv, vec4 color) {
 }`,
 });
 
+// What is bright spills its light over what is next to it: lamps, fire, the sky in a window. Bright is
+// what is above `threshold` (1 is white paper in full light; a material that glows, or a strong light, goes
+// above it).
+const glow = defineEffect({
+    name: "glow",
+    label: "Glow",
+    params: {
+        threshold: { type: "number", default: 0.8, min: 0, max: 4, step: 0.05 },
+        strength: { type: "number", default: 1, min: 0, max: 4, step: 0.1 },
+        // How far the light spills, in pixels of the picture
+        radius: { type: "number", default: 8, min: 1, max: 48, step: 1 },
+    },
+    shader: `
+vec4 effect(vec2 uv, vec4 color) {
+    vec3 sum = vec3(0.0);
+    float total = 0.0;
+    // Four rings of eight samples around the pixel, the near ones counting for more
+    for (int ring = 1; ring <= 4; ring++) {
+        float reach = radius * float(ring) / 4.0;
+        float weight = 1.25 - float(ring) / 4.0;
+        for (int i = 0; i < 8; i++) {
+            float angle = 6.2831853 * (float(i) + 0.5 * float(ring)) / 8.0;
+            vec3 c = texel(uv + vec2(cos(angle), sin(angle)) * reach / resolution).rgb;
+            float light = dot(c, vec3(0.2126, 0.7152, 0.0722));
+            sum += c * smoothstep(threshold, threshold + 0.5, light) * weight;
+            total += weight;
+        }
+    }
+    return vec4(color.rgb + sum / total * strength, color.a);
+}`,
+});
+
 // Known to every project; a project effect with the same name replaces the built-in one
-export const builtinEffects: EffectDef[] = [outline, palette, grade, vignette];
+export const builtinEffects: EffectDef[] = [outline, palette, grade, vignette, glow];
 
 // An entry named again in an extending look keeps its place in the list and gets the new params
 function mergeEntries<E extends EffectEntry | SurfaceEntry>(base: E[], own: E[], key: "effect" | "surface"): E[] {
