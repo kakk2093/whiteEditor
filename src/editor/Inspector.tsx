@@ -1,14 +1,14 @@
 import { useRef, useState } from "react";
 import type { MouseEvent, ReactNode } from "react";
 import {
-    builtinEffects, builtinSurfaces, componentDefs, componentKey, DEFAULT_LAYER, environmentFields, fieldApplies, layersCollide, lookFields, materialFields,
+    ASPECTS, builtinEffects, builtinSurfaces, componentDefs, componentKey, DEFAULT_LAYER, environmentFields, fieldApplies, layersCollide, lookFields, materialFields,
     MAX_COLORS, paramDefaults, resolveLook, setLayersCollide
 } from "../engine";
 import type {
     ComponentData, EntityData, EnvironmentData, LookData, MaterialData, ParamDef, ParamValue, Params
 } from "../engine";
 import {
-    addToLook, applyOverrides, createPrefab, deleteLook, deleteMaterial, deletePrefab, deleteScene, deleteTexture, openPrefab, openScene, renameAsset, renameScene, updateLook, updateMaterial, updateSettings
+    addToLook, applyOverrides, createPrefab, deleteLook, deleteMaterial, deletePrefab, deleteScene, deleteTexture, openPrefab, openScene, renameAsset, renameLayer, renameScene, updateLook, updateMaterial, updateSettings
 } from "./core/actions";
 import { instantiateModel, instantiatePrefab } from "./core/dnd";
 import { confirmAt, openContextMenu } from "./contextMenu";
@@ -549,8 +549,7 @@ function EntityInspector({ entity }: { entity: EntityData }) {
                 <input
                     className="input"
                     value={entity.name}
-                    disabled={inner}
-                    title={inner ? "The name comes from the prefab" : undefined}
+                    title={inner ? "The name the prefab gives can be changed for this instance" : undefined}
                     onChange={(e) => store.rename(entity.id, e.target.value)}
                 />
                 {!isPrefabRoot && (
@@ -632,8 +631,9 @@ function EntityInspector({ entity }: { entity: EntityData }) {
                             title={inner ? "The tag comes from the prefab" : undefined}
                             onChange={(e) => store.setTag(entity.id, e.target.value.trim())}
                         />
+                        {/* The tags of the project, and those the scene uses besides */}
                         <datalist id="white-tags">
-                            {store.tags.map((tag) => <option key={tag} value={tag} />)}
+                            {[...new Set([...store.registry.settings.tags, ...store.tags])].map((tag) => <option key={tag} value={tag} />)}
                         </datalist>
                     </div>
                 </div>
@@ -1083,6 +1083,89 @@ function AssetInspector({ asset }: { asset: AssetRef }) {
     );
 }
 
+// What the game of the project starts with and what shape its picture has (project.json)
+export function GameSection() {
+    const store = useSceneStore();
+    const { settings } = store.registry;
+    // A scene the settings name but the project no longer has stays visible
+    const scenes = settings.startScene && !store.scenes.includes(settings.startScene) ? [...store.scenes, settings.startScene] : store.scenes;
+    return (
+        <Section title="Game">
+            <div className="field">
+                <label title="The scene a built game starts with. A behavior goes to another with self.loadScene(name)">Start scene</label>
+                <div className="control">
+                    <select className="select" value={settings.startScene} onChange={(e) => updateSettings({ ...settings, startScene: e.target.value })}>
+                        <option value="">(main, or the first one)</option>
+                        {scenes.map((name) => <option key={name} value={name}>{name}</option>)}
+                    </select>
+                </div>
+            </div>
+            <div className="field">
+                <label title="The shape of the picture of the game: in the Game view of Play and in the built game. The rest of the window stays black">Aspect</label>
+                <div className="control">
+                    <select className="select" value={settings.aspect} onChange={(e) => updateSettings({ ...settings, aspect: e.target.value })}>
+                        {ASPECTS.map((aspect) => <option key={aspect} value={aspect}>{aspect === "free" ? "Free (fills the window)" : aspect}</option>)}
+                    </select>
+                </div>
+            </div>
+        </Section>
+    );
+}
+
+// The tags of the project (project.json). With a list, the Inspector offers these and check tells about a
+// tag that is not among them; without one any word can be a tag.
+export function TagsSection() {
+    const store = useSceneStore();
+    const { settings } = store.registry;
+    const [name, setName] = useState("");
+    const add = () => {
+        const tag = name.trim();
+        if (!tag || settings.tags.includes(tag)) return;
+        updateSettings({ ...settings, tags: [...settings.tags, tag] });
+        setName("");
+    };
+    // The tags the open scene uses that the list does not have yet
+    const loose = store.tags.filter((tag) => !settings.tags.includes(tag));
+    return (
+        <Section title="Tags">
+            {settings.tags.map((tag) => (
+                <div key={tag} className="field">
+                    <label>Tag</label>
+                    <div className="control">
+                        <span style={{ flex: 1 }}>{tag}</span>
+                        <button
+                            className="btn ghost"
+                            title="Remove the tag from the list; objects that have it keep it"
+                            onClick={() => updateSettings({ ...settings, tags: settings.tags.filter((other) => other !== tag) })}
+                        >
+                            <Icon name="close" size={12} />
+                        </button>
+                    </div>
+                </div>
+            ))}
+            <div className="field">
+                <label>New tag</label>
+                <div className="control">
+                    <input className="input" value={name} placeholder="word" onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} />
+                    <button className="btn ghost" title="Add the tag" onClick={add}>
+                        <Icon name="plus" size={12} />
+                    </button>
+                </div>
+            </div>
+            {loose.length > 0 && (
+                <div className="note">
+                    Used in this scene, not in the list: {loose.join(", ")}
+                    <button className="btn" onClick={() => updateSettings({ ...settings, tags: [...settings.tags, ...loose] })}>Add them</button>
+                </div>
+            )}
+            <div className="note">
+                An object has one tag (Inspector); behaviors find objects by it: self.findAll({"{"} tag {"}"}).
+                {settings.tags.length === 0 ? " The list is empty, so any word can be a tag." : " A tag that is not in the list is reported by check."}
+            </div>
+        </Section>
+    );
+}
+
 // The collision layers of the project (project.json): their names, and which pairs of them collide.
 // Shown in the Settings window, on the Project page.
 export function LayersSection() {
@@ -1098,6 +1181,7 @@ export function LayersSection() {
         setName("");
     };
     const remove = (layer: string) => updateSettings({
+        ...settings,
         layers: settings.layers.filter((other) => other !== layer),
         noCollision: settings.noCollision.filter((pair) => !pair.includes(layer))
     });
@@ -1106,9 +1190,21 @@ export function LayersSection() {
         <Section title="Collision Layers">
             {settings.layers.map((layer) => (
                 <div key={layer} className="field">
-                    <label title={layer}>{layer}</label>
+                    <label title={layer}>Layer</label>
                     <div className="control">
-                        <span style={{ flex: 1 }} />
+                        {/* Another name is written into every collider that has the old one */}
+                        <input
+                            className="input"
+                            defaultValue={layer}
+                            title="Type another name and press Enter: the colliders of the scenes and prefabs follow"
+                            onBlur={(e) => {
+                                e.target.value = layer;
+                            }}
+                            onKeyDown={(e) => {
+                                if (e.key === "Enter") renameLayer(layer, e.currentTarget.value);
+                                if (e.key === "Escape") e.currentTarget.blur();
+                            }}
+                        />
                         <button className="btn ghost" title="Remove the layer; colliders that name it must be given another" onClick={() => remove(layer)}>
                             <Icon name="close" size={12} />
                         </button>

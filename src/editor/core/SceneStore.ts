@@ -17,6 +17,7 @@ import {
     expandPristine,
     findComponent,
     findInExpanded,
+    fitAspect,
     Game,
     generateId,
     innerId,
@@ -107,7 +108,8 @@ interface Target {
 // A change of a material or a look, as a step of undo: what the asset was and what it became.
 // null means there was (or is) no such asset: the step created or deleted it.
 export interface AssetStep {
-    section: "materials" | "looks";
+    // "folders" and "settings" are one file each (folders.json, project.json): their name is the same word
+    section: "materials" | "looks" | "scenes" | "prefabs" | "folders" | "settings";
     name: string;
     before: unknown | null;
     after: unknown | null;
@@ -195,6 +197,16 @@ function createHelper(entity: EntityData): THREE.Object3D | null {
     return helper;
 }
 
+// The options of the editor as they were left last time
+const OPTIONS_KEY = "white:editor";
+const savedOptions = (() => {
+    try {
+        return JSON.parse(localStorage.getItem(OPTIONS_KEY) ?? "{}") as Record<string, unknown>;
+    } catch {
+        return {};
+    }
+})();
+
 class SceneStore {
     // Models, materials and prefabs of the open project
     registry = new Registry();
@@ -230,12 +242,12 @@ class SceneStore {
 
     // The axes of the gizmo: "world" keeps them along the axes of the scene, "local" turns them with the
     // object (its own forward, up and side). Scaling is always along the object's own axes.
-    gizmoSpace: "world" | "local" = "world";
+    gizmoSpace: "world" | "local" = savedOptions.gizmoSpace === "local" ? "local" : "world";
 
     // Gizmo snapping: moves by whole steps of `snapStep` meters, turns by 15 degrees, scales by 0.25
-    snap = false;
+    snap = savedOptions.snap === true;
 
-    snapStep = 0.5;
+    snapStep = typeof savedOptions.snapStep === "number" ? savedOptions.snapStep : 0.5;
 
     // An asset picked in the Project panel; shown in the Inspector instead of an entity
     selectedAsset: AssetRef | null = null;
@@ -325,7 +337,7 @@ class SceneStore {
 
     // false draws the viewport without the look of the scene: arranging objects in a pixelated picture is hard.
     // The game itself always has its look.
-    lookEnabled = true;
+    lookEnabled = savedOptions.lookEnabled !== false;
 
     // Counts how often the scene data was put back (stop(), undo, redo); a field being typed in must then forget its text
     restores = 0;
@@ -340,6 +352,15 @@ class SceneStore {
     // true while the right mouse button is held in the viewport: W/A/S/D then fly the camera
     // instead of switching tools. Not part of the rendered state, so changing it notifies nobody.
     flying = false;
+
+    // Set by actions.ts: reads a scene of the project from its file, for self.loadScene() during Play
+    sceneLoader: ((name: string) => Promise<SceneData>) | null = null;
+
+    // The scene Play has gone on to by self.loadScene(), null while it runs the open one
+    playScene: string | null = null;
+
+    // What the behaviors keep from scene to scene during one Play (self.globals)
+    private playGlobals: Record<string, unknown> = {};
 
     // Set by the Viewport: moves the editor camera to look at an object
     focusHandler: ((obj: THREE.Object3D) => void) | null = null;
@@ -432,7 +453,8 @@ class SceneStore {
         this.notify();
     }
 
-    // A material or a look was changed, created (before = null) or deleted (after = null)
+    // An asset was changed, created (before = null) or deleted (after = null): a material, a look, a scene
+    // file, a prefab file, the folders or the settings of the project
     recordAsset(section: AssetStep["section"], name: string, before: unknown | null, after: unknown | null) {
         const key = `${section}/${name}`;
         const time = performance.now();
@@ -815,7 +837,14 @@ class SceneStore {
 
     setLookEnabled(enabled: boolean) {
         this.lookEnabled = enabled;
+        this.saveOptions();
         this.notify();
+    }
+
+    // The options of the editor itself (Settings, Editor page) are kept in the browser between runs
+    private saveOptions() {
+        const options = { gizmoSpace: this.gizmoSpace, snap: this.snap, snapStep: this.snapStep, lookEnabled: this.lookEnabled };
+        localStorage.setItem(OPTIONS_KEY, JSON.stringify(options));
     }
 
     setPlayCamera(camera: "editor" | "game") {
@@ -853,12 +882,34 @@ class SceneStore {
     }
 
     // The game reads the scene data without copying it, so script params edited during Play apply at once
-    private startGame() {
+    // `scene`: another scene of the project a behavior has asked for (self.loadScene); without it the open one
+    private startGame(scene?: { name: string; data: SceneData }) {
         this.game?.dispose();
-        const game = new Game(this.registry, this.toJSON());
+        const game = new Game(this.registry, scene?.data ?? this.toJSON(), this.playGlobals);
         game.runtime.onError = (message) => this.update({ status: message });
         this.game = game;
+        this.playScene = scene?.name ?? null;
         game.start();
+    }
+
+    // A behavior has called self.loadScene(): Play goes on in that scene, read from its file. The editor
+    // still shows and edits the open scene; an edit of its tree brings Play back to it.
+    private async enterScene(name: string) {
+        if (name === this.sceneName) {
+            this.startGame();
+            this.notify();
+            return;
+        }
+        try {
+            const data = await this.sceneLoader?.(name);
+            // Play may have been stopped while the file was on its way
+            if (!data || !this.game) return;
+            this.startGame({ name, data });
+            this.status = `Play went on to scene "${name}" (self.loadScene); the editor still shows "${this.sceneName}"`;
+        } catch (e) {
+            this.status = `loadScene: ${e instanceof Error ? e.message : String(e)}`;
+        }
+        this.notify();
     }
 
     // Objects were added, removed or moved in the tree during Play: the running copy is built again
@@ -871,8 +922,9 @@ class SceneStore {
     play() {
         if (this.playing || this.editingPrefab) return;
         this.playSnapshot = JSON.stringify(this.toJSON());
-        // A new run starts with a clean Console, like in Unity
+        // A new run starts with a clean Console, like in Unity, and with nothing kept from scene to scene
         editorLog.clear();
+        this.playGlobals = {};
         this.status = "";
         this.paused = false;
         // Play starts the way the game does; the Scene view is one click away
@@ -915,6 +967,7 @@ class SceneStore {
         const snapshot = this.playSnapshot;
         this.game.dispose();
         this.game = null;
+        this.playScene = null;
         this.playSnapshot = null;
         this.confirmingStop = false;
         this.paused = false;
@@ -926,7 +979,19 @@ class SceneStore {
 
     // Called by the Viewport every frame
     tick(dt: number) {
-        if (!this.paused) this.game?.update(dt);
+        if (this.paused || !this.game) return;
+        this.game.update(dt);
+        const next = this.game.requestedScene;
+        if (next !== null) {
+            this.game.runtime.requestedScene = null;
+            this.enterScene(next);
+        }
+    }
+
+    // Where the picture of the game goes in a view of this size: all of it, or, if the project gives the
+    // picture a shape (Settings, Project), the biggest area of that shape in the middle
+    gameArea(width: number, height: number) {
+        return fitAspect(this.registry.settings, width, height);
     }
 
     togglePause() {
@@ -962,7 +1027,13 @@ class SceneStore {
             ownLists(e).forEach(collect);
         });
         collect(this.entities);
-        if (parentId) this.locate(parentId, true)?.entity.children.forEach((child) => child.id !== except?.id && names.add(child.name));
+        if (parentId) {
+            this.locate(parentId, true)?.entity.children.forEach((child) => child.id !== except?.id && names.add(child.name));
+            // What a prefab brings there keeps its id by the name the prefab gives it, even if renamed here
+            for (const id of this.objects.keys()) {
+                if (id !== except?.id && id.startsWith(`${parentId}/`) && !id.slice(parentId.length + 1).includes("/")) names.add(id.slice(parentId.length + 1));
+            }
+        }
         // Paths go by names
         base = base.replace(/\//g, "-");
 
@@ -1166,12 +1237,14 @@ class SceneStore {
 
     setGizmoSpace(space: "world" | "local") {
         this.gizmoSpace = space;
+        this.saveOptions();
         this.notify();
     }
 
     setSnap(on: boolean, step = this.snapStep) {
         this.snap = on;
         this.snapStep = step;
+        this.saveOptions();
         this.notify();
     }
 
@@ -1211,6 +1284,27 @@ class SceneStore {
             round(THREE.MathUtils.radToDeg(obj.rotation.z))
         ];
         entity.scale = [round(obj.scale.x), round(obj.scale.y), round(obj.scale.z)];
+    }
+
+    // The objects the behaviors have made in the running scene (self.spawn): they are in no file, so the
+    // Hierarchy lists them apart, while Play goes on
+    get spawned(): { id: string; name: string; object: THREE.Object3D }[] {
+        const game = this.game;
+        if (!game) return [];
+        const list: { id: string; name: string; object: THREE.Object3D }[] = [];
+        const visit = (obj: THREE.Object3D) => {
+            const id = obj.userData.entityId ?? obj.userData.innerId;
+            // What the scene started with is known to the game by its id
+            if (id !== undefined && game.getObject(id) !== obj) list.push({ id, name: obj.name, object: obj });
+            else obj.children.forEach(visit);
+        };
+        game.root.children.forEach(visit);
+        return list;
+    }
+
+    // Brings the editor camera to any object of what the viewport shows
+    focusObject(object: THREE.Object3D) {
+        this.focusHandler?.(object);
     }
 
     // Selects the entity (the selected one by default) and brings the editor camera to it
@@ -1258,6 +1352,8 @@ class SceneStore {
     // Changes editor state (project, scene name, status...) and re-renders the panels
     update(patch: Partial<Pick<SceneStore, "project" | "projects" | "sceneName" | "scenes" | "folders" | "status">>) {
         Object.assign(this, patch);
+        // What self.loadScene() and the params of kind "scene" can name
+        if (patch.scenes) this.registry.setScenes(patch.scenes);
         this.notify();
     }
 
@@ -1379,7 +1475,7 @@ class SceneStore {
 
     // The Hierarchy shows a field instead of the name of this entity (F2)
     startRename(id: string | null = this.selectedId) {
-        if (!id || this.isInner(id) || !findEntity(this.entities, id)) return;
+        if (!id || !this.objects.has(id)) return;
         this.renamingId = id;
         this.notify();
     }
@@ -1396,6 +1492,17 @@ class SceneStore {
     rename(id: string, name: string) {
         const found = findEntity(this.entities, id);
         const obj = this.objects.get(id);
+        if (!found && obj) {
+            // Something a prefab brings: the instance gives it another name, its id and its path stay
+            const target = this.locate(id);
+            if (!target) return;
+            target.entity.name = name.replace(/\//g, "-");
+            obj.name = target.entity.name;
+            this.game?.syncEntity(target.entity);
+            this.commit(target);
+            this.notify();
+            return;
+        }
         if (!found || !obj) return;
         const { entity } = found;
         if (id.includes("/")) {
@@ -1559,6 +1666,7 @@ class SceneStore {
     // Called when the project scripts or assets were (re)loaded
     setRegistry(registry: Registry) {
         this.registry = registry;
+        registry.setScenes(this.scenes);
         this.rebuild();
         // A script, material or prefab changed during Play: run the scene again with it
         this.restartGame();

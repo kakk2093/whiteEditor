@@ -108,11 +108,14 @@ function checkOverrides(entity: EntityData, where: string, registry: Registry, i
         }
         for (const [key, value] of Object.entries(override)) {
             if (["components", "addComponents", "removeComponents", "addChildren"].includes(key)) continue;
-            if (key === "removed") {
+            if (key === "name") {
+                if (path === ROOT_PATH) problems.push(`${at}.name: the root is the instance itself, write "name" on the instance`);
+                else if (typeof value !== "string" || value === "" || value.includes("/")) problems.push(`${at}.name: must be a name without "/"`);
+            } else if (key === "removed") {
                 if (path === ROOT_PATH) problems.push(`${at}.removed: the root of the prefab cannot be removed (delete the instance instead)`);
                 else if (value !== true) problems.push(`${at}.removed: must be true (or leave it out)`);
             } else if (!["active", "position", "rotation", "scale"].includes(key)) {
-                problems.push(`${at}: unknown field "${key}" (known: active, position, rotation, scale, components, addComponents, removeComponents, addChildren, removed)`);
+                problems.push(`${at}: unknown field "${key}" (known: name, active, position, rotation, scale, components, addComponents, removeComponents, addChildren, removed)`);
             } else if (path === ROOT_PATH) {
                 problems.push(`${at}.${key}: the root is the instance itself, write "${key}" on the instance`);
             } else if (key === "active" ? typeof value !== "boolean" : !isVec3(value)) {
@@ -202,7 +205,12 @@ function checkEntity(entity: EntityData, path: string, registry: Registry, ids: 
     for (const key of ["position", "rotation", "scale"] as const) {
         if (!isVec3(entity[key])) problems.push(`${where}.${key}: must be [x, y, z]`);
     }
-    if (entity.tag !== undefined && typeof entity.tag !== "string") problems.push(`${where}.tag: must be a string`);
+    if (entity.tag !== undefined && typeof entity.tag !== "string") {
+        problems.push(`${where}.tag: must be a string`);
+    } else if (entity.tag && registry.settings.tags.length > 0 && !registry.settings.tags.includes(entity.tag)) {
+        // The project lists its tags, so one that is not there is most likely a slip of the hand
+        problems.push(`${where}.tag: "${entity.tag}" is not among the tags of project.json (tags: ${registry.settings.tags.join(", ")})`);
+    }
 
     if (entity.prefab) {
         if (!registry.getPrefab(entity.prefab)) {

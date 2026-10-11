@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { EntityData } from "../engine";
 import { openContextMenu } from "./contextMenu";
 import { dropAsset, ENTITY_DRAG_TYPE, getDraggedAsset } from "./core/dnd";
@@ -62,7 +62,7 @@ function Node({ entity: shown, depth, filter, within = false }: { entity: Entity
     // A search shows what it found, wherever it is
     const open = filter && !expanded ? true : !folded;
     const overridden = (inner || entity.prefab) && sceneStore.hasOverrides(entity.id);
-    const renaming = !inner && sceneStore.renamingId === entity.id;
+    const renaming = sceneStore.renamingId === entity.id;
     const active = entity.active ?? true;
 
     const classes = [
@@ -209,6 +209,15 @@ export default function Hierarchy() {
     const filter = search.trim().toLowerCase();
     const shown = store.entities.filter((entity) => !filter || matches(entity, filter));
 
+    // What the behaviors create during Play is in no data the panel hears about: it looks twice a second
+    const [, look] = useState(0);
+    useEffect(() => {
+        if (!store.playing) return;
+        const timer = setInterval(() => look((n) => n + 1), 500);
+        return () => clearInterval(timer);
+    }, [store.playing]);
+    const spawned = store.spawned;
+
     const create = (key: string) => {
         const [section, index] = key.split(":").map(Number);
         createObject(CREATE_MENU[section].items[index]);
@@ -263,6 +272,26 @@ export default function Hierarchy() {
                 {shown.map((entity) => (
                     <Node key={entity.id} entity={entity} depth={0} filter={filter} />
                 ))}
+                {spawned.length > 0 && (
+                    <>
+                        <div className="tree-title" title="Objects the behaviors have created (self.spawn). They live only while Play goes on">
+                            Created in Play · {spawned.length}
+                        </div>
+                        {spawned.slice(0, 200).map((item, i) => (
+                            <div
+                                key={`${item.id}:${i}`}
+                                className="tree-row spawned"
+                                style={{ paddingLeft: 6 }}
+                                title="Created by a behavior · click to bring the camera to it (in the Scene view)"
+                                onClick={() => store.focusObject(item.object)}
+                            >
+                                <span className="twisty" />
+                                <Icon name="cube" />
+                                <span className="name">{item.name}</span>
+                            </div>
+                        ))}
+                    </>
+                )}
                 {store.entities.length === 0 && (
                     <div className="empty">
                         The scene is empty.<br />

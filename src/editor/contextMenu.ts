@@ -9,6 +9,8 @@ export interface ContextItem {
     // Shown at the right, e.g. "Ctrl+D"
     shortcut?: string;
     danger?: boolean;
+    // Shown grey and does nothing: what cannot be done right now
+    disabled?: boolean;
     run: () => void;
 }
 
@@ -21,6 +23,8 @@ interface State {
     x: number;
     y: number;
     sections: ContextSection[];
+    // Who opened it, if that matters: the menu bar marks its menus to move from one to the next
+    owner?: string;
 }
 
 let state: State | null = null;
@@ -33,12 +37,16 @@ function set(next: State | null) {
 
 export function openContextMenu(
     e: { clientX: number; clientY: number; preventDefault: () => void; stopPropagation: () => void },
-    sections: ContextSection[]
+    sections: ContextSection[],
+    owner?: string
 ) {
     e.preventDefault();
     e.stopPropagation();
-    set({ x: e.clientX, y: e.clientY, sections: sections.filter((s) => s.items.length > 0) });
+    set({ x: e.clientX, y: e.clientY, sections: sections.filter((s) => s.items.length > 0), owner });
 }
+
+// Who opened the menu that is open now; undefined if none is, or if it was not marked
+export const contextMenuOwner = () => state?.owner;
 
 // Asks before doing what cannot be undone: a small menu at that place with the question and the one answer.
 // Clicking anywhere else is "no".

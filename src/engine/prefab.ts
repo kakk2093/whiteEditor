@@ -16,6 +16,16 @@ import type { ComponentData, EntityData, EntityOverride, Params } from "./types"
 
 export const ROOT_PATH = ".";
 
+// The names instances give to entities of their prefabs ("name" of an override), while an instance is being
+// expanded. They are put on last: until then everything is found by the names the prefabs give.
+const renames = new WeakMap<EntityData, string>();
+
+function applyRenames(entity: EntityData) {
+    const name = renames.get(entity);
+    if (name) entity.name = name;
+    entity.children.forEach(applyRenames);
+}
+
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
 function mergeOverride(base: EntityOverride | undefined, over: EntityOverride): EntityOverride {
@@ -81,6 +91,7 @@ function applyAt(root: EntityData, path: string, override: EntityOverride): bool
             parent.children.splice(parent.children.indexOf(node), 1);
             return true;
         }
+        if (override.name) renames.set(node, override.name);
         if (override.active !== undefined) {
             if (override.active) delete node.active;
             else node.active = false;
@@ -148,7 +159,9 @@ export function assignAddedIds(entities: EntityData[]) {
 // null if the prefab does not exist or contains itself (`stack` lists the prefabs being expanded).
 // The entities inside get ids "<instance id>/<path>", so they can be told apart and found again.
 // With deep = false the instances of other prefabs inside stay instances (and carry their part of the overrides).
-export function expandInstance(registry: Registry, instance: EntityData, stack: string[] = [], deep = true): EntityData | null {
+// `final` is false for an instance expanded as a part of another one: the names its overrides give wait
+// until the outer instance is done.
+export function expandInstance(registry: Registry, instance: EntityData, stack: string[] = [], deep = true, final = true): EntityData | null {
     const root = instance.prefab ? registry.getPrefab(instance.prefab) : undefined;
     if (!instance.prefab || !root || stack.includes(instance.prefab)) return null;
 
@@ -169,7 +182,12 @@ export function expandInstance(registry: Registry, instance: EntityData, stack: 
         const inner = [...stack, instance.prefab];
         const expandChild = (child: EntityData): EntityData => {
             // One that cannot be expanded stays an instance; whoever builds it shows a placeholder
-            if (child.prefab) return expandInstance(registry, child, inner) ?? child;
+            if (child.prefab) {
+                const content = expandInstance(registry, child, inner, true, false);
+                // The name the outer instance gives it stays with what it has become
+                if (content && renames.has(child)) renames.set(content, renames.get(child)!);
+                return content ?? child;
+            }
             child.children = child.children.map(expandChild);
             return child;
         };
@@ -181,6 +199,8 @@ export function expandInstance(registry: Registry, instance: EntityData, stack: 
         entity.children.forEach((child) => setIds(child, `${id}/${child.name}`));
     };
     setIds(expanded, instance.id);
+    // The ids are settled by the names of the prefabs; now what was renamed gets its name
+    if (final) expanded.children.forEach(applyRenames);
     return expanded;
 }
 
@@ -189,6 +209,7 @@ export function expandInstance(registry: Registry, instance: EntityData, stack: 
 export function applyToPrefab(root: EntityData, overrides: Record<string, EntityOverride>): EntityData {
     const changed = structuredClone(root);
     for (const [path, override] of Object.entries(overrides)) applyAt(changed, path, override);
+    changed.children.forEach(applyRenames);
     // What the instance added is now a part of the prefab, with ids of its own
     assignAddedIds([changed]);
     return changed;
@@ -237,6 +258,7 @@ function paramValue(registry: Registry, component: ComponentData, param: string)
 export function diffOverride(registry: Registry, pristine: EntityData, edited: EntityData, root: boolean): EntityOverride | null {
     const override: EntityOverride = {};
     if (!root) {
+        if (pristine.name !== edited.name) override.name = edited.name;
         if ((pristine.active ?? true) !== (edited.active ?? true)) override.active = edited.active ?? true;
         for (const property of ["position", "rotation", "scale"] as const) {
             if (!same(pristine[property], edited[property])) override[property] = [...edited[property]];

@@ -5,7 +5,7 @@ import type { EntityData, ParamDef, Registry, SceneData } from "../../engine";
 // new name wherever the old one stood. They work on what is on disk as well, where anything with a default
 // may be missing. Nothing refers to a prefab through a field, so for it only the instances are renamed.
 
-type Kind = "material" | "look" | "prefab";
+type Kind = "material" | "look" | "prefab" | "layer";
 
 // Replaces `from` in the fields that are references to assets of this kind; true if anything changed
 function renameInFields(defs: Record<string, ParamDef>, values: Record<string, unknown> | undefined, kind: Kind, from: string, to: string) {

@@ -1,12 +1,15 @@
 // Builds a project into static files: projects/<project>/build/index.html + game.js
-//   npm run build:game -- <project> [scene]
+//   npm run build:game -- <project> [scene] [--no-check]
+// The project is checked first (the same as npm run check); a project with problems is not built.
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createServer } from 'vite'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const [project, scene] = process.argv.slice(2)
+const args = process.argv.slice(2)
+const [project, scene] = args.filter((arg) => !arg.startsWith('--'))
 const projectDir = project ? path.join(root, 'projects', project) : ''
 
 if (!project || !fs.existsSync(projectDir)) {
@@ -14,6 +17,14 @@ if (!project || !fs.existsSync(projectDir)) {
   console.error(project ? `Project "${project}" not found.` : 'Usage: npm run build:game -- <project> [scene]')
   console.error(`Projects: ${known || 'none'}`)
   process.exit(2)
+}
+
+if (!args.includes('--no-check')) {
+  const check = spawnSync(process.execPath, [path.join(root, 'tools/check.mjs'), project], { stdio: 'inherit' })
+  if (check.status !== 0) {
+    console.error(`${project}: not built, fix the problems above (or build anyway with --no-check)`)
+    process.exit(1)
+  }
 }
 
 // Vite loads the TypeScript build code, the same way check.mjs loads the engine

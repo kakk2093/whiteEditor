@@ -824,18 +824,11 @@ kbd {
     pointer-events: none;
 }
 
-/* Play, Pause and Step, above the middle of the picture */
-.viewport-play {
-    position: absolute;
-    top: 8px;
-    left: 50%;
-    transform: translateX(-50%);
+/* Play, Pause and Step: in the middle of what is left of the top bar */
+.topbar-play {
     display: flex;
     gap: 2px;
-    padding: 3px;
-    background: rgba(35, 36, 40, 0.9);
-    border: 1px solid var(--border);
-    border-radius: 5px;
+    margin: 0 auto;
 }
 
 .viewport-hint {
@@ -908,6 +901,14 @@ kbd {
     border-radius: 3px;
     cursor: pointer;
     white-space: nowrap;
+}
+
+.menu-item.disabled,
+.menu-item.disabled:hover {
+    background: none;
+    color: var(--muted);
+    opacity: 0.55;
+    cursor: default;
 }
 
 .menu-item:hover {
@@ -999,6 +1000,7 @@ kbd {
     cursor: pointer;
 }
 
+.menubar-item.open,
 .menubar-item:hover {
     background: var(--hover);
 }
@@ -1228,6 +1230,22 @@ kbd {
 .layer-matrix td {
     padding: 2px 3px;
     text-align: center;
+}
+
+/* What the behaviors have created during Play: listed under the scene, not a part of it */
+.tree-title {
+    margin-top: 6px;
+    padding: 4px 10px 2px;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+}
+
+.tree-row.spawned {
+    color: var(--muted);
+    font-style: italic;
 }
 
 /* An object a prefab instance adds to its prefab */

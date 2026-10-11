@@ -75,6 +75,7 @@ export function innerContextMenu(entity: EntityData): ContextSection[] {
         { label: "Duplicate", icon: "copy", shortcut: "Ctrl+D", run: () => (many ? store.duplicateSelected() : store.select(store.duplicate(entity.id)?.id ?? entity.id)) },
         { label: "Copy", shortcut: "Ctrl+C", run: () => copyToClipboard() }
     );
+    if (!many) items.push({ label: "Rename", shortcut: "F2", run: () => store.startRename(entity.id) });
     if (store.hasOverrides(entity.id) && !many) {
         items.push(
             { label: "Apply to Prefab", icon: "prefab", run: () => applyOverrides(entity.id) },

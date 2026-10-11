@@ -157,6 +157,14 @@ export class Runtime {
     // The camera the scene is seen through, for screenRay(); whoever runs the scene keeps it up to date
     camera: THREE.Camera | null = null;
 
+    // What the behaviors keep from scene to scene (self.globals); whoever runs the scenes gives every one
+    // of them the same object
+    globals: Record<string, unknown> = {};
+
+    // The scene a behavior has asked for with self.loadScene(); whoever runs the scene looks here after
+    // update() and loads it
+    requestedScene: string | null = null;
+
     // The vertical speed of the objects that fall(), meters per second
     private speeds = new WeakMap<THREE.Object3D, number>();
 
@@ -183,6 +191,9 @@ export class Runtime {
                 console.warn(`Unknown behavior "${name}"`);
                 continue;
             }
+            // For the getters of `self`, where `this` is `self`
+            // eslint-disable-next-line @typescript-eslint/no-this-alias
+            const runtime = this;
             const self: BehaviorSelf = {
                 object: obj,
                 params: {},
@@ -203,6 +214,11 @@ export class Runtime {
                 fall: (dt, gravity) => this.fall(obj, dt, gravity),
                 jump: (speed) => this.speeds.set(obj, speed),
                 grounded: () => this.grounded(obj),
+                loadScene: (scene) => this.loadScene(scene),
+                // Read through the runtime: the object is given after the behaviors are attached
+                get globals() {
+                    return runtime.globals;
+                },
             };
             // `source` differs from any component.params, so the first step fills self.params
             this.instances.push({ def, component, source: null, self, started: false, failed: false });
@@ -358,6 +374,16 @@ export class Runtime {
         object.position.y += GROUND_REACH;
         object.updateWorldMatrix(true, true);
         return standing;
+    }
+
+    // What a behavior calls as self.loadScene(): asks for another scene; it comes after this frame
+    loadScene(name: string) {
+        const known = this.registry.sceneNames();
+        if (known.length > 0 && !known.includes(name)) {
+            console.error(`loadScene: there is no scene "${name}" (scenes: ${known.join(", ")})`);
+            return;
+        }
+        this.requestedScene = name;
     }
 
     // What a behavior calls as self.raycast(): the nearest collider on the way of a ray

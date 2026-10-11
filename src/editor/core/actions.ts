@@ -1,4 +1,6 @@
-import { applyToPrefab, parsePrefab, parseScene, resolveLook, validateScene } from "../../engine";
+import {
+    applyToPrefab, parsePrefab, parseScene, renameLayerIn, resolveLook, validateLook, validateMaterial, validatePrefab, validateScene
+} from "../../engine";
 import type { LookData, MaterialData, ProjectSettings, SceneData } from "../../engine";
 import { renameInEntities, renameInScene } from "./references";
 import { changeFolder, moveToFolder, parseFolders, removeFolderTree, renameFolderTree, renameInFolders } from "./folders";
@@ -111,9 +113,10 @@ export async function init() {
     }
 }
 
-// The folders of the Project panel: shown at once and written to folders.json. Not a part of undo.
+// The folders of the Project panel: shown at once and written to folders.json; a step of undo
 async function saveFolders(folders: Folders, status: string) {
     try {
+        sceneStore.recordAsset("folders", "folders", sceneStore.folders, folders);
         sceneStore.update({ folders, status });
         await writeFolders(sceneStore.project, folders);
     } catch (e) {
@@ -170,10 +173,11 @@ export function copyText(text: string) {
     );
 }
 
-// The settings of the project (collision layers): applied at once and written to project.json. Not a part of undo.
+// The settings of the project (project.json): applied at once and written to the file; a step of undo
 export async function updateSettings(settings: ProjectSettings) {
     const { project, registry } = sceneStore;
     try {
+        sceneStore.recordAsset("settings", "settings", registry.settings, settings);
         registry.setSettings(settings);
         // The colliders of a running scene read the layers from the registry
         sceneStore.setRegistry(registry);
@@ -181,6 +185,72 @@ export async function updateSettings(settings: ProjectSettings) {
     } catch (e) {
         report(e);
     }
+}
+
+// Gives a collision layer another name: in the settings and in every collider that names it, in the scenes
+// and the prefabs on disk and in the open scene (whose unsaved changes stay unsaved). Not a step of undo.
+export async function renameLayer(from: string, to: string) {
+    const { project, registry } = sceneStore;
+    const name = to.trim();
+    if (!name || name === from || !registry.settings.layers.includes(from)) return;
+    if (name === "Default" || registry.settings.layers.includes(name)) {
+        sceneStore.update({ status: `There already is a layer named ${name}` });
+        return;
+    }
+    if (sceneStore.editingPrefab) {
+        sceneStore.update({ status: "Go back to the scene to rename a layer" });
+        return;
+    }
+    if (blockedByPlay()) return;
+    try {
+        const settings = renameLayerIn(registry.settings, from, name);
+        // The new name must be a layer already when the colliders get it
+        registry.setSettings(settings);
+        await writeSettings(project, settings);
+
+        let files = 0;
+        for (const prefab of registry.prefabNames()) {
+            const root = structuredClone(registry.getPrefab(prefab)!);
+            if (!renameInEntities(registry, [root], "layer", from, name)) continue;
+            registry.setPrefab(prefab, root);
+            await writeAsset(project, "prefabs", prefab, { version: 3, root });
+            files++;
+        }
+        for (const scene of await listAssets(project, "scenes")) {
+            const data = (await readAsset(project, "scenes", scene)) as SceneData;
+            if (!renameInScene(registry, data, "layer", from, name)) continue;
+            await writeAsset(project, "scenes", scene, data);
+            files++;
+        }
+        sceneStore.renameReferences((scene) => renameInScene(registry, scene, "layer", from, name), "settings", from, name);
+        sceneStore.setRegistry(registry);
+        sceneStore.update({ status: `Layer ${from} renamed to ${name}${files > 0 ? `; ${files} file(s) that use it updated` : ""}` });
+    } catch (e) {
+        report(e);
+    }
+}
+
+// Every scene, prefab, material and look on disk checked against the engine, like `npm run check` does (the
+// types of the scripts are not checked here). Returns the problems found, "<file>: <what>".
+export async function validateProject() {
+    const { project, registry } = sceneStore;
+    const problems: string[] = [];
+    const each = async (section: AssetSection, check: (name: string, data: unknown) => string[]) => {
+        for (const name of await listAssets(project, section)) {
+            try {
+                for (const problem of check(name, await readAsset(project, section, name))) problems.push(`${section}/${name}.json: ${problem}`);
+            } catch (e) {
+                problems.push(`${section}/${name}.json: ${e instanceof Error ? e.message : String(e)}`);
+            }
+        }
+    };
+    await each("materials", (_, data) => validateMaterial(data, registry));
+    await each("looks", (name, data) => validateLook(name, data as LookData, registry));
+    await each("prefabs", (name, data) => validatePrefab(name, parsePrefab(data), registry));
+    await each("scenes", (_, data) => validateScene(parseScene(data), registry));
+    const start = registry.settings.startScene;
+    if (start && !sceneStore.scenes.includes(start)) problems.push(`project.json: startScene: there is no scene "${start}"`);
+    return problems;
 }
 
 // Scripts edited in VS Code: reload them and rebuild the scene objects, keeping the scene data
@@ -242,9 +312,19 @@ export async function buildGame() {
         return null;
     }
     try {
+        // A game is not built from a project with mistakes in it: they are listed in the Console
+        sceneStore.update({ status: `Checking ${project}…` });
+        const problems = await validateProject();
+        if (problems.length > 0) {
+            problems.forEach((problem) => console.error(problem));
+            sceneStore.update({ status: `Not built: ${problems.length} problem(s) in the project, see the Console` });
+            sceneStore.setConsoleOpen(true);
+            return null;
+        }
         sceneStore.update({ status: `Building ${project}…` });
         const started = Date.now();
-        const result = await build(project, sceneName);
+        // The start scene of the project settings; without one, the open scene
+        const result = await build(project, sceneStore.registry.settings.startScene || sceneName);
         const seconds = ((Date.now() - started) / 1000).toFixed(1);
         sceneStore.update({ status: `Built projects/${project}/build in ${seconds} s, the game starts with scene "${result.scene}"` });
         return result.url;
@@ -288,7 +368,9 @@ export async function openScene(name: string) {
 export async function deleteScene(name: string) {
     const { project } = sceneStore;
     try {
+        const before = await readAsset(project, "scenes", name);
         await deleteAsset(project, "scenes", name);
+        sceneStore.recordAsset("scenes", name, before, null);
         sceneStore.selectAsset(null);
         sceneStore.update({ scenes: await listAssets(project, "scenes"), status: `Deleted scenes/${name}.json` });
     } catch (e) {
@@ -306,6 +388,8 @@ export async function createPrefab(entityId: string) {
         const root = { ...structuredClone(entity), position: [0, 0, 0] as [number, number, number] };
         await writeAsset(project, "prefabs", name, { version: 3, root });
         registry.setPrefab(name, root);
+        // Two steps: undo first turns the instance back into the object, then takes the prefab file away
+        sceneStore.recordAsset("prefabs", name, null, { version: 3, root });
         sceneStore.convertToInstance(entityId, name);
         sceneStore.update({ status: `Created prefabs/${name}.json` });
     } catch (e) {
@@ -336,6 +420,8 @@ export async function applyOverrides(id: string) {
         const overrides = path === null ? instance.overrides : { [path]: instance.overrides[path] ?? {} };
         const changed = applyToPrefab(root, overrides);
         await writeAsset(project, "prefabs", name, { version: 3, root: changed });
+        // Two steps: undo first gives the instance its changes back, then the prefab its old content
+        sceneStore.recordAsset("prefabs", name, { version: 3, root }, { version: 3, root: changed });
         registry.setPrefab(name, changed);
         sceneStore.revertOverrides(id);
         // Every other instance shows the new prefab
@@ -361,7 +447,9 @@ export async function deletePrefab(name: string) {
     const { project, registry } = sceneStore;
     try {
         if (sceneStore.editingPrefab === name) sceneStore.closePrefab();
+        const root = registry.getPrefab(name);
         await deleteAsset(project, "prefabs", name);
+        if (root) sceneStore.recordAsset("prefabs", name, { version: 3, root }, null);
         registry.removePrefab(name);
         sceneStore.selectAsset(null);
         // Its instances turn into placeholders
@@ -576,10 +664,41 @@ export function addToLook(list: "effects" | "surfaces", name: string) {
     sceneStore.update({ status: `Added ${name} to the look ${look}` });
 }
 
-// Undo and redo of a material or a look: makes it what it was, in the registry and on disk.
+// Undo and redo of an asset step: makes the asset what it was, in the editor and on disk.
 // null removes it (undo of its creation) or, the other way, a deleted one comes back.
 sceneStore.assetHandler = (section, name, data) => {
     const { project, registry } = sceneStore;
+    if (section === "folders") {
+        sceneStore.update({ folders: data as Folders });
+        writeFolders(project, data).catch(report);
+        return;
+    }
+    if (section === "settings") {
+        registry.setSettings(data as ProjectSettings);
+        sceneStore.setRegistry(registry);
+        writeSettings(project, data as ProjectSettings).catch(report);
+        return;
+    }
+    if (section === "scenes") {
+        // Never the open scene: that one cannot be deleted
+        const done = data === null ? deleteAsset(project, section, name) : writeAsset(project, section, name, data);
+        done.then(async () => sceneStore.update({ scenes: await listAssets(project, "scenes") })).catch(report);
+        return;
+    }
+    if (section === "prefabs") {
+        if (data === null) {
+            deleteAsset(project, section, name).catch(report);
+            registry.removePrefab(name);
+            if (sceneStore.selectedAsset?.kind === "prefab" && sceneStore.selectedAsset.name === name) sceneStore.selectAsset(null);
+        } else {
+            writeAsset(project, section, name, data).catch(report);
+            registry.setPrefab(name, parsePrefab(data).root);
+        }
+        // Its instances are built again from what the prefab is now
+        sceneStore.setRegistry(registry);
+        return;
+    }
+
     const kind = section === "materials" ? "material" : "look";
     const key = section === "materials" ? name : `looks/${name}`;
     clearTimeout(pendingWrites.get(key));
@@ -599,6 +718,9 @@ sceneStore.assetHandler = (section, name, data) => {
     // A material that appeared or went away: the meshes that name it have to be built again
     if (section === "materials" && existed !== (data !== null)) sceneStore.setRegistry(registry);
 };
+
+// Play asks for another scene (self.loadScene of a behavior): it is read from its file
+sceneStore.sceneLoader = async (name) => parseScene(await readAsset(sceneStore.project, "scenes", name));
 
 // true if `to` can be the new name of the asset `from`; otherwise says why not in the status line
 function nameIsFree(kind: string, names: string[], from: string, to: string) {

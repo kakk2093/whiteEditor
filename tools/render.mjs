@@ -109,6 +109,10 @@ const images = fs.existsSync(assetsDir)
   ? fs.readdirSync(assetsDir, { recursive: true }).map((f) => f.split(path.sep).join('/')).filter((f) => /\.(png|jpe?g|webp)$/i.test(f)).sort()
   : []
 
+// The scenes a param of kind "scene" can name
+const scenesDir = path.join(projectDir, 'scenes')
+const sceneNames = fs.existsSync(scenesDir) ? fs.readdirSync(scenesDir).filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5)) : []
+
 // project.json: the collision layers
 const settingsFile = path.join(projectDir, 'project.json')
 const settings = fs.existsSync(settingsFile) ? JSON.parse(fs.readFileSync(settingsFile, 'utf-8')) : {}
@@ -127,6 +131,7 @@ const entryCode = () => [
   }),
   `registry.setTextures(${JSON.stringify(`/projects/${project}/assets/`)}, ${JSON.stringify(images)})`,
   `registry.setSettings(parseSettings(${JSON.stringify(settings)}))`,
+  `registry.setScenes(${JSON.stringify(sceneNames)})`,
   `for (const [name, data] of Object.entries(${JSON.stringify(readSection('materials'))})) registry.setMaterial(name, data)`,
   `for (const [name, data] of Object.entries(${JSON.stringify(readSection('prefabs'))})) registry.setPrefab(name, parsePrefab(data).root)`,
   `for (const [name, data] of Object.entries(${JSON.stringify(readSection('looks'))})) registry.setLook(name, data)`,

@@ -21,7 +21,8 @@ export type ParamDef = (
     // A reference to a project asset by name, "" = none
     // "texture" is an image file of the project's assets/ folder, named with its extension: "bricks.png"
     // "layer" is a collision layer of the project settings (project.json); "" is the default layer
-    | { type: "asset"; kind: "material" | "look" | "prefab" | "texture" | "layer"; default: string }
+    // "scene" is a scene of the project, e.g. the one a door leads to (self.loadScene)
+    | { type: "asset"; kind: "material" | "look" | "prefab" | "texture" | "layer" | "scene"; default: string }
 ) & {
     // The field matters only while other fields of the same object have one of these values, e.g.
     // { kind: ["spot"] }; otherwise the Inspector does not show it. The value is kept either way.
@@ -145,6 +146,12 @@ export interface BehaviorSelf<P = Params, S = unknown> {
     jump: (speed: number) => void;
     // true if the object stands on a solid collider
     grounded: () => boolean;
+    // Replaces the running scene with another scene of the project, once this frame is over: everything of
+    // this scene is destroyed (the behaviors get their destroy()), the other one starts from its file.
+    loadScene: (name: string) => void;
+    // What lives on from scene to scene, for as long as the game runs: the score, what was collected.
+    // Any behavior of any scene reads and writes the same object: self.globals.coins = 3.
+    globals: Record<string, unknown>;
 }
 
 export interface BehaviorDef {
@@ -197,8 +204,11 @@ export class Registry {
 
     private lookData = new Map<string, LookData>();
 
-    // project.json: the collision layers
+    // project.json: the collision layers, the tags, the start scene, the shape of the picture
     settings: ProjectSettings = defaultSettings;
+
+    // The names of the scenes of the project: what self.loadScene() and a param of kind "scene" can name
+    private scenes: string[] = [];
 
     private materialData = new Map<string, Partial<MaterialData>>();
 
@@ -345,8 +355,18 @@ export class Registry {
         return layersCollide(this.settings, a, b);
     }
 
-    assetNames(kind: "material" | "look" | "prefab" | "texture" | "layer") {
+    setScenes(names: string[]) {
+        this.scenes = [...names].sort();
+        return this;
+    }
+
+    sceneNames() {
+        return this.scenes;
+    }
+
+    assetNames(kind: "material" | "look" | "prefab" | "texture" | "layer" | "scene") {
         if (kind === "layer") return this.settings.layers;
+        if (kind === "scene") return this.scenes;
         if (kind === "texture") return this.textureNames();
         if (kind === "prefab") return this.prefabNames();
         return kind === "look" ? this.lookNames() : this.materialNames();

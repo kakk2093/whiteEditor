@@ -19,6 +19,10 @@ export class Input {
 
     mouseY = 0;
 
+    // The part of the attached element the picture of the game takes, in its pixels from its corner; null
+    // if it takes all of it. The editor sets it when the picture has a shape of its own (black bars around).
+    area: { left: number; top: number; width: number; height: number } | null = null;
+
     // How far the mouse moved since the previous frame, in pixels; y grows downwards
     mouseDX = 0;
 
@@ -110,7 +114,10 @@ export class Input {
             this.setKey(e.code, e.type === "keydown");
         };
         const onPointer = (e: PointerEvent) => {
-            const rect = element.getBoundingClientRect();
+            const whole = element.getBoundingClientRect();
+            const rect = this.area
+                ? { left: whole.left + this.area.left, top: whole.top + this.area.top, width: this.area.width, height: this.area.height }
+                : whole;
             if (rect.width > 0 && rect.height > 0) {
                 this.setMouse(
                     ((e.clientX - rect.left) / rect.width) * 2 - 1,

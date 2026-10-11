@@ -17,6 +17,8 @@ export interface ComponentData {
 
 // What a prefab instance changes in one entity of its prefab (see prefab.ts)
 export interface EntityOverride {
+    // Another name for the entity in this instance. Paths and ids go on using the name the prefab gives.
+    name?: string;
     active?: boolean;
     position?: Vec3;
     rotation?: Vec3;

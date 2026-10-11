@@ -51,12 +51,15 @@ canvas { display: block; }
 `
 
 // `root` is the editor folder (where src/engine and node_modules are), `projectDir` the project inside it.
-// `scene` defaults to "main", or to the first scene if there is no "main".
+// The game gets every scene of the project, so that a behavior can go from one to another (self.loadScene).
+// `scene` is the one it starts with: by default the start scene of project.json, else "main", else the first.
 export async function buildGame(root: string, projectDir: string, scene?: string): Promise<BuildResult> {
   const project = path.basename(projectDir)
   const scenes = await jsonNames(path.join(projectDir, 'scenes'))
   if (scenes.length === 0) throw new Error(`Project "${project}" has no scenes`)
-  const start = scene ?? (scenes.includes('main') ? 'main' : scenes[0])
+  const settings = (await readSettings(projectDir)) as { startScene?: unknown }
+  const wanted = typeof settings.startScene === 'string' && settings.startScene ? settings.startScene : undefined
+  const start = scene ?? wanted ?? (scenes.includes('main') ? 'main' : scenes[0])
   if (!scenes.includes(start)) throw new Error(`Scene "${start}" not found (scenes: ${scenes.join(', ')})`)
 
   // Imported by a path from the root, the way the editor and the check command load them
@@ -81,12 +84,13 @@ export async function buildGame(root: string, projectDir: string, scene?: string
     // assets/ is copied next to index.html
     `registry.setTextures('./assets/', ${JSON.stringify(await listImages(path.join(projectDir, 'assets')))})`,
     // project.json: the collision layers
-    `registry.setSettings(parseSettings(${JSON.stringify(await readSettings(projectDir))}))`,
+    `registry.setSettings(parseSettings(${JSON.stringify(settings)}))`,
     `for (const [name, data] of Object.entries(${await section('materials')})) registry.setMaterial(name, data)`,
     `for (const [name, data] of Object.entries(${await section('prefabs')})) registry.setPrefab(name, parsePrefab(data).root)`,
     `for (const [name, data] of Object.entries(${await section('looks')})) registry.setLook(name, data)`,
-    `const scene = parseScene(${JSON.stringify(await readJson(path.join(projectDir, 'scenes'), start))})`,
-    `runGame(document.getElementById('game'), registry, scene)`,
+    `const scenes = {}`,
+    `for (const [name, data] of Object.entries(${await section('scenes')})) scenes[name] = parseScene(data)`,
+    `runGame(document.getElementById('game'), registry, scenes, ${JSON.stringify(start)})`,
   ].join('\n')
 
   const outDir = path.join(projectDir, 'build')

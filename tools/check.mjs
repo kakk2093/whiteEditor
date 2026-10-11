@@ -44,12 +44,15 @@ try {
     }
   }
 
-  // project.json: the collision layers the colliders name
+  // What self.loadScene() and the params of kind "scene" can name
+  registry.setScenes(jsonNames('scenes'))
+
+  // project.json: the collision layers the colliders name, the tags, the start scene
   const settingsFile = path.join(projectDir, 'project.json')
   if (fs.existsSync(settingsFile)) {
     try {
       const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf-8'))
-      for (const problem of engine.validateSettings(settings)) problems.push(`project.json: ${problem}`)
+      for (const problem of engine.validateSettings(settings, jsonNames('scenes'))) problems.push(`project.json: ${problem}`)
       registry.setSettings(engine.parseSettings(settings))
     } catch (e) {
       problems.push(`project.json: ${e.message}`)

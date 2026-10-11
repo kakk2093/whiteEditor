@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
-import { createRenderer, RenderPipeline, resolveLook, setCameraAspect } from "../engine";
+import { aspectRatio, createRenderer, RenderPipeline, resolveLook, setCameraAspect } from "../engine";
 import type { Input } from "../engine";
 import { dropAsset, getDraggedAsset } from "../editor/core/dnd";
 import { ColliderHandles } from "./colliderHandles";
@@ -453,16 +453,35 @@ export default function Viewport() {
             for (const box of boxes.children as THREE.BoxHelper[]) box.update();
             if (ctx.renderer && ctx.camera) {
                 const canvas = ctx.renderer.domElement;
-                const camera = sceneStore.gameCamera(canvas.clientWidth, canvas.clientHeight) ?? ctx.camera;
+                // In the Game view the picture has the shape the project gives it, the rest of the view is black
+                const area = sceneStore.gameView ? sceneStore.gameArea(canvas.clientWidth, canvas.clientHeight) : null;
+                const framed = area !== null && (area.width !== canvas.clientWidth || area.height !== canvas.clientHeight);
+                const camera = sceneStore.gameCamera(area?.width ?? canvas.clientWidth, area?.height ?? canvas.clientHeight) ?? ctx.camera;
                 const { renderer } = ctx;
                 const scene = sceneStore.viewScene;
+                // The mouse of the game is counted over the picture, not over the whole view
+                if (gameInput) gameInput.area = framed ? area : null;
 
                 // The picture itself: the scene through its look. Editor tools are not a part of it: the grid
                 // and the markers are on their own layer, the gizmo is hidden for a moment.
                 const gizmoShown = gizmo.visible;
                 gizmo.visible = false;
                 camera.layers.set(0);
+                if (framed) {
+                    renderer.setScissorTest(false);
+                    renderer.setClearColor(0x000000);
+                    renderer.clear();
+                    // The y of a three.js viewport is counted from the bottom
+                    const bottom = canvas.clientHeight - area.top - area.height;
+                    renderer.setViewport(area.left, bottom, area.width, area.height);
+                    renderer.setScissor(area.left, bottom, area.width, area.height);
+                    renderer.setScissorTest(true);
+                }
                 pipeline.render(scene, camera, Math.min(dt, 0.1));
+                if (framed) {
+                    renderer.setScissorTest(false);
+                    renderer.setViewport(0, 0, canvas.clientWidth, canvas.clientHeight);
+                }
 
                 renderer.autoClear = false;
                 // The editor layer goes on top, sharp and at full size. The look may have drawn the scene into
@@ -493,7 +512,9 @@ export default function Viewport() {
                 const preview = sceneStore.previewCamera;
                 if (preview) {
                     const width = Math.round(canvas.clientWidth * PREVIEW_SIZE);
-                    const height = Math.round(canvas.clientHeight * PREVIEW_SIZE);
+                    // The shape of the picture of the game, if the project gives it one
+                    const shaped = sceneStore.gameArea(width, 100000);
+                    const height = shaped.height < 100000 ? shaped.height : Math.round(canvas.clientHeight * PREVIEW_SIZE);
                     const left = canvas.clientWidth - width - PREVIEW_MARGIN;
                     setCameraAspect(preview, width / height);
                     gizmo.visible = false;
@@ -583,34 +604,6 @@ export default function Viewport() {
         >
             <div ref={ref} style={{ width: "100%", height: "100%" }} />
             <div ref={marqueeRef} className="viewport-marquee" />
-
-            {!store.editingPrefab && (
-                <div className="viewport-play">
-                    <button
-                        className={`btn ${store.playing ? "playing" : ""}`}
-                        onClick={() => (store.playing ? store.requestStop() : store.play())}
-                        title={store.playing ? "Stop the scene (Ctrl+P)" : "Run the scene with its scripts (Ctrl+P)"}
-                    >
-                        <Icon name={store.playing ? "stop" : "play"} />
-                    </button>
-                    <button
-                        className={`btn ${store.paused ? "playing" : ""}`}
-                        onClick={() => store.togglePause()}
-                        disabled={!store.playing}
-                        title={store.paused ? "Resume (Ctrl+Shift+P)" : "Pause: freeze the scene to look at it and edit it (Ctrl+Shift+P)"}
-                    >
-                        <Icon name="pause" />
-                    </button>
-                    <button
-                        className="btn"
-                        onClick={() => store.step()}
-                        disabled={!store.playing}
-                        title="Pause and move by one frame (Ctrl+Alt+P)"
-                    >
-                        <Icon name="step" />
-                    </button>
-                </div>
-            )}
 
             <div className="viewport-tools">
                 {!store.gameView && GIZMO_MODES.map(({ mode, icon, title }) => (
@@ -716,11 +709,16 @@ export default function Viewport() {
             {(store.editingPrefab || store.playing) && (
                 <div className={`viewport-badge ${store.playing ? "playing" : ""}`}>
                     {store.paused ? "Paused" : store.playing ? "Playing" : `Editing prefab: ${store.editingPrefab}`}
+                    {store.playScene && ` · scene ${store.playScene}`}
                 </div>
             )}
 
             {store.previewCamera && (
-                <div className="viewport-preview">
+                // With a shape given to the picture of the game the frame has that shape too
+                <div
+                    className="viewport-preview"
+                    style={aspectRatio(store.registry.settings) ? { height: "auto", aspectRatio: String(aspectRatio(store.registry.settings)) } : undefined}
+                >
                     <span>{store.selected?.name}</span>
                 </div>
             )}

@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { environmentFields } from "../engine";
 import type { EnvironmentData, Params } from "../engine";
-import { Fields, LayersSection, Section } from "./Inspector";
+import { Fields, GameSection, LayersSection, Section, TagsSection } from "./Inspector";
 import { resetLayout } from "./layout";
 import type { SettingsPage } from "./core/SceneStore";
 import { useSceneStore } from "./core/useSceneStore";
@@ -9,7 +9,7 @@ import { Icon } from "./ui";
 import type { IconName } from "./ui";
 
 const PAGES: { key: SettingsPage; title: string; icon: IconName; about: string }[] = [
-    { key: "project", title: "Project", icon: "folder", about: "What belongs to the whole project; kept in project.json" },
+    { key: "project", title: "Project", icon: "folder", about: "The game, tags and collision layers of the whole project; kept in project.json" },
     { key: "scene", title: "Scene", icon: "scene", about: "The settings of the open scene; saved with it" },
     { key: "editor", title: "Editor", icon: "settings", about: "How the editor itself behaves; kept in this browser, not in the project" },
     { key: "controls", title: "Controls", icon: "move", about: "The mouse and the keys of the editor" }
@@ -128,6 +128,8 @@ export default function SettingsWindow() {
                                         </div>
                                     </div>
                                 </Section>
+                                <GameSection />
+                                <TagsSection />
                                 <LayersSection />
                             </>
                         )}

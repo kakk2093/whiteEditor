@@ -1,4 +1,4 @@
-import { parsePrefab, parseSettings, Registry } from "../../engine";
+import { parsePrefab, parseSettings, Registry, serializeSettings } from "../../engine";
 import type { LookData, ProjectSettings } from "../../engine";
 
 // Talks to the dev-server API from vite-plugin-projects.ts
@@ -64,7 +64,7 @@ export async function revealFile(project: string, path: string) {
 
 // project.json of the project: its settings (collision layers)
 export async function writeSettings(project: string, settings: ProjectSettings) {
-    await request(`${project}/settings`, { method: "PUT", body: JSON.stringify(settings) });
+    await request(`${project}/settings`, { method: "PUT", body: JSON.stringify(serializeSettings(settings)) });
 }
 
 // Builds the game of the project into its build/ folder; `url` is where the dev server shows it
@@ -96,6 +96,7 @@ export async function loadRegistry(project: string) {
     } catch (e) {
         errors.push(`project.json: ${e instanceof Error ? e.message : String(e)}`);
     }
+    registry.setScenes(await listAssets(project, "scenes"));
     for (const name of await listAssets(project, "materials")) {
         registry.setMaterial(name, (await readAsset(project, "materials", name)) as object);
     }

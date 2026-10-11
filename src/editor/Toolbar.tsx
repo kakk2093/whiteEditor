@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { buildGame, closePrefab, newProject, newScene, openProject, openScene, save, saveSceneAs, showInExplorer } from "./core/actions";
 import { useSceneStore } from "./core/useSceneStore";
-import { openContextMenu } from "./contextMenu";
+import { contextMenuOwner, openContextMenu, useContextMenu } from "./contextMenu";
 import type { ContextSection } from "./contextMenu";
 import { copyToClipboard, CREATE_MENU, createObject } from "./createMenu";
 import { resetLayout } from "./layout";
@@ -51,8 +51,8 @@ export default function Toolbar() {
                 {
                     title: inScene ? "Game" : undefined,
                     items: !inScene ? [] : [
-                        { label: "Build Game", icon: "build", run: build },
-                        ...(gameUrl ? [{ label: "Open Built Game", run: () => void window.open(gameUrl, "_blank") }] : [])
+                        { label: building ? "Building…" : "Build Game", icon: "build", disabled: building, run: build },
+                        { label: "Open Built Game", disabled: !gameUrl, run: () => void window.open(gameUrl ?? "", "_blank") }
                     ]
                 },
                 {
@@ -73,22 +73,18 @@ export default function Toolbar() {
             sections: [
                 {
                     items: [
-                        ...(store.canUndo ? [{ label: "Undo", icon: "undo" as const, shortcut: "Ctrl+Z", run: () => store.undo() }] : []),
-                        ...(store.canRedo ? [{ label: "Redo", icon: "redo" as const, shortcut: "Ctrl+Y", run: () => store.redo() }] : [])
+                        { label: "Undo", icon: "undo", shortcut: "Ctrl+Z", disabled: !store.canUndo, run: () => store.undo() },
+                        { label: "Redo", icon: "redo", shortcut: "Ctrl+Y", disabled: !store.canRedo, run: () => store.redo() }
                     ]
                 },
                 {
                     items: [
-                        ...(selected ? [
-                            { label: "Copy", icon: "copy" as const, shortcut: "Ctrl+C", run: copyToClipboard },
-                            { label: "Duplicate", shortcut: "Ctrl+D", run: () => void store.duplicateSelected() }
-                        ] : []),
-                        ...(store.clipboard ? [{ label: "Paste", shortcut: "Ctrl+V", run: () => void store.paste() }] : []),
-                        ...(selected ? [
-                            { label: "Rename", shortcut: "F2", run: () => store.startRename() },
-                            { label: "Group", icon: "folder" as const, shortcut: "Ctrl+G", run: () => store.groupSelected() },
-                            { label: "Delete", icon: "trash" as const, shortcut: "Del", danger: true, run: () => store.removeSelected() }
-                        ] : [])
+                        { label: "Copy", icon: "copy", shortcut: "Ctrl+C", disabled: !selected, run: copyToClipboard },
+                        { label: "Duplicate", shortcut: "Ctrl+D", disabled: !selected, run: () => void store.duplicateSelected() },
+                        { label: "Paste", shortcut: "Ctrl+V", disabled: !store.clipboard, run: () => void store.paste() },
+                        { label: "Rename", shortcut: "F2", disabled: store.selectedIds.length !== 1, run: () => store.startRename() },
+                        { label: "Group", icon: "folder", shortcut: "Ctrl+G", disabled: !selected, run: () => store.groupSelected() },
+                        { label: "Delete", icon: "trash", shortcut: "Del", danger: true, disabled: !selected, run: () => store.removeSelected() }
                     ]
                 },
                 { items: [{ label: "Editor Settings…", icon: "settings", run: () => store.openSettings("editor") }] }
@@ -109,14 +105,13 @@ export default function Toolbar() {
         {
             title: "Play",
             sections: [{
-                items: editingPrefab ? [] : [
+                // A prefab that is being edited cannot be played
+                items: [
                     store.playing
                         ? { label: "Stop", icon: "stop", shortcut: "Ctrl+P", run: () => store.requestStop() }
-                        : { label: "Play", icon: "play", shortcut: "Ctrl+P", run: () => store.play() },
-                    ...(store.playing ? [
-                        { label: store.paused ? "Resume" : "Pause", icon: "pause" as const, shortcut: "Ctrl+Shift+P", run: () => store.togglePause() },
-                        { label: "Step One Frame", icon: "step" as const, shortcut: "Ctrl+Alt+P", run: () => store.step() }
-                    ] : [])
+                        : { label: "Play", icon: "play", shortcut: "Ctrl+P", disabled: editingPrefab !== null, run: () => store.play() },
+                    { label: store.paused ? "Resume" : "Pause", icon: "pause", shortcut: "Ctrl+Shift+P", disabled: !store.playing, run: () => store.togglePause() },
+                    { label: "Step One Frame", icon: "step", shortcut: "Ctrl+Alt+P", disabled: !store.playing, run: () => store.step() }
                 ]
             }]
         },
@@ -126,7 +121,7 @@ export default function Toolbar() {
                 {
                     title: "Settings",
                     items: [
-                        { label: "Project: collision layers", icon: "folder", run: () => store.openSettings("project") },
+                        { label: "Project: game, tags, layers", icon: "folder", run: () => store.openSettings("project") },
                         { label: "Scene: environment", icon: "scene", run: () => store.openSettings("scene") },
                         { label: "Editor: gizmo, viewport, panels", icon: "settings", run: () => store.openSettings("editor") }
                     ]
@@ -147,6 +142,14 @@ export default function Toolbar() {
     // Without a project there is only what opens one
     const shownMenus = project ? menus : menus.slice(0, 1);
 
+    // The menu of the bar that is open now; with one open, the others open as the mouse comes over them
+    const openMenu = useContextMenu()?.owner;
+    const showMenu = (button: HTMLElement, menu: (typeof menus)[number]) => {
+        const rect = button.getBoundingClientRect();
+        const at = { clientX: rect.left, clientY: rect.bottom + 2, preventDefault: () => {}, stopPropagation: () => {} };
+        openContextMenu(at, menu.sections, `menubar:${menu.title}`);
+    };
+
     return (
         <div className="topbar">
             <span className="brand">whiteEditor</span>
@@ -155,11 +158,12 @@ export default function Toolbar() {
                 {shownMenus.map((menu) => (
                     <button
                         key={menu.title}
-                        className="menubar-item"
-                        onClick={(e) => {
-                            // The list opens right under its name
-                            const rect = e.currentTarget.getBoundingClientRect();
-                            openContextMenu({ clientX: rect.left, clientY: rect.bottom + 2, preventDefault: () => {}, stopPropagation: () => {} }, menu.sections);
+                        className={`menubar-item ${openMenu === `menubar:${menu.title}` ? "open" : ""}`}
+                        // The list opens right under its name
+                        onClick={(e) => showMenu(e.currentTarget, menu)}
+                        onMouseEnter={(e) => {
+                            const owner = contextMenuOwner();
+                            if (owner?.startsWith("menubar:") && owner !== `menubar:${menu.title}`) showMenu(e.currentTarget, menu);
                         }}
                     >
                         {menu.title}
@@ -228,6 +232,34 @@ export default function Toolbar() {
                         <Icon name="settings" />
                     </button>
                     {building && <span className="label">Building the game…</span>}
+                    {/* Play, Pause and Step: in the middle of what is left of the bar */}
+                    {!editingPrefab && (
+                    <div className="topbar-play">
+                        <button
+                            className={`btn ${store.playing ? "playing" : ""}`}
+                            onClick={() => (store.playing ? store.requestStop() : store.play())}
+                            title={store.playing ? "Stop the scene (Ctrl+P)" : "Run the scene with its scripts (Ctrl+P)"}
+                        >
+                            <Icon name={store.playing ? "stop" : "play"} />
+                        </button>
+                        <button
+                            className={`btn ${store.paused ? "playing" : ""}`}
+                            onClick={() => store.togglePause()}
+                            disabled={!store.playing}
+                            title={store.paused ? "Resume (Ctrl+Shift+P)" : "Pause: freeze the scene to look at it and edit it (Ctrl+Shift+P)"}
+                        >
+                            <Icon name="pause" />
+                        </button>
+                        <button
+                            className="btn"
+                            onClick={() => store.step()}
+                            disabled={!store.playing}
+                            title="Pause and move by one frame (Ctrl+Alt+P)"
+                        >
+                            <Icon name="step" />
+                        </button>
+                    </div>
+                    )}
                 </>
             )}
 

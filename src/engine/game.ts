@@ -61,8 +61,9 @@ export class Game {
     // The objects of the scene entities by entity id; of what is inside prefab instances by "<instance id>/<path>"
     private objects = new Map<string, THREE.Object3D>();
 
-    // Builds its own objects; `data` is only read
-    constructor(registry: Registry, data: SceneData) {
+    // Builds its own objects; `data` is only read. `globals` is what the behaviors keep from scene to scene:
+    // a game of several scenes gives each of them the same object.
+    constructor(registry: Registry, data: SceneData, globals: Record<string, unknown> = {}) {
         this.registry = registry;
         applyEnvironment(this.scene, data.environment);
         this.root = loadScene(registry, data);
@@ -74,6 +75,7 @@ export class Game {
         this.camera = findCamera(this.root);
         this.runtime = new Runtime(registry, this.root, this.input);
         this.runtime.camera = this.camera;
+        this.runtime.globals = globals;
     }
 
     start() {
@@ -92,6 +94,12 @@ export class Game {
     // Call when the size of the canvas changes
     resize(width: number, height: number) {
         if (this.camera && height > 0) setCameraAspect(this.camera, width / height);
+    }
+
+    // The scene a behavior has asked for with self.loadScene() in the last update, null if none. Whoever
+    // runs the game then disposes of it and starts a Game of that scene, with the same globals.
+    get requestedScene() {
+        return this.runtime.requestedScene;
     }
 
     // The object of a scene entity, by entity id

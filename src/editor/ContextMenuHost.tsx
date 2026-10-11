@@ -45,9 +45,11 @@ export default function ContextMenuHost() {
                     {section.items.map((item) => (
                         <div
                             key={item.label}
-                            className={`menu-item ${item.danger ? "danger" : ""}`}
+                            className={`menu-item ${item.danger ? "danger" : ""} ${item.disabled ? "disabled" : ""}`}
                             role="menuitem"
+                            aria-disabled={item.disabled}
                             onClick={() => {
+                                if (item.disabled) return;
                                 closeContextMenu();
                                 item.run();
                             }}

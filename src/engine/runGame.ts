@@ -4,6 +4,7 @@ import type { SceneCamera } from "./game";
 import { resolveLook } from "./look";
 import { RenderPipeline } from "./pipeline";
 import type { Registry } from "./Registry";
+import { fitAspect } from "./settings";
 import type { SceneData, Vec3 } from "./types";
 
 // The renderer of the editor viewport and of the built game: one place for its settings, so both look the same.
@@ -110,33 +111,59 @@ function showMessage(container: HTMLElement, text: string) {
         container.appendChild(box);
     }
     box.textContent = text;
+    box.style.display = text ? "" : "none";
 }
 
 // The whole game outside of the editor: fills `container` with a canvas, runs the scene with its behaviors and
 // draws it through the camera of the scene. A built game (npm run build:game) is this function plus the
 // project's scripts and assets.
-export function runGame(container: HTMLElement, registry: Registry, data: SceneData) {
-    const renderer = createRenderer();
-    container.appendChild(renderer.domElement);
+// `scenes` is one scene, or every scene of the project by name with `start` naming the first: then
+// self.loadScene() of a behavior goes from one to another. The picture has the shape the project settings
+// give it (registry.settings.aspect), centered in the container.
+export function runGame(container: HTMLElement, registry: Registry, scenes: SceneData | Record<string, SceneData>, start?: string) {
+    const all: Record<string, SceneData> = "entities" in scenes ? { [start ?? "main"]: scenes as SceneData } : scenes;
+    const first = start && all[start] ? start : Object.keys(all)[0];
+    registry.setScenes(Object.keys(all));
 
-    const game = new Game(registry, data);
+    const renderer = createRenderer();
+    const canvas = renderer.domElement;
+    canvas.style.position = "absolute";
+    if (getComputedStyle(container).position === "static") container.style.position = "relative";
+    container.appendChild(canvas);
+
     // The look of the scene: the same drawing code as the editor viewport
     const pipeline = new RenderPipeline(renderer);
-    const look = data.environment?.look;
-    pipeline.setLook(look ? resolveLook(registry, look) : null, registry);
-    game.runtime.onError = (message) => showMessage(container, message);
-    const detachInput = game.input.attach(renderer.domElement);
-    if (!game.camera) showMessage(container, "The scene has no active object with a Camera component.");
+    // What the behaviors keep from scene to scene
+    const globals: Record<string, unknown> = {};
+    let game: Game;
+    let detachInput = () => {};
 
     const resize = () => {
-        renderer.setSize(container.clientWidth, container.clientHeight);
-        game.resize(container.clientWidth, container.clientHeight);
+        const area = fitAspect(registry.settings, container.clientWidth, container.clientHeight);
+        canvas.style.left = `${area.left}px`;
+        canvas.style.top = `${area.top}px`;
+        renderer.setSize(area.width, area.height);
+        game.resize(area.width, area.height);
     };
+
+    // Starts a scene; the one that was running is taken down first
+    const enter = (name: string) => {
+        const data = all[name];
+        detachInput();
+        game?.dispose();
+        game = new Game(registry, data, globals);
+        const look = data.environment?.look;
+        pipeline.setLook(look ? resolveLook(registry, look) : null, registry);
+        game.runtime.onError = (message) => showMessage(container, message);
+        detachInput = game.input.attach(canvas);
+        showMessage(container, game.camera ? "" : `The scene "${name}" has no active object with a Camera component.`);
+        resize();
+        game.start();
+    };
+    enter(first);
+
     const observer = new ResizeObserver(resize);
     observer.observe(container);
-    resize();
-
-    game.start();
 
     let frame = 0;
     let last = performance.now();
@@ -148,14 +175,23 @@ export function runGame(container: HTMLElement, registry: Registry, data: SceneD
         last = now;
 
         game.update(dt);
+        // A behavior has asked for another scene: this one is over
+        const next = game.requestedScene;
+        if (next !== null) {
+            if (all[next]) enter(next);
+            else showMessage(container, `loadScene: there is no scene "${next}" in this game.`);
+            game.runtime.requestedScene = null;
+        }
         // A script may have switched the camera on, off or replaced it
-        game.resize(container.clientWidth, container.clientHeight);
+        game.resize(canvas.clientWidth, canvas.clientHeight);
         if (game.camera) pipeline.render(game.scene, game.camera, dt);
     };
     animate();
 
     return {
-        game,
+        get game() {
+            return game;
+        },
         stop() {
             cancelAnimationFrame(frame);
             observer.disconnect();
@@ -163,7 +199,7 @@ export function runGame(container: HTMLElement, registry: Registry, data: SceneD
             game.dispose();
             pipeline.dispose();
             renderer.dispose();
-            renderer.domElement.remove();
+            canvas.remove();
         },
     };
 }
