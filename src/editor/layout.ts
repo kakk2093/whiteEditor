@@ -8,11 +8,13 @@ export interface Layout {
     right: number;
     // Height of the Project panel
     bottom: number;
+    // Width of the tree at the left of the Project panel
+    tree: number;
 }
 
-export const DEFAULT_LAYOUT: Layout = { left: 250, right: 290, bottom: 190 };
+export const DEFAULT_LAYOUT: Layout = { left: 250, right: 290, bottom: 190, tree: 190 };
 
-export const LIMITS: Record<keyof Layout, [number, number]> = { left: [150, 700], right: [200, 800], bottom: [80, 700] };
+export const LIMITS: Record<keyof Layout, [number, number]> = { left: [150, 700], right: [200, 800], bottom: [80, 700], tree: [110, 500] };
 
 const LAYOUT_KEY = "white:layout";
 

@@ -260,7 +260,8 @@ a.btn {
 }
 
 .project-tree {
-    width: 190px;
+    width: var(--tree-width, 190px);
+    max-width: 60%;
     flex-shrink: 0;
     padding: 4px 0;
     overflow-y: auto;

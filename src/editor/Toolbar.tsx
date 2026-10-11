@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { buildGame, closePrefab, newProject, newScene, openProject, openScene, save, saveSceneAs } from "./core/actions";
+import { buildGame, closePrefab, newProject, newScene, openProject, openScene, save, saveSceneAs, showInExplorer } from "./core/actions";
 import { useSceneStore } from "./core/useSceneStore";
 import { openContextMenu } from "./contextMenu";
 import type { ContextSection } from "./contextMenu";
@@ -60,7 +60,10 @@ export default function Toolbar() {
                     items: [
                         { label: "New Project…", icon: "plus", run: () => setDialog("project") },
                         ...projects.filter((name) => name !== project).map((name) => ({ label: `Open ${name}`, icon: "folder" as const, run: () => void openProject(name) })),
-                        ...(project ? [{ label: "Project Settings…", icon: "settings" as const, run: () => store.openSettings("project") }] : [])
+                        ...(project ? [
+                            { label: "Show Project in Explorer", icon: "folder" as const, run: () => void showInExplorer() },
+                            { label: "Project Settings…", icon: "settings" as const, run: () => store.openSettings("project") }
+                        ] : [])
                     ]
                 }
             ]

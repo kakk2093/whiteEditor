@@ -3,13 +3,14 @@ import { DEFAULT_LAYOUT, LIMITS } from "./layout";
 import type { Layout } from "./layout";
 
 // The border of a panel that can be dragged to resize it; a double click puts the default size back.
-// `side` is the panel it resizes: the left and the right one by width, the bottom one by height.
+// `side` is what it resizes: the left and the right panel and the tree of the Project panel by width, the
+// bottom panel by height.
 export function Splitter({ side, layout, onChange }: { side: keyof Layout; layout: Layout; onChange: (change: (layout: Layout) => Layout) => void }) {
     // Where the drag began and what the size was
     const drag = useRef<{ at: number; size: number } | null>(null);
     const row = side === "bottom";
     // Dragging towards the viewport makes the panel bigger
-    const direction = side === "left" ? 1 : -1;
+    const direction = side === "left" || side === "tree" ? 1 : -1;
     const [min, max] = LIMITS[side];
 
     return (

@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { Plugin } from 'vite'
@@ -134,6 +135,17 @@ export async function listImages(assetsDir: string) {
   return files.map(toPosix).filter((f) => /\.(png|jpe?g|webp)$/i.test(f)).sort()
 }
 
+// Opens the file manager of the system with the file selected (or, for a folder, inside it)
+function revealInFileManager(target: string, isFile: boolean) {
+  const [command, args] = process.platform === 'win32'
+    ? ['explorer.exe', isFile ? [`/select,${target}`] : [target]]
+    : process.platform === 'darwin'
+      ? ['open', isFile ? ['-R', target] : [target]]
+      // No common way to select a file there: its folder is opened
+      : ['xdg-open', [isFile ? path.dirname(target) : target]]
+  spawn(command, args, { detached: true, stdio: 'ignore' }).on('error', () => {}).unref()
+}
+
 export function projectsPlugin(dir = 'projects'): Plugin {
   let root = ''
 
@@ -249,6 +261,21 @@ export function projectsPlugin(dir = 'projects'): Plugin {
           if (scene && !NAME.test(scene)) throw new HttpError(400, 'Bad name')
           const result = await buildGame(server.config.root, projectDir, scene ?? undefined)
           return { scene: result.scene, files: result.files, url: `/__game/${project}/` }
+        }
+
+        // POST /__api/projects/demo/reveal?path=materials/Wood.json -> the file manager of the system opens on that
+        // file. Without a path, or if there is no such file, on the nearest folder that exists.
+        if (section === 'reveal' && !item) {
+          if (method !== 'POST') throw new HttpError(405, 'Method not allowed')
+          let target = path.resolve(projectDir, query.get('path') ?? '')
+          if (target !== projectDir && !target.startsWith(projectDir + path.sep)) throw new HttpError(400, 'The path leads out of the project')
+          let stat = await fs.stat(target).catch(() => null)
+          while (!stat && target !== projectDir) {
+            target = path.dirname(target)
+            stat = await fs.stat(target).catch(() => null)
+          }
+          revealInFileManager(target, stat?.isFile() ?? false)
+          return { ok: true, path: toPosix(path.relative(projectDir, target)) }
         }
 
         // GET / PUT /__api/projects/demo/folders -> folders.json: which asset lies in which folder of the Project panel

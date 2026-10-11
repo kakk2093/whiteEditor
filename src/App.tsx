@@ -125,7 +125,7 @@ export default function App() {
         <div
             className="app"
             // The sizes of the panels, which editor.css reads
-            style={{ "--left-width": `${layout.left}px`, "--right-width": `${layout.right}px`, "--bottom-height": `${layout.bottom}px` } as CSSProperties}
+            style={{ "--left-width": `${layout.left}px`, "--right-width": `${layout.right}px`, "--bottom-height": `${layout.bottom}px`, "--tree-width": `${layout.tree}px` } as CSSProperties}
             // The editor has its own right-click menus; text fields keep the browser one for copy and paste
             onContextMenu={(e) => {
                 if (!["INPUT", "TEXTAREA"].includes((e.target as HTMLElement).tagName)) e.preventDefault();
@@ -139,7 +139,7 @@ export default function App() {
                     <div className="center">
                         <Viewport />
                         <Splitter side="bottom" layout={layout} onChange={setLayout} />
-                        <ProjectPanel />
+                        <ProjectPanel layout={layout} onLayout={setLayout} />
                     </div>
                     <Splitter side="right" layout={layout} onChange={setLayout} />
                     <Inspector />

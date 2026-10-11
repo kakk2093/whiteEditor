@@ -56,6 +56,12 @@ export async function writeFolders(project: string, data: unknown) {
     await request(`${project}/folders`, { method: "PUT", body: JSON.stringify(data) });
 }
 
+// Shows a file or a folder of the project in the file manager of the system; `path` is inside the project
+// ("materials/Wood.json"), "" is the project folder itself
+export async function revealFile(project: string, path: string) {
+    await request(`${project}/reveal?path=${encodeURIComponent(path)}`, { method: "POST" });
+}
+
 // project.json of the project: its settings (collision layers)
 export async function writeSettings(project: string, settings: ProjectSettings) {
     await request(`${project}/settings`, { method: "PUT", body: JSON.stringify(settings) });

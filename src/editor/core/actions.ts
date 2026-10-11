@@ -15,6 +15,7 @@ import {
     loadRegistry,
     readAsset,
     readFolders,
+    revealFile,
     uploadImage,
     writeAsset,
     writeFolders,
@@ -149,6 +150,24 @@ export async function foldersChangedOnDisk(project: string) {
     } catch (e) {
         report(e);
     }
+}
+
+// Shows a file or a folder of the open project in the file manager of the system ("" is the project itself)
+export async function showInExplorer(path = "") {
+    try {
+        await revealFile(sceneStore.project, path);
+        sceneStore.update({ status: `Shown in the file manager: projects/${sceneStore.project}/${path}` });
+    } catch (e) {
+        report(e);
+    }
+}
+
+// Puts a text into the clipboard of the system
+export function copyText(text: string) {
+    navigator.clipboard?.writeText(text).then(
+        () => sceneStore.update({ status: `Copied: ${text}` }),
+        () => sceneStore.update({ status: "The browser did not let the editor use the clipboard" })
+    );
 }
 
 // The settings of the project (collision layers): applied at once and written to project.json. Not a part of undo.

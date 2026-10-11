@@ -3,7 +3,8 @@ import type { DragEvent, MouseEvent, ReactNode } from "react";
 import { builtinEffects, builtinSurfaces, defaultMaterialData } from "../engine";
 import {
     addToLook, createFolder, createLook, createMaterial, createPrefab, deleteFolder, deleteLook, deleteMaterial, deletePrefab,
-    deleteScene, deleteTexture, duplicateAsset, moveAssetToFolder, newScene, openPrefab, openScene, renameFolder, uploadTextures
+    copyText, deleteScene, deleteTexture, duplicateAsset, moveAssetToFolder, newScene, openPrefab, openScene, renameAsset, renameFolder,
+    renameScene, showInExplorer, uploadTextures
 } from "./core/actions";
 import { confirmAt, openContextMenu } from "./contextMenu";
 import type { ContextItem } from "./contextMenu";
@@ -13,6 +14,8 @@ import type { FolderSection } from "./core/folders";
 import { sceneStore } from "./core/SceneStore";
 import type { AssetRef } from "./core/SceneStore";
 import { useSceneStore } from "./core/useSceneStore";
+import type { Layout } from "./layout";
+import { Splitter } from "./Splitter";
 import { Icon, NameDialog } from "./ui";
 import type { IconName } from "./ui";
 
@@ -56,7 +59,30 @@ const FOLDERS: Partial<Record<TabKey, FolderSection>> = {
 // The dialog that asks for a name: of a new scene, of a new folder, or the new name of a folder
 // `into`: the folder a new scene goes to. For a folder: `parent` is the folder it stands in, `from` its
 // path if it is being renamed.
-type Naming = { what: "scene"; into?: string } | { what: "folder"; parent: string | null; from?: string };
+type Naming =
+    | { what: "scene"; into?: string }
+    | { what: "folder"; parent: string | null; from?: string }
+    // Another name for an asset
+    | { what: "rename"; kind: "scene" | "material" | "look" | "prefab"; from: string };
+
+// Where the files of each kind are, inside the project folder
+const DIRS: Record<TabKey, string> = {
+    scene: "scenes",
+    material: "materials",
+    prefab: "prefabs",
+    look: "looks",
+    texture: "assets",
+    model: "scripts",
+    script: "scripts"
+};
+
+// The file of an asset inside the project folder. What scripts define has no file of its own: for it this is
+// the scripts folder; null for what is built into the engine.
+function fileOf(item: Item): string | null {
+    if (item.kind === "scene" || item.kind === "material" || item.kind === "prefab" || item.kind === "look") return `${DIRS[item.kind]}/${item.name}.json`;
+    if (item.kind === "texture") return `assets/${item.name}`;
+    return item.note?.includes("built-in") ? null : "scripts";
+}
 
 interface Item {
     kind: Kind;
@@ -82,7 +108,7 @@ interface Place {
 
 // The assets of the open project, like Unity's Project window: at the left a tree of the kinds of assets
 // with their folders, at the right what is in the place picked there
-export default function ProjectPanel() {
+export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onLayout: (change: (layout: Layout) => Layout) => void }) {
     const store = useSceneStore();
     const [place, setPlace] = useState<Place>({ tab: "scene", folder: null });
     const [naming, setNaming] = useState<Naming | null>(null);
@@ -197,6 +223,8 @@ export default function ProjectPanel() {
     };
 
     const itemMenu = (e: MouseEvent, item: Item) => {
+        // Selecting the asset clears the selection of objects, and some items are about those objects
+        const objects = [...store.selectedIds];
         store.selectAsset({ kind: item.kind, name: item.name });
         const { kind, name } = item;
         const menu: ContextItem[] = [];
@@ -228,6 +256,38 @@ export default function ProjectPanel() {
         } else {
             menu.push({ label: "Add to the Look of the Scene", icon: "plus", run: () => addToLook(kind === "effect" ? "effects" : "surfaces", name) });
         }
+        // What any asset has: where it is used, its name, its file
+        const more: ContextItem[] = [];
+        if (kind === "material" && objects.length > 0) {
+            more.push({
+                label: objects.length > 1 ? `Assign to ${objects.length} Selected Objects` : "Assign to Selected Object",
+                icon: "material",
+                run: () => {
+                    store.batch(() => objects.forEach((id) => store.setComponentField(id, "mesh", "material", name)));
+                    // Back to the objects: the change is seen on them
+                    store.selectMany(objects);
+                }
+            });
+        }
+        if (kind === "material" || kind === "prefab" || kind === "behavior" || kind === "model") {
+            const users = store.usersOf(kind, name);
+            more.push({
+                label: users.length > 0 ? `Select in Scene (${users.length})` : "Not Used in This Scene",
+                run: () => (users.length > 0 ? store.selectMany(users.map((entity) => entity.id)) : store.update({ status: `Nothing in this scene uses ${name}` }))
+            });
+        }
+        if (kind === "scene" || kind === "material" || kind === "look" || kind === "prefab") {
+            more.push({ label: "Rename…", run: () => setNaming({ what: "rename", kind, from: name }) });
+        }
+        const file = fileOf(item);
+        const files: ContextItem[] = [{ label: "Copy Name", icon: "copy", run: () => copyText(name) }];
+        if (file) {
+            files.push(
+                { label: "Copy Path", run: () => copyText(`projects/${store.project}/${file}`) },
+                { label: file === "scripts" ? "Show Scripts Folder in Explorer" : "Show in Explorer", icon: "folder", run: () => showInExplorer(file) }
+            );
+        }
+
         const moves: ContextItem[] = [];
         if (section) {
             const from = placed.get(name) ?? null;
@@ -236,7 +296,20 @@ export default function ProjectPanel() {
                 if (to !== from) moves.push({ label: `Move to ${to}`, icon: "folder", run: () => moveAssetToFolder(section, name, to) });
             }
         }
-        openContextMenu(e, [{ items: menu }, { title: "Folder", items: moves }]);
+        openContextMenu(e, [{ items: menu }, { items: more }, { title: "Folder", items: moves }, { items: files }]);
+    };
+
+    // The menu of the empty part of the panel and of a kind in the tree: what can be made there, and its files
+    const placeMenu = (e: MouseEvent, t: TabKey, into: string | null) => {
+        openContextMenu(e, [
+            { items: t === tabKey ? createItems(into) : [] },
+            {
+                items: [
+                    { label: `Show ${DIRS[t]}/ in Explorer`, icon: "folder", run: () => showInExplorer(DIRS[t]) },
+                    { label: "Show Project in Explorer", run: () => showInExplorer() }
+                ]
+            }
+        ]);
     };
 
     const folderMenu = (e: MouseEvent, path: string) => {
@@ -344,6 +417,10 @@ export default function ProjectPanel() {
                             style={{ paddingLeft: 6 }}
                             title={t.hint}
                             onClick={() => go(t.key)}
+                            onContextMenu={(e) => {
+                                go(t.key);
+                                placeMenu(e, t.key, null);
+                            }}
                             onDragOver={(e) => e.preventDefault()}
                             onDrop={(e) => dropInto(e, t.key, null)}
                         >
@@ -364,6 +441,9 @@ export default function ProjectPanel() {
                     ];
                 })}
             </div>
+
+            {/* The border of the tree can be dragged, like those of the panels */}
+            <Splitter side="tree" layout={layout} onChange={onLayout} />
 
             <div className="project-main">
                 <div className="project-head">
@@ -400,7 +480,7 @@ export default function ProjectPanel() {
 
                 <div
                     className={`panel-body tiles ${view}`}
-                    onContextMenu={(e) => openContextMenu(e, [{ items: creatable }])}
+                    onContextMenu={(e) => placeMenu(e, tabKey, folder)}
                     onDragOver={(e) => e.preventDefault()}
                     onDrop={(e) => {
                         // Image files dragged in from the desktop become textures
@@ -470,6 +550,21 @@ export default function ProjectPanel() {
                         newScene(name).then(() => {
                             if (naming.into) moveAssetToFolder("scenes", name, naming.into);
                         });
+                    }}
+                />
+            )}
+            {naming?.what === "rename" && (
+                <NameDialog
+                    title={`Rename ${naming.kind} ${naming.from}`}
+                    confirm="Rename"
+                    initial={naming.from}
+                    taken={itemsOf(naming.kind).map((item) => item.name).filter((name) => name !== naming.from)}
+                    onCancel={() => setNaming(null)}
+                    onSubmit={(name) => {
+                        setNaming(null);
+                        // Everything that refers to the asset by name is rewritten with it
+                        if (naming.kind === "scene") renameScene(naming.from, name);
+                        else renameAsset(naming.kind, naming.from, name);
                     }}
                 />
             )}

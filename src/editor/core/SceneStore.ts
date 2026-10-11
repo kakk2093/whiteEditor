@@ -1426,6 +1426,23 @@ class SceneStore {
         this.notify();
     }
 
+    // The entities of the scene that use the asset: a material on their mesh, a behavior, a model, or, for a
+    // prefab, its instances. What is inside prefab instances is not looked through.
+    usersOf(kind: AssetRef["kind"], name: string): EntityData[] {
+        const users: EntityData[] = [];
+        const visit = (list: EntityData[]) => list.forEach((entity) => {
+            const uses = kind === "prefab"
+                ? entity.prefab === name
+                : entity.components.some((c) => (kind === "material" && c.type === "mesh" && c.material === name)
+                    || (kind === "behavior" && c.type === "script" && c.script === name)
+                    || (kind === "model" && c.type === "model" && c.model === name));
+            if (uses) users.push(entity);
+            ownLists(entity).forEach(visit);
+        });
+        visit(this.entities);
+        return users;
+    }
+
     // Every tag the entities of the scene have, for the Inspector to offer
     get tags(): string[] {
         const tags = new Set<string>();
