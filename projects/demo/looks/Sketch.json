@@ -1,0 +1,25 @@
+{
+  "pixelSize": 2,
+  "surfaces": [
+    {
+      "surface": "toon",
+      "steps": 3
+    },
+    {
+      "surface": "boil",
+      "amount": 1.5,
+      "rate": 8
+    }
+  ],
+  "effects": [
+    {
+      "effect": "hatch",
+      "spacing": 5
+    },
+    {
+      "effect": "outline",
+      "lineColor": "#1c1a26",
+      "thickness": 1
+    }
+  ]
+}

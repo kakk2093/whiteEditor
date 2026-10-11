@@ -12,6 +12,13 @@ export interface EffectEntry {
     [param: string]: ParamValue | undefined;
 }
 
+// One surface of a look: { "surface": "toon", "steps": 3 }; same rules as for an effect
+export interface SurfaceEntry {
+    surface: string;
+    enabled?: boolean;
+    [param: string]: ParamValue | undefined;
+}
+
 export interface LookSettings {
     // The scene is drawn in a picture this many times smaller and scaled up with hard pixels; 1 = full size
     pixelSize: number;
@@ -23,6 +30,8 @@ export interface LookData extends Partial<LookSettings> {
     // Name of another look this one is built on: it takes that look's settings and effects, changes the
     // ones it names again and adds its own
     extends?: string;
+    // What is added to the materials of the scene (see surface.ts), applied in this order
+    surfaces?: SurfaceEntry[];
     // Screen effects, applied in this order
     effects?: EffectEntry[];
 }
@@ -35,6 +44,7 @@ export const lookFields: Record<keyof LookSettings, ParamDef> = {
 
 // A look with everything it extends folded in
 export interface ResolvedLook extends LookSettings {
+    surfaces: SurfaceEntry[];
     effects: EffectEntry[];
 }
 
@@ -165,8 +175,19 @@ vec4 effect(vec2 uv, vec4 color) {
 // Known to every project; a project effect with the same name replaces the built-in one
 export const builtinEffects: EffectDef[] = [outline, palette, grade, vignette];
 
-// The look with what it extends folded in; null if there is no such look.
-// An effect named again in an extending look keeps its place in the list and gets the new params.
+// An entry named again in an extending look keeps its place in the list and gets the new params
+function mergeEntries<E extends EffectEntry | SurfaceEntry>(base: E[], own: E[], key: "effect" | "surface"): E[] {
+    const name = (entry: E) => (entry as Record<string, unknown>)[key];
+    const merged = base.map((e) => ({ ...e }));
+    for (const entry of own) {
+        const inherited = merged.find((e) => name(e) === name(entry));
+        if (inherited) Object.assign(inherited, entry);
+        else merged.push({ ...entry });
+    }
+    return merged;
+}
+
+// The look with what it extends folded in; null if there is no such look
 export function resolveLook(registry: Registry, name: string, seen: string[] = []): ResolvedLook | null {
     const data = registry.getLookData(name);
     if (!data || seen.includes(name)) return null;
@@ -175,19 +196,15 @@ export function resolveLook(registry: Registry, name: string, seen: string[] = [
         pixelSize: lookFields.pixelSize.default as number,
         toneMapping: lookFields.toneMapping.default as string,
         exposure: lookFields.exposure.default as number,
+        surfaces: [],
         effects: [],
     };
 
-    const effects = base.effects.map((e) => ({ ...e }));
-    for (const entry of data.effects ?? []) {
-        const inherited = effects.find((e) => e.effect === entry.effect);
-        if (inherited) Object.assign(inherited, entry);
-        else effects.push({ ...entry });
-    }
     return {
         pixelSize: data.pixelSize ?? base.pixelSize,
         toneMapping: data.toneMapping ?? base.toneMapping,
         exposure: data.exposure ?? base.exposure,
-        effects,
+        surfaces: mergeEntries(base.surfaces, data.surfaces ?? [], "surface"),
+        effects: mergeEntries(base.effects, data.effects ?? [], "effect"),
     };
 }

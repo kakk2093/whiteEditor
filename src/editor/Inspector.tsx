@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { ReactNode } from "react";
 import { componentDefs, componentKey, environmentFields, lookFields, materialFields, paramDefaults, resolveLook } from "../engine";
 import type {
-    ComponentData, EffectEntry, EntityData, EnvironmentData, LookData, MaterialData, ParamDef, ParamValue, Params
+    ComponentData, EntityData, EnvironmentData, LookData, MaterialData, ParamDef, ParamValue, Params
 } from "../engine";
 import {
     createPrefab, deleteLook, deleteMaterial, deletePrefab, deleteScene, openPrefab, openScene, updateLook, updateMaterial
@@ -326,38 +326,114 @@ function EntityInspector({ entity }: { entity: EntityData }) {
     );
 }
 
-// A look asset: its settings and the list of its screen effects. With "extends" the list starts with the
-// effects of the base look; changing one of those writes the change into this look, the base stays as it is.
+// One of the two lists of a look: its surfaces or its screen effects. With "extends" the list starts with the
+// entries of the base look; changing one of those writes the change into this look, the base stays as it is.
+function LookList({ name, list, what }: { name: string; list: "surfaces" | "effects"; what: "surface" | "effect" }) {
+    const { registry } = useSceneStore();
+    const data = registry.getLookData(name) ?? {};
+    type Entry = Record<string, ParamValue | undefined>;
+    const nameOf = (entry: Entry) => entry[what] as string;
+    const own = (data[list] ?? []) as Entry[];
+    const resolved = (resolveLook(registry, name)?.[list] ?? []) as Entry[];
+    const base = ((data.extends ? resolveLook(registry, data.extends)?.[list] : null) ?? []) as Entry[];
+    const defs: { name: string; label?: string; params?: Record<string, ParamDef> }[] =
+        list === "surfaces" ? registry.surfaces() : registry.effects();
+    const title = what === "surface" ? "Surface" : "Effect";
+
+    const save = (entries: Entry[]) => updateLook(name, { ...data, [list]: entries });
+    // Writes params of one entry; one that so far only came from the base look gets its own entry
+    const set = (entry: string, patch: Entry) => {
+        const exists = own.some((e) => nameOf(e) === entry);
+        save(exists ? own.map((e) => (nameOf(e) === entry ? { ...e, ...patch } : e)) : [...own, { [what]: entry, ...patch }]);
+    };
+    const move = (entry: string, by: number) => {
+        const from = own.findIndex((e) => nameOf(e) === entry);
+        const to = from + by;
+        if (from < 0 || to < 0 || to >= own.length) return;
+        const entries = [...own];
+        [entries[from], entries[to]] = [entries[to], entries[from]];
+        save(entries);
+    };
+
+    const addable = defs.filter((def) => !resolved.some((e) => nameOf(e) === def.name));
+
+    return (
+        <>
+            {resolved.map((entry) => {
+                const entryName = nameOf(entry);
+                const def = defs.find((d) => d.name === entryName);
+                const isOwn = own.some((e) => nameOf(e) === entryName);
+                const inherited = base.some((e) => nameOf(e) === entryName);
+                const index = own.findIndex((e) => nameOf(e) === entryName);
+                return (
+                    <Section
+                        key={entryName}
+                        title={(
+                            <>
+                                <input
+                                    className="checkbox"
+                                    type="checkbox"
+                                    title="Enabled"
+                                    checked={entry.enabled !== false}
+                                    onChange={(e) => set(entryName, { enabled: e.target.checked })}
+                                />
+                                {def?.label ?? entryName}{inherited ? ` (from ${data.extends})` : ""}
+                            </>
+                        )}
+                        extra={isOwn && !inherited && (
+                            <>
+                                <button className="btn ghost" title="Apply earlier" disabled={index <= 0} onClick={() => move(entryName, -1)}>
+                                    <Icon name="up" size={12} />
+                                </button>
+                                <button className="btn ghost" title="Apply later" disabled={index >= own.length - 1} onClick={() => move(entryName, 1)}>
+                                    <Icon name="down" size={12} />
+                                </button>
+                            </>
+                        )}
+                        removeTitle={inherited ? "Drop the changes made here, back to the base look" : `Remove ${what}`}
+                        onRemove={isOwn ? () => save(own.filter((e) => nameOf(e) !== entryName)) : undefined}
+                    >
+                        {def ? (
+                            <Fields
+                                defs={def.params ?? {}}
+                                values={entry as Params}
+                                onChange={(key, value) => set(entryName, { [key]: value })}
+                            />
+                        ) : (
+                            <div className="note">The {what} <b>{entryName}</b> is not defined in the project's scripts/ folder.</div>
+                        )}
+                    </Section>
+                );
+            })}
+
+            {addable.length > 0 && (
+                <div className="add-component">
+                    <Menu
+                        up={resolved.length > 1}
+                        sections={[{ items: addable.map((def) => ({ key: def.name, label: def.label ?? def.name })) }]}
+                        onPick={(entry) => set(entry, {})}
+                        trigger={(toggle) => (
+                            <button className="btn" onClick={toggle}>
+                                <Icon name="plus" /> Add {title}
+                            </button>
+                        )}
+                    />
+                </div>
+            )}
+        </>
+    );
+}
+
+// A look asset: its settings, what it adds to the materials (surfaces) and its screen effects
 function LookInspector({ name }: { name: string }) {
     const store = useSceneStore();
     const { registry } = store;
     const data = registry.getLookData(name) ?? {};
-    const own = data.effects ?? [];
-    const resolved = resolveLook(registry, name);
     const base = data.extends ? resolveLook(registry, data.extends) : null;
     const used = store.environment.look === name;
 
     const save = (patch: Partial<LookData>) => updateLook(name, { ...data, ...patch });
-    // Writes params of one effect; an effect that so far only came from the base look gets its own entry
-    const setEffect = (effect: string, patch: Partial<EffectEntry>) => {
-        const exists = own.some((e) => e.effect === effect);
-        save({
-            effects: exists
-                ? own.map((e) => (e.effect === effect ? { ...e, ...patch } : e))
-                : [...own, { effect, ...patch }]
-        });
-    };
-    const move = (effect: string, by: number) => {
-        const from = own.findIndex((e) => e.effect === effect);
-        const to = from + by;
-        if (from < 0 || to < 0 || to >= own.length) return;
-        const effects = [...own];
-        [effects[from], effects[to]] = [effects[to], effects[from]];
-        save({ effects });
-    };
-
     const others = registry.lookNames().filter((n) => n !== name);
-    const addable = registry.effects().filter((def) => !resolved?.effects.some((e) => e.effect === def.name));
 
     return (
         <>
@@ -400,69 +476,16 @@ function LookInspector({ name }: { name: string }) {
                 />
             </Section>
 
-            {(resolved?.effects ?? []).map((entry) => {
-                const def = registry.getEffect(entry.effect);
-                const isOwn = own.some((e) => e.effect === entry.effect);
-                const inherited = base?.effects.some((e) => e.effect === entry.effect) ?? false;
-                const index = own.findIndex((e) => e.effect === entry.effect);
-                return (
-                    <Section
-                        key={entry.effect}
-                        title={(
-                            <>
-                                <input
-                                    className="checkbox"
-                                    type="checkbox"
-                                    title="Enabled"
-                                    checked={entry.enabled !== false}
-                                    onChange={(e) => setEffect(entry.effect, { enabled: e.target.checked })}
-                                />
-                                {def?.label ?? entry.effect}{inherited ? ` (from ${data.extends})` : ""}
-                            </>
-                        )}
-                        extra={isOwn && !inherited && (
-                            <>
-                                <button className="btn ghost" title="Apply earlier" disabled={index <= 0} onClick={() => move(entry.effect, -1)}>
-                                    <Icon name="up" size={12} />
-                                </button>
-                                <button className="btn ghost" title="Apply later" disabled={index >= own.length - 1} onClick={() => move(entry.effect, 1)}>
-                                    <Icon name="down" size={12} />
-                                </button>
-                            </>
-                        )}
-                        removeTitle={inherited ? "Drop the changes made here, back to the base look" : "Remove effect"}
-                        onRemove={isOwn ? () => save({ effects: own.filter((e) => e.effect !== entry.effect) }) : undefined}
-                    >
-                        {def ? (
-                            <Fields
-                                defs={def.params ?? {}}
-                                values={entry as Params}
-                                onChange={(key, value) => setEffect(entry.effect, { [key]: value })}
-                            />
-                        ) : (
-                            <div className="note">The effect <b>{entry.effect}</b> is not defined in the project's scripts/ folder.</div>
-                        )}
-                    </Section>
-                );
-            })}
-
-            {addable.length > 0 && (
-                <div className="add-component">
-                    <Menu
-                        up={(resolved?.effects.length ?? 0) > 1}
-                        sections={[{ items: addable.map((def) => ({ key: def.name, label: def.label ?? def.name })) }]}
-                        onPick={(effect) => setEffect(effect, {})}
-                        trigger={(toggle) => (
-                            <button className="btn" onClick={toggle}>
-                                <Icon name="plus" /> Add Effect
-                            </button>
-                        )}
-                    />
-                </div>
-            )}
+            <LookList name={name} list="surfaces" what="surface" />
             <div className="note">
-                Effects are applied from top to bottom. Changes are saved at once. New effects are written in the project's
-                scripts/ folder with defineEffect.
+                Surfaces change how every object of the scene is drawn: where its vertices land, how light falls on it.
+                New ones are written in the project's scripts/ folder with defineSurface.
+            </div>
+
+            <LookList name={name} list="effects" what="effect" />
+            <div className="note">
+                Effects work on the finished picture, from top to bottom. Changes are saved at once. New effects are
+                written in the project's scripts/ folder with defineEffect.
             </div>
         </>
     );

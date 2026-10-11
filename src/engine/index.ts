@@ -4,6 +4,7 @@ export * from "./components";
 export * from "./materials";
 export * from "./environment";
 export * from "./look";
+export * from "./surface";
 export * from "./pipeline";
 export * from "./loadScene";
 export * from "./input";

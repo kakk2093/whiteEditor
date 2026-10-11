@@ -57,6 +57,10 @@ function cloneWithNewIds(entity: EntityData): EntityData {
 // `key` is what componentKey() gives: the type, or "script:<behavior>" for the types an entity can have several of
 export const getComponent = findComponent;
 
+// The three.js layer of what only the editor shows inside the scene: the grid, the markers of lights and
+// cameras. The viewport draws this layer after the look of the scene, sharp and untouched by its effects.
+export const EDITOR_LAYER = 1;
+
 // Lights and cameras draw nothing, so the editor gives them a clickable marker
 function createHelper(entity: EntityData): THREE.Object3D | null {
     const light = getComponent(entity, "light");
@@ -85,6 +89,7 @@ function createHelper(entity: EntityData): THREE.Object3D | null {
     }
 
     helper.userData.editorHelper = true;
+    helper.traverse((part) => part.layers.set(EDITOR_LAYER));
     return helper;
 }
 

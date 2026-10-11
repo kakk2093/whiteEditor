@@ -5,7 +5,7 @@ import { TransformControls } from "three/examples/jsm/controls/TransformControls
 import { createRenderer, RenderPipeline, resolveLook } from "../engine";
 import type { Input } from "../engine";
 import { dropAsset, getDraggedAsset } from "../editor/core/dnd";
-import { sceneStore } from "../editor/core/SceneStore";
+import { EDITOR_LAYER, sceneStore } from "../editor/core/SceneStore";
 import type { GizmoMode } from "../editor/core/SceneStore";
 import { useSceneStore } from "../editor/core/useSceneStore";
 import { openContextMenu } from "../editor/contextMenu";
@@ -96,9 +96,15 @@ export default function Viewport() {
         const grid = new THREE.GridHelper(40, 40, 0x5a5d66, 0x3a3c43);
         // Just below the ground, so a floor at y = 0 covers it instead of flickering with it
         grid.position.y = -0.002;
+        grid.layers.set(EDITOR_LAYER);
         sceneStore.scene.add(grid);
 
+        // Writes depth only: lets the scene hide the editor layer behind its objects
+        const depthOnly = new THREE.MeshBasicMaterial({ colorWrite: false });
+
         ctx.raycaster = new THREE.Raycaster();
+        // The markers of lights and cameras are clickable
+        ctx.raycaster.layers.enable(EDITOR_LAYER);
         ctx.mouse = new THREE.Vector2();
 
         // =====================
@@ -332,7 +338,40 @@ export default function Viewport() {
             if (ctx.renderer && ctx.camera) {
                 const canvas = ctx.renderer.domElement;
                 const camera = sceneStore.gameCamera(canvas.clientWidth, canvas.clientHeight) ?? ctx.camera;
-                pipeline.render(sceneStore.viewScene, camera, Math.min(dt, 0.1));
+                const { renderer } = ctx;
+                const scene = sceneStore.viewScene;
+
+                // The picture itself: the scene through its look. Editor tools are not a part of it: the grid
+                // and the markers are on their own layer, the gizmo is hidden for a moment.
+                const gizmoShown = gizmo.visible;
+                gizmo.visible = false;
+                camera.layers.set(0);
+                pipeline.render(scene, camera, Math.min(dt, 0.1));
+
+                renderer.autoClear = false;
+                // The editor layer goes on top, sharp and at full size. The look may have drawn the scene into
+                // a smaller picture, so its depth is drawn again here for the objects to hide what is behind them.
+                if (scene === sceneStore.scene) {
+                    const { background, overrideMaterial } = scene;
+                    scene.background = null;
+                    scene.overrideMaterial = depthOnly;
+                    renderer.clearDepth();
+                    renderer.render(scene, camera);
+                    scene.overrideMaterial = overrideMaterial;
+
+                    // Still without the background: three.js clears the canvas for a scene that has one
+                    camera.layers.set(EDITOR_LAYER);
+                    renderer.render(scene, camera);
+                    camera.layers.set(0);
+                    scene.background = background;
+                }
+
+                gizmo.visible = gizmoShown;
+                if (gizmoShown) {
+                    renderer.clearDepth();
+                    renderer.render(gizmo, camera);
+                }
+                renderer.autoClear = true;
             }
         };
 
@@ -360,6 +399,7 @@ export default function Viewport() {
             gizmo.removeFromParent();
             sceneStore.scene.remove(grid);
             grid.dispose();
+            depthOnly.dispose();
 
             if (ctx.animationId) {
                 cancelAnimationFrame(ctx.animationId);
@@ -372,6 +412,8 @@ export default function Viewport() {
             ctx.renderer?.domElement.remove();
         };
     }, []);
+
+    const looks = store.registry.lookNames();
 
     return (
         <div
@@ -412,21 +454,35 @@ export default function Viewport() {
                         <Icon name={icon} />
                     </button>
                 ))}
-                {store.environment.look && (
+                {looks.length > 0 && !store.editingPrefab && (
                     <>
                         {!store.gameView && <span className="sep" />}
-                        <button
-                            className={`btn ghost ${store.lookEnabled ? "active" : ""}`}
-                            title={`Draw the viewport with the look of the scene (${store.environment.look}); the game always has it`}
-                            onClick={() => store.setLookEnabled(!store.lookEnabled)}
+                        <select
+                            className="select"
+                            value={store.environment.look}
+                            title="The look of this scene: its render style (pixels, outlines, palette…). Looks are made in the Project panel, Looks tab"
+                            onChange={(e) => store.setEnvironment("look", e.target.value)}
                         >
-                            <Icon name="look" />
-                        </button>
+                            <option value="">Standard (no effects)</option>
+                            {/* A look the scene names but the project no longer has stays visible */}
+                            {(looks.includes(store.environment.look) || !store.environment.look ? looks : [...looks, store.environment.look]).map((name) => (
+                                <option key={name} value={name}>{name}</option>
+                            ))}
+                        </select>
+                        {store.environment.look && (
+                            <button
+                                className={`btn ghost ${store.lookEnabled ? "active" : ""}`}
+                                title="Show the look in the viewport; off draws the plain scene, easier to arrange. The game always has its look"
+                                onClick={() => store.setLookEnabled(!store.lookEnabled)}
+                            >
+                                <Icon name="look" />
+                            </button>
+                        )}
                     </>
                 )}
                 {store.playing && (
                     <>
-                        {(!store.gameView || store.environment.look) && <span className="sep" />}
+                        {(!store.gameView || looks.length > 0) && <span className="sep" />}
                         <button
                             className={`btn ghost ${store.playCamera === "game" && store.hasGameCamera ? "" : "active"}`}
                             title="Scene view: the editor camera; select and move objects while the scene runs"

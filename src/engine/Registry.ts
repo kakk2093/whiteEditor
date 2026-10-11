@@ -4,6 +4,8 @@ import { builtinEffects, isEffectDef } from "./look";
 import type { EffectDef, LookData } from "./look";
 import { applyMaterialData, createSharedMaterial } from "./materials";
 import type { MaterialData } from "./materials";
+import { builtinSurfaces, isSurfaceDef } from "./surface";
+import type { SurfaceDef } from "./surface";
 import type { EntityData, Params } from "./types";
 
 export type ParamDef =
@@ -91,7 +93,7 @@ export function isBehaviorDef(value: unknown): value is BehaviorDef {
     return typeof value === "object" && value !== null && (value as BehaviorDef).kind === "behavior";
 }
 
-// Everything a scene can refer to by name: code models, behaviors and effects from scripts,
+// Everything a scene can refer to by name: code models, behaviors, effects and surfaces from scripts,
 // material, prefab and look assets
 export class Registry {
     private modelDefs = new Map<string, ModelDef>();
@@ -100,6 +102,9 @@ export class Registry {
 
     // Screen effects: the built-in ones, plus (or replaced by) those of the project scripts
     private effectDefs = new Map<string, EffectDef>(builtinEffects.map((def) => [def.name, def]));
+
+    // Additions to the materials: built-in and from the project scripts, like the effects
+    private surfaceDefs = new Map<string, SurfaceDef>(builtinSurfaces.map((def) => [def.name, def]));
 
     private lookData = new Map<string, LookData>();
 
@@ -156,6 +161,19 @@ export class Registry {
         return [...this.effectDefs.values()];
     }
 
+    registerSurface(def: SurfaceDef) {
+        this.surfaceDefs.set(def.name, def);
+        return this;
+    }
+
+    getSurface(name: string) {
+        return this.surfaceDefs.get(name);
+    }
+
+    surfaces() {
+        return [...this.surfaceDefs.values()];
+    }
+
     setLook(name: string, data: LookData) {
         this.lookData.set(name, data);
         return this;
@@ -178,12 +196,13 @@ export class Registry {
         return kind === "look" ? this.lookNames() : this.materialNames();
     }
 
-    // Registers every defineModel(), defineBehavior() and defineEffect() exported from a script module
+    // Registers every defineModel(), defineBehavior(), defineEffect() and defineSurface() exported from a script module
     registerExports(module: object) {
         for (const value of Object.values(module)) {
             if (isModelDef(value)) this.registerModel(value);
             if (isBehaviorDef(value)) this.registerBehavior(value);
             if (isEffectDef(value)) this.registerEffect(value);
+            if (isSurfaceDef(value)) this.registerSurface(value);
         }
         return this;
     }

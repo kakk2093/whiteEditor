@@ -126,7 +126,7 @@ export function validateLook(name: string, data: LookData, registry: Registry): 
     const problems: string[] = [];
     if (typeof data !== "object" || data === null || Array.isArray(data)) return ["must be an object"];
 
-    const { extends: base, effects, ...settings } = data;
+    const { extends: base, surfaces, effects, ...settings } = data;
     checkFields(lookFields, settings, "look", registry, problems);
 
     if (base !== undefined) {
@@ -145,21 +145,27 @@ export function validateLook(name: string, data: LookData, registry: Registry): 
         }
     }
 
-    if (effects !== undefined && !Array.isArray(effects)) problems.push("effects: must be a list");
-    const names = new Set<string>();
-    for (const entry of Array.isArray(effects) ? effects : []) {
-        const at = `effects [${entry?.effect}]`;
-        if (names.has(entry.effect)) problems.push(`${at}: listed more than once`);
-        names.add(entry.effect);
+    // The two lists of a look are written the same way: the name under `key`, then the params
+    const checkList = (list: unknown, key: "effect" | "surface", known: { name: string; params?: Record<string, ParamDef> }[]) => {
+        if (list !== undefined && !Array.isArray(list)) problems.push(`${key}s: must be a list`);
+        const names = new Set<unknown>();
+        for (const entry of (Array.isArray(list) ? list : []) as Record<string, unknown>[]) {
+            const name = entry?.[key];
+            const at = `${key}s [${name}]`;
+            if (names.has(name)) problems.push(`${at}: listed more than once`);
+            names.add(name);
 
-        const def = registry.getEffect(entry.effect);
-        if (!def) {
-            problems.push(`${at}: unknown effect (known: ${registry.effects().map((e) => e.name).join(", ")})`);
-            continue;
+            const def = known.find((d) => d.name === name);
+            if (!def) {
+                problems.push(`${at}: unknown ${key} (known: ${known.map((d) => d.name).join(", ")})`);
+                continue;
+            }
+            if (entry.enabled !== undefined && typeof entry.enabled !== "boolean") problems.push(`${at}.enabled: must be true or false`);
+            checkFields(def.params ?? {}, entry, at, registry, problems, [key, "enabled"]);
         }
-        if (entry.enabled !== undefined && typeof entry.enabled !== "boolean") problems.push(`${at}.enabled: must be true or false`);
-        checkFields(def.params ?? {}, entry, at, registry, problems, ["effect", "enabled"]);
-    }
+    };
+    checkList(surfaces, "surface", registry.surfaces());
+    checkList(effects, "effect", registry.effects());
     return problems;
 }
 

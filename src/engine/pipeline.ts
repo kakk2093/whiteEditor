@@ -2,9 +2,10 @@ import * as THREE from "three";
 import type { EffectDef, EffectEntry, ResolvedLook } from "./look";
 import { paramDefaults } from "./Registry";
 import type { ParamDef, Registry } from "./Registry";
+import { Surfaces } from "./surface";
 
-// Draws a scene through a look: into a (possibly smaller) picture, through the screen effects of the look
-// one after another, and onto the canvas. The editor viewport, Play and the built game all draw with this
+// Draws a scene through a look: with the surfaces of the look in its materials, into a (possibly smaller)
+// picture, through the screen effects of the look one after another, and onto the canvas. The editor viewport, Play and the built game all draw with this
 // class, so a look is the same everywhere. Without a look it is a plain renderer.render().
 
 const VERTEX = `
@@ -136,10 +137,13 @@ export class RenderPipeline {
 
     private quadCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 
+    private surfaces: Surfaces;
+
     private time = 0;
 
     constructor(renderer: THREE.WebGLRenderer) {
         this.renderer = renderer;
+        this.surfaces = new Surfaces(renderer);
         this.quad.frustumCulled = false;
     }
 
@@ -147,6 +151,7 @@ export class RenderPipeline {
     // Cheap to call again with the same look: shaders are compiled only when the list of effects changes.
     setLook(look: ResolvedLook | null, registry: Registry) {
         this.look = look;
+        this.surfaces.set(look?.surfaces ?? [], registry);
         const used: { entry: EffectEntry; def: EffectDef }[] = [];
         for (const entry of look?.effects ?? []) {
             if (entry.enabled === false) continue;
@@ -204,6 +209,11 @@ export class RenderPipeline {
         const { renderer, look } = this;
         this.time += dt;
 
+        const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+        const width = Math.max(1, Math.round(size.x / Math.max(1, look?.pixelSize ?? 1)));
+        const height = Math.max(1, Math.round(size.y / Math.max(1, look?.pixelSize ?? 1)));
+        this.surfaces.prepare(scene, camera, width, height, this.time);
+
         // Nothing to do to the picture: draw straight onto the canvas, exactly as without a pipeline
         if (!look || (look.pixelSize <= 1 && this.passes.length === 0 && look.toneMapping === "none" && look.exposure === 1)) {
             renderer.setRenderTarget(null);
@@ -211,9 +221,6 @@ export class RenderPipeline {
             return;
         }
 
-        const size = renderer.getDrawingBufferSize(new THREE.Vector2());
-        const width = Math.max(1, Math.round(size.x / Math.max(1, look.pixelSize)));
-        const height = Math.max(1, Math.round(size.y / Math.max(1, look.pixelSize)));
         for (const target of [this.sceneTarget, this.normalTarget, ...this.targets]) {
             if (target.width !== width || target.height !== height) target.setSize(width, height);
         }
@@ -225,6 +232,8 @@ export class RenderPipeline {
             const { background, overrideMaterial } = scene;
             const clearColor = renderer.getClearColor(new THREE.Color());
             const clearAlpha = renderer.getClearAlpha();
+            // Moved vertices and flat faces must be in this picture too
+            this.surfaces.patch(this.normalMaterial);
             // Where there is no surface the "normal" looks at the camera
             scene.background = null;
             scene.overrideMaterial = this.normalMaterial;
@@ -259,6 +268,7 @@ export class RenderPipeline {
     }
 
     dispose() {
+        this.surfaces.restore();
         this.passes.forEach((pass) => pass.material.dispose());
         [this.sceneTarget, this.normalTarget, ...this.targets].forEach((target) => {
             target.depthTexture?.dispose();
