@@ -1,0 +1,13 @@
+{
+  "extends": "PixelArt",
+  "effects": [
+    {
+      "effect": "palette",
+      "levels": 4
+    },
+    {
+      "effect": "vignette",
+      "strength": 0.6
+    }
+  ]
+}

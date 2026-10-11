@@ -39,6 +39,8 @@ export function instantiatePrefab(name: string, parentId: string | null = null) 
 export function dropAsset(asset: AssetRef, entityId: string | null) {
     if (asset.kind === "model") instantiateModel(asset.name, entityId);
     if (asset.kind === "prefab") instantiatePrefab(asset.name, entityId);
+    // A look dropped anywhere becomes the look of the scene
+    if (asset.kind === "look") sceneStore.setEnvironment("look", asset.name);
     if (asset.kind === "material" && entityId) {
         const found = sceneStore.findEntity(entityId);
         if (found && getComponent(found, "mesh")) {

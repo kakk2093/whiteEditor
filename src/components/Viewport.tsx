@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
+import { createRenderer, RenderPipeline, resolveLook } from "../engine";
 import type { Input } from "../engine";
 import { dropAsset, getDraggedAsset } from "../editor/core/dnd";
 import { sceneStore } from "../editor/core/SceneStore";
@@ -65,9 +66,9 @@ export default function Viewport() {
         );
         ctx.camera.position.set(0, 2, 5);
 
-        ctx.renderer = new THREE.WebGLRenderer({ antialias: true });
+        // The same renderer settings as the built game
+        ctx.renderer = createRenderer();
         ctx.renderer.setSize(width, height);
-        ctx.renderer.shadowMap.enabled = true;
         ref.current.appendChild(ctx.renderer.domElement);
 
         // =====================
@@ -266,12 +267,21 @@ export default function Viewport() {
         // =====================
         // STORE SUBSCRIPTION
         // =====================
+        // The viewport draws through the look of the scene, with the same code as the game
+        const pipeline = new RenderPipeline(ctx.renderer);
+        const applyLook = () => {
+            const name = sceneStore.lookEnabled ? sceneStore.environment.look : "";
+            pipeline.setLook(name ? resolveLook(sceneStore.registry, name) : null, sceneStore.registry);
+        };
+        applyLook();
+
         // The input of the running game the canvas is attached to now, and how to detach it
         let gameInput: Input | null = null;
         let detachInput = () => {};
 
         const unsubscribe = sceneStore.subscribe(() => {
             ctx.transform?.setMode(sceneStore.gizmoMode);
+            applyLook();
 
             // Game view: the keyboard and the mouse go to the behaviors of the scene
             if (sceneStore.gameInput !== gameInput) {
@@ -322,7 +332,7 @@ export default function Viewport() {
             if (ctx.renderer && ctx.camera) {
                 const canvas = ctx.renderer.domElement;
                 const camera = sceneStore.gameCamera(canvas.clientWidth, canvas.clientHeight) ?? ctx.camera;
-                ctx.renderer.render(sceneStore.viewScene, camera);
+                pipeline.render(sceneStore.viewScene, camera, Math.min(dt, 0.1));
             }
         };
 
@@ -345,6 +355,7 @@ export default function Viewport() {
             window.removeEventListener("blur", stopFlying);
             stopFlying();
             detachInput();
+            pipeline.dispose();
             sceneStore.focusHandler = null;
             gizmo.removeFromParent();
             sceneStore.scene.remove(grid);
@@ -401,9 +412,21 @@ export default function Viewport() {
                         <Icon name={icon} />
                     </button>
                 ))}
-                {store.playing && (
+                {store.environment.look && (
                     <>
                         {!store.gameView && <span className="sep" />}
+                        <button
+                            className={`btn ghost ${store.lookEnabled ? "active" : ""}`}
+                            title={`Draw the viewport with the look of the scene (${store.environment.look}); the game always has it`}
+                            onClick={() => store.setLookEnabled(!store.lookEnabled)}
+                        >
+                            <Icon name="look" />
+                        </button>
+                    </>
+                )}
+                {store.playing && (
+                    <>
+                        {(!store.gameView || store.environment.look) && <span className="sep" />}
                         <button
                             className={`btn ghost ${store.playCamera === "game" && store.hasGameCamera ? "" : "active"}`}
                             title="Scene view: the editor camera; select and move objects while the scene runs"

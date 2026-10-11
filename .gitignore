@@ -9,6 +9,8 @@ lerna-debug.log*
 
 node_modules
 dist
+# Built games: npm run build:game -- <project>
+projects/*/build
 dist-ssr
 *.local
 

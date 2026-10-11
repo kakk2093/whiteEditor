@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { defaultMaterialData } from "../engine";
-import { createMaterial, createPrefab, newScene, openPrefab, openScene } from "./core/actions";
+import { createLook, createMaterial, createPrefab, newScene, openPrefab, openScene } from "./core/actions";
 import { ENTITY_DRAG_TYPE, instantiateModel, setDraggedAsset } from "./core/dnd";
 import type { AssetRef } from "./core/SceneStore";
 import { useSceneStore } from "./core/useSceneStore";
@@ -13,7 +13,8 @@ const TABS: { kind: Kind; title: string; icon: IconName; hint: string }[] = [
     { kind: "scene", title: "Scenes", icon: "scene", hint: "Double-click a scene to open it" },
     { kind: "material", title: "Materials", icon: "material", hint: "Click to edit · drag onto an object to assign" },
     { kind: "prefab", title: "Prefabs", icon: "prefab", hint: "Drag into the scene · double-click to edit · drop an object here to make a prefab" },
-    { kind: "model", title: "Models", icon: "script", hint: "Models built by code in scripts/ · drag or double-click to add to the scene" }
+    { kind: "model", title: "Models", icon: "script", hint: "Models built by code in scripts/ · drag or double-click to add to the scene" },
+    { kind: "look", title: "Looks", icon: "look", hint: "Render styles · click to edit · double-click or drag into the scene to use" }
 ];
 
 interface Item {
@@ -34,6 +35,7 @@ export default function ProjectPanel() {
         if (k === "scene") return store.scenes.map((name) => ({ name, label: name }));
         if (k === "prefab") return registry.prefabNames().map((name) => ({ name, label: name }));
         if (k === "model") return registry.models().map((m) => ({ name: m.name, label: m.label ?? m.name }));
+        if (k === "look") return registry.lookNames().map((name) => ({ name, label: name }));
         return registry.materialNames().map((name) => ({
             name,
             label: name,
@@ -48,6 +50,7 @@ export default function ProjectPanel() {
         if (kind === "scene") openScene(name);
         if (kind === "prefab") openPrefab(name);
         if (kind === "model") instantiateModel(name);
+        if (kind === "look") store.setEnvironment("look", name);
     };
 
     return (
@@ -87,14 +90,22 @@ export default function ProjectPanel() {
                     </div>
                 )}
 
+                {kind === "look" && (
+                    <div className="tile add" onClick={createLook} title="Create a new look">
+                        <div className="tile-preview"><Icon name="plus" size={18} /></div>
+                        <div className="tile-name">New Look</div>
+                    </div>
+                )}
+
                 {items.map((item) => {
                     const selected = store.selectedAsset?.kind === kind && store.selectedAsset.name === item.name;
-                    const current = kind === "scene" && item.name === store.sceneName;
+                    const current = (kind === "scene" && item.name === store.sceneName)
+                        || (kind === "look" && item.name === store.environment.look);
                     return (
                         <div
                             key={item.name}
                             className={`tile ${selected ? "selected" : ""} ${current ? "current" : ""}`}
-                            title={current ? `${item.label} (open)` : item.label}
+                            title={current ? `${item.label} (${kind === "look" ? "used by the scene" : "open"})` : item.label}
                             draggable={kind !== "scene"}
                             onDragStart={(e) => setDraggedAsset(e, { kind, name: item.name })}
                             onClick={() => store.selectAsset({ kind, name: item.name })}

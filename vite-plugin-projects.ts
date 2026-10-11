@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { Plugin } from 'vite'
 import { agentDocs } from './tools/agentDocs'
+import { buildGame } from './tools/buildGame'
 
 // Dev-only API the editor uses to keep game projects as folders on disk.
 // A project is <dir>/<name>/ with scenes/, materials/, prefabs/ (*.json), scripts/*.ts and assets/.
@@ -10,8 +11,10 @@ import { agentDocs } from './tools/agentDocs'
 //   GET    /__api/projects/demo/scenes           -> ["main", ...]
 //   GET    /__api/projects/demo/scenes/main      -> scenes/main.json
 //   PUT    /__api/projects/demo/scenes/main      -> writes scenes/main.json
+//   POST   /__api/projects/demo/build?scene=main -> builds the game into build/, see tools/buildGame.ts
+//   GET    /__game/demo/                         -> the built game
 //   DELETE /__api/projects/demo/scenes/main      -> removes scenes/main.json
-//   ...and the same for the other JSON asset folders: materials, prefabs
+//   ...and the same for the other JSON asset folders: materials, prefabs, looks
 //   GET    /__api/projects/demo/scripts          -> ["/projects/demo/scripts/models.ts", ...]
 // Script changes are sent to the editor as the "white:scripts-changed" event instead of a page reload.
 // JSON assets changed by anything but this API (VS Code, an AI agent) are sent as "white:asset-changed".
@@ -19,7 +22,7 @@ import { agentDocs } from './tools/agentDocs'
 const NAME = /^[\w-]+$/
 
 // Folders whose files are JSON assets addressed by name
-const JSON_SECTIONS = ['scenes', 'materials', 'prefabs']
+const JSON_SECTIONS = ['scenes', 'materials', 'prefabs', 'looks']
 
 const TSCONFIG = `{
   "compilerOptions": {
@@ -68,6 +71,23 @@ export const stairs = defineModel({
     },
 });
 `
+
+const MIME: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.json': 'application/json',
+  '.css': 'text/css; charset=utf-8',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.glb': 'model/gltf-binary',
+  '.gltf': 'model/gltf+json',
+  '.mp3': 'audio/mpeg',
+  '.ogg': 'audio/ogg',
+  '.wav': 'audio/wav',
+}
 
 class HttpError extends Error {
   status: number
@@ -118,6 +138,9 @@ export function projectsPlugin(dir = 'projects'): Plugin {
     name: 'projects',
     apply: 'serve',
 
+    // A finished build must not look like a source change to the dev server (an .html there reloads the editor)
+    config: () => ({ server: { watch: { ignored: [`**/${dir}/*/build/**`] } } }),
+
     configureServer(server) {
       root = path.resolve(server.config.root, dir)
 
@@ -147,7 +170,12 @@ export function projectsPlugin(dir = 'projects'): Plugin {
         Promise.all(projects.map((project) => writeDocs(path.join(root, project), project)))
       ).catch((e) => server.config.logger.error(String(e)))
 
-      const handle = async (method: string, segments: string[], readBody: () => Promise<string>): Promise<unknown> => {
+      const handle = async (
+        method: string,
+        segments: string[],
+        query: URLSearchParams,
+        readBody: () => Promise<string>
+      ): Promise<unknown> => {
         if (segments.some((s) => !NAME.test(s))) throw new HttpError(400, 'Bad name')
         const [project, section, item, ...extra] = segments
         if (extra.length > 0) throw new HttpError(404, 'Not found')
@@ -178,6 +206,15 @@ export function projectsPlugin(dir = 'projects'): Plugin {
             .filter((f) => /\.(ts|js)$/.test(f) && !f.endsWith('.d.ts'))
             .map((f) => `/${toPosix(path.relative(server.config.root, path.join(scriptsDir, f)))}`)
             .sort()
+        }
+
+        // POST /__api/projects/demo/build?scene=main -> builds the game into <project>/build
+        if (section === 'build' && !item) {
+          if (method !== 'POST') throw new HttpError(405, 'Method not allowed')
+          const scene = query.get('scene')
+          if (scene && !NAME.test(scene)) throw new HttpError(400, 'Bad name')
+          const result = await buildGame(server.config.root, projectDir, scene ?? undefined)
+          return { scene: result.scene, files: result.files, url: `/__game/${project}/` }
         }
 
         if (JSON_SECTIONS.includes(section)) {
@@ -213,17 +250,40 @@ export function projectsPlugin(dir = 'projects'): Plugin {
         }
 
         try {
-          const pathname = (req.url ?? '/').split('?')[0]
+          const [pathname, search = ''] = (req.url ?? '/').split('?')
           const segments = pathname.split('/').filter(Boolean).map(decodeURIComponent)
           const readBody = async () => {
             const chunks: Buffer[] = []
             for await (const chunk of req) chunks.push(chunk as Buffer)
             return Buffer.concat(chunks).toString('utf-8')
           }
-          send(200, await handle(req.method ?? 'GET', segments, readBody))
+          send(200, await handle(req.method ?? 'GET', segments, new URLSearchParams(search), readBody))
         } catch (e) {
           send(e instanceof HttpError ? e.status : 500, { error: e instanceof Error ? e.message : String(e) })
         }
+      })
+
+      // /__game/demo/ -> the built game of the project, served as it is (Vite would treat it as source)
+      server.middlewares.use('/__game', async (req, res, next) => {
+        const pathname = decodeURIComponent((req.url ?? '/').split('?')[0])
+        const [project, ...rest] = pathname.split('/').filter(Boolean)
+        if (!project || !NAME.test(project) || rest.includes('..')) return next()
+        // Without the slash the page's "./game.js" would point one folder up
+        if (rest.length === 0 && !pathname.endsWith('/')) {
+          res.statusCode = 302
+          res.setHeader('Location', `/__game/${project}/`)
+          return res.end()
+        }
+
+        const file = path.join(root, project, 'build', ...(rest.length > 0 ? rest : ['index.html']))
+        const body = await fs.readFile(file).catch(() => null)
+        if (!body) {
+          res.statusCode = 404
+          return res.end(`Not found. Build the game first: npm run build:game -- ${project}`)
+        }
+        res.setHeader('Content-Type', MIME[path.extname(file).toLowerCase()] ?? 'application/octet-stream')
+        res.setHeader('Cache-Control', 'no-store')
+        res.end(body)
       })
     },
 

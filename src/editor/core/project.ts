@@ -1,10 +1,11 @@
 import { parsePrefab, Registry } from "../../engine";
+import type { LookData } from "../../engine";
 
 // Talks to the dev-server API from vite-plugin-projects.ts
 const API = "/__api/projects";
 
 // Folders of a project that hold JSON assets
-export type AssetSection = "scenes" | "materials" | "prefabs";
+export type AssetSection = "scenes" | "materials" | "prefabs" | "looks";
 
 async function request(path: string, init?: RequestInit) {
     const res = await fetch(path ? `${API}/${path}` : API, init);
@@ -37,6 +38,11 @@ export async function deleteAsset(project: string, section: AssetSection, name: 
     await request(`${project}/${section}/${name}`, { method: "DELETE" });
 }
 
+// Builds the game of the project into its build/ folder; `url` is where the dev server shows it
+export function buildGame(project: string, scene: string): Promise<{ scene: string; files: string[]; url: string }> {
+    return request(`${project}/build?scene=${encodeURIComponent(scene)}`, { method: "POST" });
+}
+
 // Builds the registry of the project: imports every file from scripts/ and reads the material assets
 export async function loadRegistry(project: string) {
     const registry = new Registry();
@@ -56,6 +62,9 @@ export async function loadRegistry(project: string) {
 
     for (const name of await listAssets(project, "materials")) {
         registry.setMaterial(name, (await readAsset(project, "materials", name)) as object);
+    }
+    for (const name of await listAssets(project, "looks")) {
+        registry.setLook(name, (await readAsset(project, "looks", name)) as LookData);
     }
     for (const name of await listAssets(project, "prefabs")) {
         try {

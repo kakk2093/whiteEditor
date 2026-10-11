@@ -10,6 +10,8 @@ export interface EnvironmentData {
     fogColor: string;
     fogNear: number;
     fogFar: number;
+    // Name of a look asset: the render style of the scene, "" = none (see look.ts)
+    look: string;
 }
 
 export const environmentFields: Record<keyof EnvironmentData, ParamDef> = {
@@ -20,6 +22,7 @@ export const environmentFields: Record<keyof EnvironmentData, ParamDef> = {
     fogColor: { type: "color", default: "#222222" },
     fogNear: { type: "number", default: 5, min: 0, step: 1 },
     fogFar: { type: "number", default: 50, min: 0, step: 1 },
+    look: { type: "asset", kind: "look", default: "" },
 };
 
 export const defaultEnvironment = Object.fromEntries(

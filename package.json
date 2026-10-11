@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "check": "node tools/check.mjs"
+    "check": "node tools/check.mjs",
+    "build:game": "node tools/build.mjs"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.2",

@@ -1,8 +1,12 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
-import { componentDefs, componentKey, environmentFields, materialFields, paramDefaults } from "../engine";
-import type { ComponentData, EntityData, EnvironmentData, MaterialData, ParamDef, ParamValue, Params } from "../engine";
-import { createPrefab, deleteMaterial, deletePrefab, deleteScene, openPrefab, openScene, updateMaterial } from "./core/actions";
+import { componentDefs, componentKey, environmentFields, lookFields, materialFields, paramDefaults, resolveLook } from "../engine";
+import type {
+    ComponentData, EffectEntry, EntityData, EnvironmentData, LookData, MaterialData, ParamDef, ParamValue, Params
+} from "../engine";
+import {
+    createPrefab, deleteLook, deleteMaterial, deletePrefab, deleteScene, openPrefab, openScene, updateLook, updateMaterial
+} from "./core/actions";
 import { instantiateModel, instantiatePrefab } from "./core/dnd";
 import { getComponent, sceneStore } from "./core/SceneStore";
 import type { AssetRef, TransformProperty } from "./core/SceneStore";
@@ -78,8 +82,8 @@ function ParamField({ def, value, onChange }: { def: ParamDef; value: ParamValue
         case "asset":
             return (
                 <select className="select" value={value as string} onChange={(e) => onChange(e.target.value)}>
-                    <option value="">Default (gray)</option>
-                    {sceneStore.registry.materialNames().map((name) => (
+                    <option value="">{def.kind === "material" ? "Default (gray)" : "(none)"}</option>
+                    {sceneStore.registry.assetNames(def.kind).map((name) => (
                         <option key={name} value={name}>{name}</option>
                     ))}
                 </select>
@@ -110,14 +114,22 @@ function Fields({ defs, values, onChange }: {
     );
 }
 
-function Section({ title, onRemove, children }: { title: string; onRemove?: () => void; children: ReactNode }) {
+function Section({ title, onRemove, removeTitle = "Remove component", extra, children }: {
+    title: ReactNode;
+    onRemove?: () => void;
+    removeTitle?: string;
+    // More buttons of the header, before the remove one
+    extra?: ReactNode;
+    children: ReactNode;
+}) {
     return (
         <div className="section">
             <div className="section-header">
                 {title}
                 <span className="spacer" />
+                {extra}
                 {onRemove && (
-                    <button className="btn ghost" title="Remove component" onClick={onRemove}>
+                    <button className="btn ghost" title={removeTitle} onClick={onRemove}>
                         <Icon name="close" size={12} />
                     </button>
                 )}
@@ -314,9 +326,153 @@ function EntityInspector({ entity }: { entity: EntityData }) {
     );
 }
 
+// A look asset: its settings and the list of its screen effects. With "extends" the list starts with the
+// effects of the base look; changing one of those writes the change into this look, the base stays as it is.
+function LookInspector({ name }: { name: string }) {
+    const store = useSceneStore();
+    const { registry } = store;
+    const data = registry.getLookData(name) ?? {};
+    const own = data.effects ?? [];
+    const resolved = resolveLook(registry, name);
+    const base = data.extends ? resolveLook(registry, data.extends) : null;
+    const used = store.environment.look === name;
+
+    const save = (patch: Partial<LookData>) => updateLook(name, { ...data, ...patch });
+    // Writes params of one effect; an effect that so far only came from the base look gets its own entry
+    const setEffect = (effect: string, patch: Partial<EffectEntry>) => {
+        const exists = own.some((e) => e.effect === effect);
+        save({
+            effects: exists
+                ? own.map((e) => (e.effect === effect ? { ...e, ...patch } : e))
+                : [...own, { effect, ...patch }]
+        });
+    };
+    const move = (effect: string, by: number) => {
+        const from = own.findIndex((e) => e.effect === effect);
+        const to = from + by;
+        if (from < 0 || to < 0 || to >= own.length) return;
+        const effects = [...own];
+        [effects[from], effects[to]] = [effects[to], effects[from]];
+        save({ effects });
+    };
+
+    const others = registry.lookNames().filter((n) => n !== name);
+    const addable = registry.effects().filter((def) => !resolved?.effects.some((e) => e.effect === def.name));
+
+    return (
+        <>
+            <div className="inspector-head">
+                <Icon name="look" /> <b style={{ flex: 1 }}>{name}</b>
+                <button className="btn ghost danger" title="Delete the look" onClick={() => deleteLook(name)}>
+                    <Icon name="trash" />
+                </button>
+            </div>
+            <div className="note">
+                {used
+                    ? "The open scene uses this look."
+                    : <button className="btn primary" onClick={() => store.setEnvironment("look", name)}>Use in this scene</button>}
+            </div>
+
+            <Section title="Look">
+                <div className="field">
+                    <label title="extends">Based On</label>
+                    <div className="control">
+                        <select
+                            className="select"
+                            value={data.extends ?? ""}
+                            onChange={(e) => {
+                                const rest = { ...data };
+                                delete rest.extends;
+                                updateLook(name, e.target.value ? { ...rest, extends: e.target.value } : rest);
+                            }}
+                        >
+                            <option value="">(nothing)</option>
+                            {others.map((n) => (
+                                <option key={n} value={n}>{n}</option>
+                            ))}
+                        </select>
+                    </div>
+                </div>
+                <Fields
+                    defs={lookFields}
+                    values={{ ...(base as unknown as Params | null), ...(data as Params) }}
+                    onChange={(key, value) => save({ [key]: value })}
+                />
+            </Section>
+
+            {(resolved?.effects ?? []).map((entry) => {
+                const def = registry.getEffect(entry.effect);
+                const isOwn = own.some((e) => e.effect === entry.effect);
+                const inherited = base?.effects.some((e) => e.effect === entry.effect) ?? false;
+                const index = own.findIndex((e) => e.effect === entry.effect);
+                return (
+                    <Section
+                        key={entry.effect}
+                        title={(
+                            <>
+                                <input
+                                    className="checkbox"
+                                    type="checkbox"
+                                    title="Enabled"
+                                    checked={entry.enabled !== false}
+                                    onChange={(e) => setEffect(entry.effect, { enabled: e.target.checked })}
+                                />
+                                {def?.label ?? entry.effect}{inherited ? ` (from ${data.extends})` : ""}
+                            </>
+                        )}
+                        extra={isOwn && !inherited && (
+                            <>
+                                <button className="btn ghost" title="Apply earlier" disabled={index <= 0} onClick={() => move(entry.effect, -1)}>
+                                    <Icon name="up" size={12} />
+                                </button>
+                                <button className="btn ghost" title="Apply later" disabled={index >= own.length - 1} onClick={() => move(entry.effect, 1)}>
+                                    <Icon name="down" size={12} />
+                                </button>
+                            </>
+                        )}
+                        removeTitle={inherited ? "Drop the changes made here, back to the base look" : "Remove effect"}
+                        onRemove={isOwn ? () => save({ effects: own.filter((e) => e.effect !== entry.effect) }) : undefined}
+                    >
+                        {def ? (
+                            <Fields
+                                defs={def.params ?? {}}
+                                values={entry as Params}
+                                onChange={(key, value) => setEffect(entry.effect, { [key]: value })}
+                            />
+                        ) : (
+                            <div className="note">The effect <b>{entry.effect}</b> is not defined in the project's scripts/ folder.</div>
+                        )}
+                    </Section>
+                );
+            })}
+
+            {addable.length > 0 && (
+                <div className="add-component">
+                    <Menu
+                        up={(resolved?.effects.length ?? 0) > 1}
+                        sections={[{ items: addable.map((def) => ({ key: def.name, label: def.label ?? def.name })) }]}
+                        onPick={(effect) => setEffect(effect, {})}
+                        trigger={(toggle) => (
+                            <button className="btn" onClick={toggle}>
+                                <Icon name="plus" /> Add Effect
+                            </button>
+                        )}
+                    />
+                </div>
+            )}
+            <div className="note">
+                Effects are applied from top to bottom. Changes are saved at once. New effects are written in the project's
+                scripts/ folder with defineEffect.
+            </div>
+        </>
+    );
+}
+
 function AssetInspector({ asset }: { asset: AssetRef }) {
     const store = useSceneStore();
     const { registry } = store;
+
+    if (asset.kind === "look") return <LookInspector name={asset.name} />;
 
     if (asset.kind === "material") {
         return (

@@ -1,5 +1,7 @@
 import { componentDefs, componentKey } from "./components";
 import { environmentFields } from "./environment";
+import { lookFields } from "./look";
+import type { LookData } from "./look";
 import type { ParamDef, Registry } from "./Registry";
 import type { EntityData, ParamValue, PrefabData, SceneData } from "./types";
 
@@ -20,7 +22,7 @@ function checkValue(def: ParamDef, value: unknown, registry: Registry): string |
             return def.options.includes(value as string) ? null : `must be one of: ${def.options.join(", ")}`;
         case "asset":
             if (value === "") return null;
-            return registry.materialNames().includes(value as string) ? null : `${def.kind} "${value}" does not exist`;
+            return registry.assetNames(def.kind).includes(value as string) ? null : `${def.kind} "${value}" does not exist`;
     }
 }
 
@@ -116,6 +118,48 @@ export function validatePrefab(name: string, data: PrefabData, registry: Registr
     if (data.root.prefab) problems.push(`root: the root of a prefab cannot itself be a prefab instance`);
     checkEntity(data.root, "", registry, new Set(), problems);
     if (containsItself(registry, data.root, [name])) problems.push(`prefab "${name}" contains itself`);
+    return problems;
+}
+
+// Problems of a look asset (looks/<name>.json as it is on disk)
+export function validateLook(name: string, data: LookData, registry: Registry): string[] {
+    const problems: string[] = [];
+    if (typeof data !== "object" || data === null || Array.isArray(data)) return ["must be an object"];
+
+    const { extends: base, effects, ...settings } = data;
+    checkFields(lookFields, settings, "look", registry, problems);
+
+    if (base !== undefined) {
+        if (typeof base !== "string" || !registry.getLookData(base)) {
+            problems.push(`extends: look "${base}" does not exist (known: ${registry.lookNames().join(", ") || "none"})`);
+        } else {
+            // Following the chain must not come back to this look
+            const seen = [name];
+            for (let next: string | undefined = base; next; next = registry.getLookData(next)?.extends) {
+                if (seen.includes(next)) {
+                    problems.push(`extends: look "${name}" extends itself through ${seen.slice(1).concat(next).join(" -> ")}`);
+                    break;
+                }
+                seen.push(next);
+            }
+        }
+    }
+
+    if (effects !== undefined && !Array.isArray(effects)) problems.push("effects: must be a list");
+    const names = new Set<string>();
+    for (const entry of Array.isArray(effects) ? effects : []) {
+        const at = `effects [${entry?.effect}]`;
+        if (names.has(entry.effect)) problems.push(`${at}: listed more than once`);
+        names.add(entry.effect);
+
+        const def = registry.getEffect(entry.effect);
+        if (!def) {
+            problems.push(`${at}: unknown effect (known: ${registry.effects().map((e) => e.name).join(", ")})`);
+            continue;
+        }
+        if (entry.enabled !== undefined && typeof entry.enabled !== "boolean") problems.push(`${at}.enabled: must be true or false`);
+        checkFields(def.params ?? {}, entry, at, registry, problems, ["effect", "enabled"]);
+    }
     return problems;
 }
 

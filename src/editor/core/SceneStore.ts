@@ -23,7 +23,7 @@ export type TransformProperty = "position" | "rotation" | "scale";
 export type GizmoMode = "translate" | "rotate" | "scale";
 
 export interface AssetRef {
-    kind: "material" | "model" | "scene" | "prefab";
+    kind: "material" | "model" | "scene" | "prefab" | "look";
     name: string;
 }
 
@@ -150,6 +150,10 @@ class SceneStore {
     // Play is on, but time stands still; step() moves it by one frame
     paused = false;
 
+    // false draws the viewport without the look of the scene: arranging objects in a pixelated picture is hard.
+    // The game itself always has its look.
+    lookEnabled = true;
+
     // Counts how often the scene data was put back by stop(); a field being typed in must then forget its text
     restores = 0;
 
@@ -259,6 +263,11 @@ class SceneStore {
     // What the viewport draws: the running game during Play, otherwise the scene being edited
     get viewScene() {
         return this.game?.scene ?? this.scene;
+    }
+
+    setLookEnabled(enabled: boolean) {
+        this.lookEnabled = enabled;
+        this.notify();
     }
 
     setPlayCamera(camera: "editor" | "game") {

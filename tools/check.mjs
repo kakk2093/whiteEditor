@@ -52,6 +52,20 @@ try {
     }
   }
 
+  // Looks can extend each other, so register all of them before validating any
+  const looks = new Map()
+  for (const name of jsonNames('looks')) {
+    try {
+      looks.set(name, readJson('looks', name))
+      registry.setLook(name, looks.get(name))
+    } catch (e) {
+      problems.push(`looks/${name}.json: ${e.message}`)
+    }
+  }
+  for (const [name, look] of looks) {
+    for (const problem of engine.validateLook(name, look, registry)) problems.push(`looks/${name}.json: ${problem}`)
+  }
+
   // Prefabs can contain each other, so register all of them before validating any
   const prefabs = new Map()
   for (const name of jsonNames('prefabs')) {
@@ -92,7 +106,7 @@ try {
 
 if (problems.length === 0) {
   const count = (section) => `${jsonNames(section).length} ${section}`
-  console.log(`${project}: OK (${count('scenes')}, ${count('materials')}, ${count('prefabs')})`)
+  console.log(`${project}: OK (${count('scenes')}, ${count('materials')}, ${count('prefabs')}, ${count('looks')})`)
 } else {
   for (const problem of problems) console.error(problem)
   console.error(`\n${project}: ${problems.length} problem(s)`)

@@ -1,0 +1,20 @@
+{
+  "pixelSize": 3,
+  "effects": [
+    {
+      "effect": "outline",
+      "lineColor": "#0a1a24",
+      "thickness": 1
+    },
+    {
+      "effect": "palette",
+      "levels": 6,
+      "dither": 0.25
+    },
+    {
+      "effect": "grade",
+      "contrast": 1.1,
+      "saturation": 1.2
+    }
+  ]
+}

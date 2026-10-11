@@ -52,6 +52,11 @@
     white-space: nowrap;
 }
 
+a.btn {
+    color: inherit;
+    text-decoration: none;
+}
+
 .btn:hover:not(:disabled) {
     background: #3a3c44;
 }

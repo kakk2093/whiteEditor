@@ -1,8 +1,9 @@
 import { parsePrefab, parseScene, validateScene } from "../../engine";
-import type { MaterialData } from "../../engine";
+import type { LookData, MaterialData } from "../../engine";
 import type { AssetSection } from "./project";
 import { sceneStore } from "./SceneStore";
 import {
+    buildGame as build,
     createProject,
     deleteAsset,
     listAssets,
@@ -147,6 +148,27 @@ export async function save() {
     }
 }
 
+// Builds the game that starts with the open scene; returns the address to open it at, or null if it failed.
+// The build is made from the files on disk, so the scene has to be saved first.
+export async function buildGame() {
+    const { project, sceneName } = sceneStore;
+    if (sceneStore.dirty) {
+        sceneStore.update({ status: "Save first: the game is built from the files on disk" });
+        return null;
+    }
+    try {
+        sceneStore.update({ status: `Building ${project}…` });
+        const started = Date.now();
+        const result = await build(project, sceneName);
+        const seconds = ((Date.now() - started) / 1000).toFixed(1);
+        sceneStore.update({ status: `Built projects/${project}/build in ${seconds} s, the game starts with scene "${result.scene}"` });
+        return result.url;
+    } catch (e) {
+        report(e);
+        return null;
+    }
+}
+
 export async function saveSceneAs(name: string) {
     if (blockedByPlay()) return;
     try {
@@ -273,6 +295,17 @@ export async function assetChangedOnDisk(project: string, section: AssetSection,
             sceneStore.update({ status: `Material ${name} updated from disk` });
         }
 
+        if (section === "looks") {
+            const { registry } = sceneStore;
+            if ((await listAssets(project, "looks")).includes(name)) {
+                registry.setLook(name, (await readAsset(project, "looks", name)) as LookData);
+            } else {
+                registry.removeLook(name);
+                if (sceneStore.selectedAsset?.kind === "look" && sceneStore.selectedAsset.name === name) sceneStore.selectAsset(null);
+            }
+            sceneStore.update({ status: `Look ${name} updated from disk` });
+        }
+
         if (section === "prefabs") {
             const { registry } = sceneStore;
             const exists = (await listAssets(project, "prefabs")).includes(name);
@@ -323,6 +356,47 @@ export function updateMaterial<K extends keyof MaterialData>(name: string, key: 
         pendingWrites.delete(name);
         writeAsset(project, "materials", name, data).catch(report);
     }, 300));
+}
+
+// A new look starts as the pixel-art one: small picture, outlines, few colors
+export async function createLook() {
+    const { project, registry } = sceneStore;
+    try {
+        const name = freeName("Look", registry.lookNames());
+        const data: LookData = { pixelSize: 3, effects: [{ effect: "outline" }, { effect: "palette" }] };
+        await writeAsset(project, "looks", name, data);
+        registry.setLook(name, data);
+        sceneStore.selectAsset({ kind: "look", name });
+    } catch (e) {
+        report(e);
+    }
+}
+
+// Like updateMaterial: applies at once, writes the file a moment later
+export function updateLook(name: string, data: LookData) {
+    const { project, registry } = sceneStore;
+    registry.setLook(name, data);
+    sceneStore.changed();
+
+    const key = `looks/${name}`;
+    clearTimeout(pendingWrites.get(key));
+    pendingWrites.set(key, setTimeout(() => {
+        pendingWrites.delete(key);
+        writeAsset(project, "looks", name, data).catch(report);
+    }, 300));
+}
+
+export async function deleteLook(name: string) {
+    const { project, registry } = sceneStore;
+    try {
+        clearTimeout(pendingWrites.get(`looks/${name}`));
+        pendingWrites.delete(`looks/${name}`);
+        await deleteAsset(project, "looks", name);
+        registry.removeLook(name);
+        sceneStore.selectAsset(null);
+    } catch (e) {
+        report(e);
+    }
 }
 
 export async function deleteMaterial(name: string) {

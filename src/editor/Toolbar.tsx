@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { closePrefab, newProject, newScene, openProject, openScene, save, saveSceneAs } from "./core/actions";
+import { buildGame, closePrefab, newProject, newScene, openProject, openScene, save, saveSceneAs } from "./core/actions";
 import { useSceneStore } from "./core/useSceneStore";
 import { Icon, NameDialog } from "./ui";
 
@@ -11,6 +11,9 @@ export default function Toolbar() {
     const store = useSceneStore();
     const { project, projects, sceneName, scenes, editingPrefab } = store;
     const [dialog, setDialog] = useState<Dialog>(null);
+    const [building, setBuilding] = useState(false);
+    // Where the game built in this session can be opened
+    const [gameUrl, setGameUrl] = useState<string | null>(null);
 
     // A new scene exists only in the editor until it is saved
     const sceneOptions = scenes.includes(sceneName) ? scenes : [...scenes, sceneName];
@@ -105,6 +108,24 @@ export default function Toolbar() {
                     >
                         <Icon name="step" />
                     </button>
+                    <span className="sep" />
+                    <button
+                        className="btn"
+                        disabled={building || editingPrefab !== null}
+                        onClick={async () => {
+                            setBuilding(true);
+                            setGameUrl(await buildGame() ?? gameUrl);
+                            setBuilding(false);
+                        }}
+                        title="Build the game into the project's build/ folder; it starts with the open scene"
+                    >
+                        <Icon name="build" /> {building ? "Building…" : "Build"}
+                    </button>
+                    {gameUrl && (
+                        <a className="btn" href={gameUrl} target="_blank" rel="noreferrer" title="Open the built game in a new tab">
+                            Open game ↗
+                        </a>
+                    )}
                 </>
             )}
 

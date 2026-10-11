@@ -1,5 +1,7 @@
 import * as THREE from "three";
 import type { Input } from "./input";
+import { builtinEffects, isEffectDef } from "./look";
+import type { EffectDef, LookData } from "./look";
 import { applyMaterialData, createSharedMaterial } from "./materials";
 import type { MaterialData } from "./materials";
 import type { EntityData, Params } from "./types";
@@ -11,7 +13,7 @@ export type ParamDef =
     | { type: "string"; default: string }
     | { type: "select"; default: string; options: string[] }
     // A reference to a project asset by name, "" = none
-    | { type: "asset"; kind: "material"; default: string };
+    | { type: "asset"; kind: "material" | "look"; default: string };
 
 type ParamType<D extends ParamDef> = D extends { type: "number" }
     ? number
@@ -89,11 +91,17 @@ export function isBehaviorDef(value: unknown): value is BehaviorDef {
     return typeof value === "object" && value !== null && (value as BehaviorDef).kind === "behavior";
 }
 
-// Everything a scene can refer to by name: code models and behaviors from scripts, material and prefab assets
+// Everything a scene can refer to by name: code models, behaviors and effects from scripts,
+// material, prefab and look assets
 export class Registry {
     private modelDefs = new Map<string, ModelDef>();
 
     private behaviorDefs = new Map<string, BehaviorDef>();
+
+    // Screen effects: the built-in ones, plus (or replaced by) those of the project scripts
+    private effectDefs = new Map<string, EffectDef>(builtinEffects.map((def) => [def.name, def]));
+
+    private lookData = new Map<string, LookData>();
 
     private materialData = new Map<string, Partial<MaterialData>>();
 
@@ -135,11 +143,47 @@ export class Registry {
         return [...this.behaviorDefs.values()];
     }
 
-    // Registers every defineModel() and defineBehavior() exported from a script module
+    registerEffect(def: EffectDef) {
+        this.effectDefs.set(def.name, def);
+        return this;
+    }
+
+    getEffect(name: string) {
+        return this.effectDefs.get(name);
+    }
+
+    effects() {
+        return [...this.effectDefs.values()];
+    }
+
+    setLook(name: string, data: LookData) {
+        this.lookData.set(name, data);
+        return this;
+    }
+
+    removeLook(name: string) {
+        this.lookData.delete(name);
+    }
+
+    getLookData(name: string) {
+        return this.lookData.get(name);
+    }
+
+    lookNames() {
+        return [...this.lookData.keys()].sort();
+    }
+
+    // The names of the assets a field of this kind can refer to
+    assetNames(kind: "material" | "look") {
+        return kind === "look" ? this.lookNames() : this.materialNames();
+    }
+
+    // Registers every defineModel(), defineBehavior() and defineEffect() exported from a script module
     registerExports(module: object) {
         for (const value of Object.values(module)) {
             if (isModelDef(value)) this.registerModel(value);
             if (isBehaviorDef(value)) this.registerBehavior(value);
+            if (isEffectDef(value)) this.registerEffect(value);
         }
         return this;
     }
