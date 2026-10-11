@@ -60,3 +60,54 @@ export function changeFolder(folders: Folders, section: FolderSection, from: str
     if (from === null && to !== null) tree[to] = tree[to] ?? [];
     return { ...folders, [section]: tree };
 }
+
+// Folders can stand inside folders: the name of one is then a path, "Walls/Old". A folder that is only a
+// part of such a path ("Walls" when only "Walls/Old" is written) exists too.
+
+// The folder a folder is in; null for one at the top
+export const parentFolder = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : null);
+
+// The last part of the path: the name of the folder itself
+export const folderName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
+
+// Every folder of the section, the ones that are only parts of paths included, sorted
+export function folderPaths(folders: Folders, section: FolderSection): string[] {
+    const paths = new Set<string>();
+    for (const key of Object.keys(folders[section] ?? {})) {
+        const parts = key.split("/");
+        for (let n = 1; n <= parts.length; n++) paths.add(parts.slice(0, n).join("/"));
+    }
+    return [...paths].sort();
+}
+
+const isInside = (path: string, folder: string) => path === folder || path.startsWith(`${folder}/`);
+
+// Gives the folder another path; the folders inside it move with it
+export function renameFolderTree(folders: Folders, section: FolderSection, from: string, to: string): Folders {
+    const tree: Record<string, string[]> = {};
+    let found = false;
+    for (const [key, names] of Object.entries(folders[section] ?? {})) {
+        if (isInside(key, from)) {
+            tree[to + key.slice(from.length)] = names;
+            found = found || key === from;
+        } else {
+            tree[key] = names;
+        }
+    }
+    // One that was only a part of a path has nothing of its own to carry over
+    if (!found) tree[to] = tree[to] ?? [];
+    return { ...folders, [section]: tree };
+}
+
+// Removes the folder with the folders inside it; their assets go to the folder it was in (or to the top)
+export function removeFolderTree(folders: Folders, section: FolderSection, path: string): Folders {
+    const tree: Record<string, string[]> = {};
+    const freed: string[] = [];
+    for (const [key, names] of Object.entries(folders[section] ?? {})) {
+        if (isInside(key, path)) freed.push(...names);
+        else tree[key] = names;
+    }
+    const parent = parentFolder(path);
+    if (parent !== null) tree[parent] = [...(tree[parent] ?? []), ...freed];
+    return { ...folders, [section]: tree };
+}

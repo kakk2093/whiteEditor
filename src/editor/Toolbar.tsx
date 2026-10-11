@@ -130,7 +130,7 @@ export default function Toolbar() {
                 },
                 {
                     items: [
-                        { label: store.consoleOpen ? "Hide Console" : "Show Console", icon: "script", run: () => store.setConsoleOpen(!store.consoleOpen) },
+                        { label: store.consoleOpen ? "Close Console" : "Console", icon: "script", run: () => store.setConsoleOpen(!store.consoleOpen) },
                         { label: "Reset Panel Sizes", run: resetLayout }
                     ]
                 }

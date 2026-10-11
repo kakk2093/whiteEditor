@@ -6,15 +6,13 @@ export interface Layout {
     left: number;
     // Width of the Inspector
     right: number;
-    // Height of the Project panel and of the Console next to it
+    // Height of the Project panel
     bottom: number;
-    // Width of the Console
-    console: number;
 }
 
-export const DEFAULT_LAYOUT: Layout = { left: 250, right: 290, bottom: 190, console: 380 };
+export const DEFAULT_LAYOUT: Layout = { left: 250, right: 290, bottom: 190 };
 
-export const LIMITS: Record<keyof Layout, [number, number]> = { left: [150, 700], right: [200, 800], bottom: [80, 700], console: [160, 1200] };
+export const LIMITS: Record<keyof Layout, [number, number]> = { left: [150, 700], right: [200, 800], bottom: [80, 700] };
 
 const LAYOUT_KEY = "white:layout";
 

@@ -5,7 +5,7 @@ import { assetChangedOnDisk, foldersChangedOnDisk, init, reloadScripts, save } f
 import { onAssetChanged, onFoldersChanged, onScriptsChanged } from "./editor/core/project";
 import { sceneStore } from "./editor/core/SceneStore";
 import { useSceneStore } from "./editor/core/useSceneStore";
-import Console from "./editor/Console";
+import Console, { ConsoleButton } from "./editor/Console";
 import ContextMenuHost from "./editor/ContextMenuHost";
 import Hierarchy from "./editor/Hierarchy";
 import { useLayout } from "./editor/layout";
@@ -125,7 +125,7 @@ export default function App() {
         <div
             className="app"
             // The sizes of the panels, which editor.css reads
-            style={{ "--left-width": `${layout.left}px`, "--right-width": `${layout.right}px`, "--bottom-height": `${layout.bottom}px`, "--console-width": `${layout.console}px` } as CSSProperties}
+            style={{ "--left-width": `${layout.left}px`, "--right-width": `${layout.right}px`, "--bottom-height": `${layout.bottom}px` } as CSSProperties}
             // The editor has its own right-click menus; text fields keep the browser one for copy and paste
             onContextMenu={(e) => {
                 if (!["INPUT", "TEXTAREA"].includes((e.target as HTMLElement).tagName)) e.preventDefault();
@@ -139,15 +139,7 @@ export default function App() {
                     <div className="center">
                         <Viewport />
                         <Splitter side="bottom" layout={layout} onChange={setLayout} />
-                        <div className="bottom-row">
-                            <ProjectPanel />
-                            {store.consoleOpen && (
-                                <>
-                                    <Splitter side="console" layout={layout} onChange={setLayout} />
-                                    <Console />
-                                </>
-                            )}
-                        </div>
+                        <ProjectPanel />
                     </div>
                     <Splitter side="right" layout={layout} onChange={setLayout} />
                     <Inspector />
@@ -155,7 +147,9 @@ export default function App() {
             ) : (
                 <Welcome />
             )}
+            {store.project && store.consoleOpen && <Console />}
             <div className="statusbar">
+                <ConsoleButton />
                 <span className="message">{store.status}</span>
                 <span><kbd>RMB</kbd>+<kbd>WASD</kbd> fly</span>
                 <span><kbd>F</kbd> focus</span>

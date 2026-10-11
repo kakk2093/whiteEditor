@@ -251,8 +251,8 @@ class SceneStore {
 
     scenes: string[] = [];
 
-    // The Console panel, next to the Project one; remembered in the browser
-    consoleOpen = localStorage.getItem("white:console") !== "hidden";
+    // Is the Console window open; remembered in the browser
+    consoleOpen = localStorage.getItem("white:console") === "shown";
 
     // The page of the Settings window that is open, null while the window is closed
     settingsPage: SettingsPage | null = null;

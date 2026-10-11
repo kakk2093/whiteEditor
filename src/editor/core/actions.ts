@@ -1,7 +1,7 @@
 import { applyToPrefab, parsePrefab, parseScene, resolveLook, validateScene } from "../../engine";
 import type { LookData, MaterialData, ProjectSettings, SceneData } from "../../engine";
 import { renameInEntities, renameInScene } from "./references";
-import { changeFolder, moveToFolder, parseFolders, renameInFolders } from "./folders";
+import { changeFolder, moveToFolder, parseFolders, removeFolderTree, renameFolderTree, renameInFolders } from "./folders";
 import type { Folders, FolderSection } from "./folders";
 import type { AssetSection } from "./project";
 import { sceneStore } from "./SceneStore";
@@ -125,12 +125,12 @@ export function createFolder(section: FolderSection, name: string) {
 }
 
 export function renameFolder(section: FolderSection, from: string, to: string) {
-    return saveFolders(changeFolder(sceneStore.folders, section, from, to), `Folder ${from} renamed to ${to}`);
+    return saveFolders(renameFolderTree(sceneStore.folders, section, from, to), `Folder ${from} renamed to ${to}`);
 }
 
-// Only the folder goes: what was in it shows at the top again
+// Only the folder goes, with the folders inside it: what was in them shows in the folder above (or at the top)
 export function deleteFolder(section: FolderSection, name: string) {
-    return saveFolders(changeFolder(sceneStore.folders, section, name, null), `Folder ${name} removed; its ${section} are kept`);
+    return saveFolders(removeFolderTree(sceneStore.folders, section, name), `Folder ${name} removed; its ${section} are kept`);
 }
 
 // `folder` = null takes the asset out of its folder
