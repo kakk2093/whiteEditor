@@ -1,5 +1,6 @@
 import type { DragEvent } from "react";
 import { createPrefabInstance } from "../../engine";
+import { applyTexture } from "./actions";
 import { getComponent, sceneStore } from "./SceneStore";
 import type { AssetRef } from "./SceneStore";
 
@@ -41,6 +42,9 @@ export function dropAsset(asset: AssetRef, entityId: string | null) {
     if (asset.kind === "prefab") instantiatePrefab(asset.name, entityId);
     // A look dropped anywhere becomes the look of the scene
     if (asset.kind === "look") sceneStore.setEnvironment("look", asset.name);
+    if (asset.kind === "texture" && entityId) applyTexture(entityId, asset.name);
+    // A behavior dropped onto an object is attached to it
+    if (asset.kind === "behavior" && entityId) sceneStore.addComponent(entityId, "script", asset.name);
     if (asset.kind === "material" && entityId) {
         const found = sceneStore.findEntity(entityId);
         if (found && getComponent(found, "mesh")) {

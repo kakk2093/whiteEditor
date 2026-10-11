@@ -25,11 +25,15 @@ uniform vec2 resolution;
 uniform float time;
 uniform float cameraNear;
 uniform float cameraFar;
+uniform bool cameraOrtho;
+uniform vec2 scroll;
 varying vec2 vUv;
 
 vec4 texel(vec2 uv) { return texture2D(tColor, uv); }
 float depthAt(vec2 uv) {
     float d = texture2D(tDepth, uv).x;
+    // An orthographic camera keeps depth as it is, a perspective one squeezes the far part
+    if (cameraOrtho) return cameraNear + d * (cameraFar - cameraNear);
     return (cameraNear * cameraFar) / (cameraFar - d * (cameraFar - cameraNear));
 }
 vec3 normalAt(vec2 uv) { return texture2D(tNormal, uv).xyz * 2.0 - 1.0; }
@@ -47,10 +51,11 @@ const OUTPUT = `
 uniform sampler2D tColor;
 uniform int toneMapping;
 uniform float exposure;
+uniform vec2 offset;
 varying vec2 vUv;
 vec3 toSRGB(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
 void main() {
-    vec4 color = texture2D(tColor, vUv);
+    vec4 color = texture2D(tColor, vUv + offset);
     vec3 c = max(color.rgb, 0.0) * exposure;
     if (toneMapping == 1) c = c / (1.0 + c);
     if (toneMapping == 2) c = (c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14);
@@ -101,7 +106,7 @@ export class RenderPipeline {
     private outputMaterial = new THREE.ShaderMaterial({
         vertexShader: VERTEX,
         fragmentShader: OUTPUT,
-        uniforms: { tColor: { value: null }, toneMapping: { value: 0 }, exposure: { value: 1 } },
+        uniforms: { tColor: { value: null }, toneMapping: { value: 0 }, exposure: { value: 1 }, offset: { value: new THREE.Vector2() } },
         depthTest: false,
         depthWrite: false,
     });
@@ -148,6 +153,8 @@ export class RenderPipeline {
                     time: { value: 0 },
                     cameraNear: { value: 0.1 },
                     cameraFar: { value: 1000 },
+                    cameraOrtho: { value: false },
+                    scroll: { value: new THREE.Vector2() },
                 };
                 for (const [name, d] of Object.entries(params)) {
                     for (const uniform of uniformNames(name, d)) uniforms[uniform] = { value: null };
@@ -182,6 +189,42 @@ export class RenderPipeline {
         this.renderer.render(this.quad, this.quadCamera);
     }
 
+    // Pixel snap. Moves an orthographic camera, for the length of one drawing, to the nearest place where the
+    // pixels of the (small) picture fall on the same spots of the world as before: what stands still then keeps
+    // its pixels while the camera moves. Returns how to put the camera back, and the part of the move that was
+    // dropped, in the uv of the picture: the output shifts the picture by it, so the motion stays smooth.
+    private snapCamera(camera: THREE.Camera, width: number, height: number) {
+        const ortho = camera as THREE.OrthographicCamera;
+        if (!ortho.isOrthographicCamera || !this.look?.pixelSnap || this.look.pixelSize <= 1) return null;
+
+        camera.updateWorldMatrix(true, false);
+        const position = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld);
+        const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+        const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+        // The size of one pixel of the picture in the world
+        const pixelX = (ortho.right - ortho.left) / ortho.zoom / width;
+        const pixelY = (ortho.top - ortho.bottom) / ortho.zoom / height;
+        const x = position.dot(right);
+        const y = position.dot(up);
+        const dx = Math.round(x / pixelX) * pixelX - x;
+        const dy = Math.round(y / pixelY) * pixelY - y;
+
+        const saved = camera.position.clone();
+        const moved = position.addScaledVector(right, dx).addScaledVector(up, dy);
+        camera.position.copy(camera.parent ? camera.parent.worldToLocal(moved) : moved);
+        camera.updateMatrixWorld();
+        return {
+            // How far the camera is from the origin, in pixels of the picture (kept small: only its change
+            // matters). A pattern drawn at "pixel + scroll" stays on the world instead of on the screen.
+            scroll: new THREE.Vector2(Math.round(x / pixelX) % 4096, Math.round(y / pixelY) % 4096),
+            offset: new THREE.Vector2(-dx / pixelX / width, -dy / pixelY / height),
+            restore: () => {
+                camera.position.copy(saved);
+                camera.updateMatrixWorld();
+            },
+        };
+    }
+
     // dt (seconds) moves the `time` the effects see
     render(scene: THREE.Scene, camera: THREE.Camera, dt = 0) {
         const { renderer, look } = this;
@@ -203,6 +246,7 @@ export class RenderPipeline {
             if (target.width !== width || target.height !== height) target.setSize(width, height);
         }
 
+        const snap = this.snapCamera(camera, width, height);
         renderer.setRenderTarget(this.sceneTarget);
         renderer.render(scene, camera);
 
@@ -222,6 +266,7 @@ export class RenderPipeline {
             scene.overrideMaterial = overrideMaterial;
             renderer.setClearColor(clearColor, clearAlpha);
         }
+        snap?.restore();
 
         const perspective = camera as THREE.PerspectiveCamera;
         let source = this.sceneTarget;
@@ -234,6 +279,8 @@ export class RenderPipeline {
             u.time.value = this.time;
             u.cameraNear.value = perspective.near;
             u.cameraFar.value = perspective.far;
+            u.cameraOrtho.value = (camera as THREE.OrthographicCamera).isOrthographicCamera === true;
+            (u.scroll.value as THREE.Vector2).copy(snap?.scroll ?? new THREE.Vector2());
             const target = this.targets[i % 2];
             this.drawQuad(pass.material, target);
             source = target;
@@ -242,6 +289,7 @@ export class RenderPipeline {
         this.outputMaterial.uniforms.tColor.value = source.texture;
         this.outputMaterial.uniforms.toneMapping.value = Math.max(0, TONE_MAPPINGS.indexOf(look.toneMapping));
         this.outputMaterial.uniforms.exposure.value = look.exposure;
+        (this.outputMaterial.uniforms.offset.value as THREE.Vector2).copy(snap?.offset ?? new THREE.Vector2());
         this.drawQuad(this.outputMaterial, null);
     }
 

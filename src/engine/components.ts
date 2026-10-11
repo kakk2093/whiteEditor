@@ -112,11 +112,50 @@ export const componentDefs: Record<string, ComponentDef> = {
     camera: {
         label: "Camera",
         fields: {
-            fov: { type: "number", default: 60, min: 1, max: 179, step: 1 },
+            // orthographic: no perspective, things do not get smaller with distance (isometric views, pixel art)
+            projection: { type: "select", default: "perspective", options: ["perspective", "orthographic"] },
+            fov: { type: "number", default: 60, min: 1, max: 179, step: 1, when: { projection: ["perspective"] } },
+            // orthographic: half of the height of what the camera sees, meters
+            size: { type: "number", default: 5, min: 0.01, step: 0.5, when: { projection: ["orthographic"] } },
             near: { type: "number", default: 0.1, min: 0.001, step: 0.1 },
             far: { type: "number", default: 1000, min: 1, step: 10 },
         },
-        create: (f) => new THREE.PerspectiveCamera(f.fov as number, 1, f.near as number, f.far as number),
+        create: (f) => {
+            const size = f.size as number;
+            // The width follows the shape of the screen, see setCameraAspect()
+            return f.projection === "orthographic"
+                ? new THREE.OrthographicCamera(-size, size, size, -size, f.near as number, f.far as number)
+                : new THREE.PerspectiveCamera(f.fov as number, 1, f.near as number, f.far as number);
+        },
+    },
+    // The body of the entity for the running game: what self.move() stops at and what "enter" / "exit" of the
+    // behaviors are about (see runtime.ts). It draws nothing; the editor shows its outline.
+    collider: {
+        label: "Collider",
+        fields: {
+            // The defaults are the sizes of the mesh shapes: a box 1 x 1 x 1, a sphere 1 across, a capsule 1
+            // across and 2 high. All of it is in the units of the entity, so it scales with it. Nothing is ever
+            // tilted: of a rotated entity the box that holds it is taken, and a capsule always stands upright.
+            shape: { type: "select", default: "box", options: ["box", "sphere", "capsule"] },
+            sizeX: { type: "number", default: 1, min: 0.01, step: 0.1, when: { shape: ["box"] } },
+            sizeY: { type: "number", default: 1, min: 0.01, step: 0.1, when: { shape: ["box"] } },
+            sizeZ: { type: "number", default: 1, min: 0.01, step: 0.1, when: { shape: ["box"] } },
+            radius: { type: "number", default: 0.5, min: 0.01, step: 0.05, when: { shape: ["sphere", "capsule"] } },
+            // From the very bottom to the very top, the round ends included
+            height: { type: "number", default: 2, min: 0.01, step: 0.1, when: { shape: ["capsule"] } },
+            // Where its middle is, from the middle of the entity (in the entity's own units)
+            centerX: { type: "number", default: 0, step: 0.1 },
+            centerY: { type: "number", default: 0, step: 0.1 },
+            centerZ: { type: "number", default: 0, step: 0.1 },
+            // false: nothing stops at it, it only tells what touches it (a trigger: a coin, a door zone)
+            solid: { type: "boolean", default: true },
+        },
+        create: (f) => {
+            const marker = new THREE.Object3D();
+            marker.position.set(f.centerX as number, f.centerY as number, f.centerZ as number);
+            marker.userData.collider = f;
+            return marker;
+        },
     },
     // A model built by a project script (defineModel)
     model: {

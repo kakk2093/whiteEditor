@@ -40,6 +40,12 @@ export function openContextMenu(
     set({ x: e.clientX, y: e.clientY, sections: sections.filter((s) => s.items.length > 0) });
 }
 
+// Asks before doing what cannot be undone: a small menu at that place with the question and the one answer.
+// Clicking anywhere else is "no".
+export function confirmAt(at: { clientX: number; clientY: number }, question: string, label: string, run: () => void) {
+    set({ x: at.clientX, y: at.clientY, sections: [{ title: question, items: [{ label, icon: "trash", danger: true, run }] }] });
+}
+
 export function closeContextMenu() {
     if (state) set(null);
 }

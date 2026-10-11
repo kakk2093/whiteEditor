@@ -43,8 +43,10 @@ function onKeyDown(e: KeyboardEvent) {
         else sceneStore.undo();
     } else if ((e.ctrlKey || e.metaKey) && e.code === "KeyD") {
         e.preventDefault();
-        const copy = id && sceneStore.duplicate(id);
-        if (copy) sceneStore.select(copy.id);
+        sceneStore.duplicateSelected();
+    } else if ((e.ctrlKey || e.metaKey) && e.code === "KeyG") {
+        e.preventDefault();
+        sceneStore.groupSelected();
     } else if (e.ctrlKey || e.metaKey || e.altKey || sceneStore.flying) {
         // While the right mouse button is held, the letter keys fly the camera (see Viewport)
         return;
@@ -57,10 +59,32 @@ function onKeyDown(e: KeyboardEvent) {
     } else if (e.code === "KeyR") {
         sceneStore.setGizmoMode("scale");
     } else if (e.code === "Delete" && id) {
-        sceneStore.removeEntity(id);
+        sceneStore.removeSelected();
     } else if (e.code === "Escape") {
         sceneStore.select(null);
     }
+}
+
+// true if the keys and the clipboard belong to something else: a field being typed in, or the running game
+function busy(e: Event) {
+    return sceneStore.gameView || ["INPUT", "TEXTAREA", "SELECT"].includes((e.target as HTMLElement).tagName);
+}
+
+// Ctrl+C / Ctrl+X: the selected objects go to the clipboard as text, the JSON of a scene file
+function onCopy(e: ClipboardEvent) {
+    // Selected text on the page is copied as usual
+    if (busy(e) || !window.getSelection()?.isCollapsed) return;
+    const text = sceneStore.copySelected();
+    if (!text) return;
+    e.clipboardData?.setData("text/plain", text);
+    e.preventDefault();
+    if (e.type === "cut") sceneStore.removeSelected();
+}
+
+// Ctrl+V: objects from the clipboard, whoever put them there (this editor, another tab, a text editor)
+function onPaste(e: ClipboardEvent) {
+    if (busy(e)) return;
+    if (sceneStore.paste(e.clipboardData?.getData("text/plain") || sceneStore.clipboard)) e.preventDefault();
 }
 
 export default function App() {
@@ -71,10 +95,16 @@ export default function App() {
         const offScripts = onScriptsChanged(reloadScripts);
         const offAssets = onAssetChanged(assetChangedOnDisk);
         window.addEventListener("keydown", onKeyDown);
+        window.addEventListener("copy", onCopy);
+        window.addEventListener("cut", onCopy);
+        window.addEventListener("paste", onPaste);
         return () => {
             offScripts();
             offAssets();
             window.removeEventListener("keydown", onKeyDown);
+            window.removeEventListener("copy", onCopy);
+            window.removeEventListener("cut", onCopy);
+            window.removeEventListener("paste", onPaste);
         };
     }, []);
 

@@ -34,8 +34,8 @@ export const drive = defineBehavior({
 
         const fast = input.key("ShiftLeft") || input.key("ShiftRight");
         const step = (self.params.speed * (fast ? 2 : 1) * dt) / Math.hypot(x, z);
-        self.object.position.x += x * step;
-        self.object.position.z += z * step;
+        // move() instead of changing position: with a Collider on the object it stops at solid colliders
+        self.move(x * step, 0, z * step);
     },
 });
 
@@ -51,5 +51,79 @@ export const bob = defineBehavior({
     update: (self) => {
         const phase = (self.time / self.params.period) * Math.PI * 2;
         self.object.position.y = self.state.baseY + Math.sin(phase) * self.params.height;
+    },
+});
+
+// Makes a new instance of a prefab every `interval` seconds, around its own object, and removes the oldest
+// ones once there are more than `max`. self.spawn() and self.destroy() are how objects come and go in a
+// running game.
+export const spawner = defineBehavior({
+    name: "spawner",
+    label: "Spawner",
+    params: {
+        prefab: { type: "asset", kind: "prefab", default: "" },
+        // Seconds between two instances
+        interval: { type: "number", default: 1, min: 0.1, step: 0.1 },
+        max: { type: "number", default: 5, min: 1, step: 1 },
+        // How far from the spawner an instance may appear, meters
+        radius: { type: "number", default: 2, min: 0, step: 0.5 },
+    },
+    start: () => ({ next: 0, made: [] as THREE.Object3D[] }),
+    update: (self) => {
+        const { state, params } = self;
+        if (!params.prefab || self.time < state.next) return;
+        state.next = self.time + params.interval;
+
+        const angle = Math.random() * Math.PI * 2;
+        const distance = Math.random() * params.radius;
+        const { x, y, z } = self.object.position;
+        state.made.push(self.spawn(params.prefab, [x + Math.cos(angle) * distance, y, z + Math.sin(angle) * distance]));
+        while (state.made.length > params.max) {
+            const oldest = state.made.shift();
+            if (oldest) self.destroy(oldest);
+        }
+    },
+    // The spawner goes: so does what it has made
+    destroy: (self) => self.state.made.forEach((object) => self.destroy(object)),
+});
+
+// Removes its object after a while; put it on what should not stay forever
+export const lifetime = defineBehavior({
+    name: "lifetime",
+    label: "Lifetime",
+    params: {
+        seconds: { type: "number", default: 3, min: 0, step: 0.5 },
+    },
+    start: (self) => ({ born: self.time }),
+    update: (self) => {
+        if (self.time - self.state.born >= self.params.seconds) self.destroy();
+    },
+});
+
+// Keeps the object where it was relative to another one: put it on a camera to follow the player
+export const follow = defineBehavior({
+    name: "follow",
+    label: "Follow",
+    params: {
+        // Name of the object to follow
+        target: { type: "string", default: "Player" },
+    },
+    start: (self) => {
+        const target = self.root.getObjectByName(self.params.target);
+        return { offset: target ? self.object.position.clone().sub(target.position) : null };
+    },
+    update: (self) => {
+        const target = self.root.getObjectByName(self.params.target);
+        if (target && self.state.offset) self.object.position.copy(target.position).add(self.state.offset);
+    },
+});
+
+// Something to collect: when an object that is driven by the player touches it, it disappears.
+// The object needs a Collider with "solid" off (a trigger), so that the player walks into it.
+export const pickup = defineBehavior({
+    name: "pickup",
+    label: "Pickup",
+    enter: (self, other) => {
+        if (self.get("drive", other)) self.destroy();
     },
 });

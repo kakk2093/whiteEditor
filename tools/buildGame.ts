@@ -19,6 +19,12 @@ const ENTRY = 'virtual:white-game'
 const jsonNames = async (dir: string) =>
   (await fs.readdir(dir).catch(() => [] as string[])).filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5)).sort()
 
+const listImages = async (dir: string) =>
+  (await fs.readdir(dir, { recursive: true }).catch(() => [] as string[]))
+    .map((f) => f.split(path.sep).join('/'))
+    .filter((f) => /\.(png|jpe?g|webp)$/i.test(f))
+    .sort()
+
 const readJson = async (dir: string, name: string) => JSON.parse(await fs.readFile(path.join(dir, `${name}.json`), 'utf-8'))
 
 const page = (title: string) => `<!doctype html>
@@ -68,6 +74,8 @@ export async function buildGame(root: string, projectDir: string, scene?: string
     ...scripts.map((file, i) => `import * as script${i} from ${fromRoot(path.join(scriptsDir, file))}`),
     `const registry = new Registry()`,
     ...scripts.map((_, i) => `registry.registerExports(script${i})`),
+    // assets/ is copied next to index.html
+    `registry.setTextures('./assets/', ${JSON.stringify(await listImages(path.join(projectDir, 'assets')))})`,
     `for (const [name, data] of Object.entries(${await section('materials')})) registry.setMaterial(name, data)`,
     `for (const [name, data] of Object.entries(${await section('prefabs')})) registry.setPrefab(name, parsePrefab(data).root)`,
     `for (const [name, data] of Object.entries(${await section('looks')})) registry.setLook(name, data)`,

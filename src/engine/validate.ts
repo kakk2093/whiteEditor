@@ -2,6 +2,7 @@ import { componentDefs, componentKey } from "./components";
 import { environmentFields } from "./environment";
 import { lookFields } from "./look";
 import type { LookData } from "./look";
+import { materialFields } from "./materials";
 import { expandPristine, findInExpanded, innerPaths, ROOT_PATH } from "./prefab";
 import type { ParamDef, Registry } from "./Registry";
 import { MAX_COLORS } from "./shaderParams";
@@ -29,7 +30,10 @@ function checkValue(def: ParamDef, value: unknown, registry: Registry): string |
             return def.options.includes(value as string) ? null : `must be one of: ${def.options.join(", ")}`;
         case "asset":
             if (value === "") return null;
-            return registry.assetNames(def.kind).includes(value as string) ? null : `${def.kind} "${value}" does not exist`;
+            if (registry.assetNames(def.kind).includes(value as string)) return null;
+            return def.kind === "texture"
+                ? `there is no image "${value}" in assets/ (images: ${registry.textureNames().join(", ") || "none"})`
+                : `${def.kind} "${value}" does not exist`;
     }
 }
 
@@ -186,6 +190,14 @@ export function validatePrefab(name: string, data: PrefabData, registry: Registr
     if (data.root.prefab) problems.push(`root: the root of a prefab cannot itself be a prefab instance`);
     checkEntity(data.root, "", registry, new Set(), problems);
     if (containsItself(registry, data.root, [name])) problems.push(`prefab "${name}" contains itself`);
+    return problems;
+}
+
+// Problems of a material asset (materials/<name>.json as it is on disk)
+export function validateMaterial(data: unknown, registry: Registry): string[] {
+    if (typeof data !== "object" || data === null || Array.isArray(data)) return ["must be an object"];
+    const problems: string[] = [];
+    checkFields(materialFields, data as Record<string, unknown>, "material", registry, problems);
     return problems;
 }
 

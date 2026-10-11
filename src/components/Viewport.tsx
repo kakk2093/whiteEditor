@@ -2,9 +2,10 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
-import { createRenderer, RenderPipeline, resolveLook } from "../engine";
+import { createRenderer, RenderPipeline, resolveLook, setCameraAspect } from "../engine";
 import type { Input } from "../engine";
 import { dropAsset, getDraggedAsset } from "../editor/core/dnd";
+import { ColliderHandles } from "./colliderHandles";
 import { EDITOR_LAYER, sceneStore } from "../editor/core/SceneStore";
 import type { GizmoMode } from "../editor/core/SceneStore";
 import { useSceneStore } from "../editor/core/useSceneStore";
@@ -97,6 +98,10 @@ export default function Viewport() {
         const gizmo = ctx.transform.getHelper();
         sceneStore.scene.add(gizmo);
 
+        // "Edit Collider": handles on the collider of the selected object
+        const handles = new ColliderHandles(ctx.camera, ctx.renderer.domElement, ctx.controls);
+        sceneStore.scene.add(handles.group);
+
         // The ground grid: 1 cell = 1 meter
         const grid = new THREE.GridHelper(40, 40, 0x5a5d66, 0x3a3c43);
         // Just below the ground, so a floor at y = 0 covers it instead of flickering with it
@@ -130,11 +135,12 @@ export default function Viewport() {
 
         const onPointerUp = (e: PointerEvent) => {
             if (!ctx.renderer || !ctx.raycaster || !ctx.mouse || !ctx.camera) return;
-            if (e.button !== 0 || downOnGizmo) return;
+            if (e.button !== 0 || downOnGizmo || handles.grabbed) return;
             if (Math.hypot(e.clientX - downX, e.clientY - downY) > CLICK_THRESHOLD) return;
             if (sceneStore.gameView) return;
 
-            sceneStore.select(pickRef.current(e.clientX, e.clientY));
+            // Ctrl or Shift adds to the selection (or takes out of it)
+            sceneStore.select(pickRef.current(e.clientX, e.clientY), e.ctrlKey || e.metaKey || e.shiftKey);
         };
 
         pickRef.current = (clientX, clientY) => {
@@ -290,8 +296,35 @@ export default function Viewport() {
         let gameInput: Input | null = null;
         let detachInput = () => {};
 
+        // With several objects selected each one gets a box around it; the gizmo holds the main one
+        const boxes = new THREE.Group();
+        sceneStore.scene.add(boxes);
+        let boxed = "";
+        const updateBoxes = () => {
+            const ids = sceneStore.selectedIds.length > 1 && !sceneStore.playing ? sceneStore.selectedIds : [];
+            if (ids.join() === boxed) return;
+            boxed = ids.join();
+            for (const box of [...boxes.children] as THREE.BoxHelper[]) {
+                boxes.remove(box);
+                box.dispose();
+            }
+            for (const id of ids) {
+                const object = sceneStore.objectOf(id);
+                if (!object) continue;
+                const box = new THREE.BoxHelper(object, id === sceneStore.selectedId ? 0xffffff : 0x4d9cff);
+                box.layers.set(EDITOR_LAYER);
+                box.raycast = () => {};
+                boxes.add(box);
+            }
+        };
+
         const unsubscribe = sceneStore.subscribe(() => {
             ctx.transform?.setMode(sceneStore.gizmoMode);
+            // Snapping: whole steps instead of any value
+            ctx.transform?.setTranslationSnap(sceneStore.snap ? sceneStore.snapStep : null);
+            ctx.transform?.setRotationSnap(sceneStore.snap ? THREE.MathUtils.degToRad(15) : null);
+            ctx.transform?.setScaleSnap(sceneStore.snap ? 0.25 : null);
+            updateBoxes();
             applyLook();
 
             // Game view: the keyboard and the mouse go to the behaviors of the scene
@@ -306,7 +339,10 @@ export default function Viewport() {
             // Sync selected object with transform gizmo
             // During Play the viewport draws the running copy of the scene, and the gizmo goes there with it
             if (gizmo.parent !== sceneStore.viewScene) sceneStore.viewScene.add(gizmo);
-            const selected = sceneStore.gameView ? null : sceneStore.selectedViewObject;
+            // While a collider is being edited its handles are there instead of the gizmo
+            const editingCollider = sceneStore.colliderEdit && sceneStore.hasCollider && !sceneStore.playing;
+            const selected = sceneStore.gameView || editingCollider ? null : sceneStore.selectedViewObject;
+            handles.update();
             // Looking through the camera of the scene: the editor camera stays where it was
             if (ctx.controls && !ctx.transform?.dragging) ctx.controls.enabled = !sceneStore.gameView;
             if (sceneStore.gameView) stopFlying();
@@ -340,6 +376,9 @@ export default function Viewport() {
             }
 
             if (ctx.controls) ctx.controls.update();
+            handles.frame();
+            // The boxes follow what is being dragged
+            for (const box of boxes.children as THREE.BoxHelper[]) box.update();
             if (ctx.renderer && ctx.camera) {
                 const canvas = ctx.renderer.domElement;
                 const camera = sceneStore.gameCamera(canvas.clientWidth, canvas.clientHeight) ?? ctx.camera;
@@ -384,8 +423,7 @@ export default function Viewport() {
                     const width = Math.round(canvas.clientWidth * PREVIEW_SIZE);
                     const height = Math.round(canvas.clientHeight * PREVIEW_SIZE);
                     const left = canvas.clientWidth - width - PREVIEW_MARGIN;
-                    preview.aspect = width / height;
-                    preview.updateProjectionMatrix();
+                    setCameraAspect(preview, width / height);
                     gizmo.visible = false;
                     // The y of a three.js viewport is counted from the bottom
                     renderer.setViewport(left, PREVIEW_MARGIN, width, height);
@@ -420,6 +458,8 @@ export default function Viewport() {
             detachInput();
             pipeline.dispose();
             sceneStore.focusHandler = null;
+            handles.dispose();
+            boxes.removeFromParent();
             gizmo.removeFromParent();
             sceneStore.scene.remove(grid);
             grid.dispose();
@@ -450,7 +490,8 @@ export default function Viewport() {
                 if (!asset) return;
                 e.preventDefault();
                 const entityId = pickRef.current(e.clientX, e.clientY);
-                dropAsset(asset, asset.kind === "material" ? entityId : null);
+                // A material, a texture or a behavior goes onto the object under the mouse; the rest becomes new objects
+                dropAsset(asset, ["material", "texture", "behavior"].includes(asset.kind) ? entityId : null);
             }}
             // A right click opens the menu; holding the button to look around or fly must not
             onContextMenu={(e) => {
@@ -478,6 +519,38 @@ export default function Viewport() {
                         <Icon name={icon} />
                     </button>
                 ))}
+                {!store.gameView && (
+                    <>
+                        <button
+                            className={`btn ghost ${store.snap ? "active" : ""}`}
+                            title="Snap: the gizmo moves by whole steps, turns by 15° and scales by 0.25"
+                            onClick={() => store.setSnap(!store.snap)}
+                        >
+                            <Icon name="snap" />
+                        </button>
+                        {store.snap && (
+                            <select
+                                className="select"
+                                value={store.snapStep}
+                                title="The step of a move, meters"
+                                onChange={(e) => store.setSnap(true, Number(e.target.value))}
+                            >
+                                {[0.1, 0.25, 0.5, 1, 2].map((step) => (
+                                    <option key={step} value={step}>{step} m</option>
+                                ))}
+                            </select>
+                        )}
+                    </>
+                )}
+                {!store.playing && store.hasCollider && (
+                    <button
+                        className={`btn ghost ${store.colliderEdit ? "active" : ""}`}
+                        title="Edit Collider: drag the dots on its sides to resize it, the square in the middle to move it"
+                        onClick={() => store.setColliderEdit(!store.colliderEdit)}
+                    >
+                        <Icon name="collider" />
+                    </button>
+                )}
                 {looks.length > 0 && !store.editingPrefab && (
                     <>
                         {!store.gameView && <span className="sep" />}

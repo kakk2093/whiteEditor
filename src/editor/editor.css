@@ -877,3 +877,75 @@ kbd {
     color: #fff;
     background: rgba(0, 0, 0, 0.6);
 }
+
+/* Under the name of a tile: what kind of script thing it is */
+.tile-note {
+    margin-top: -4px;
+    font-size: 10px;
+    color: var(--muted);
+    white-space: nowrap;
+}
+
+.muted {
+    color: var(--muted);
+}
+
+/* A number field: the input, and two small arrows over its right edge while the mouse is on it */
+.number {
+    position: relative;
+    display: flex;
+    flex: 1;
+    min-width: 0;
+}
+
+/* Dragging over the field changes the value; once it is focused the mouse is for the text again */
+.number .input:not(:focus) {
+    cursor: ew-resize;
+}
+
+.number-steps {
+    position: absolute;
+    top: 1px;
+    right: 1px;
+    bottom: 1px;
+    width: 12px;
+    display: none;
+    flex-direction: column;
+}
+
+.number:hover .number-steps {
+    display: flex;
+}
+
+.number-steps button {
+    flex: 1;
+    padding: 0;
+    border: 0;
+    border-left: 1px solid var(--border);
+    background: var(--field);
+    color: var(--muted);
+    font-size: 6px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.number-steps button:hover {
+    background: var(--hover);
+    color: #fff;
+}
+
+/* A texture: its pixels are shown as they are, not blurred */
+.tile-preview.texture {
+    object-fit: cover;
+    image-rendering: pixelated;
+}
+
+.texture-preview {
+    display: block;
+    width: 100%;
+    max-height: 220px;
+    margin: 8px 0;
+    object-fit: contain;
+    image-rendering: pixelated;
+    background: var(--field);
+}

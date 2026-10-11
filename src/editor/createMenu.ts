@@ -56,7 +56,14 @@ function createSections(parentId: string | null): ContextSection[] {
 
 // Right-click on empty space of the Hierarchy or the viewport
 export function sceneContextMenu(): ContextSection[] {
-    return createSections(null);
+    const paste: ContextSection = { items: sceneStore.clipboard ? [{ label: "Paste", shortcut: "Ctrl+V", run: () => sceneStore.paste() }] : [] };
+    return [paste, ...createSections(null)];
+}
+
+// Copy from a menu: the text also goes to the system clipboard, where the browser allows it
+export function copyToClipboard() {
+    const text = sceneStore.copySelected();
+    if (text) navigator.clipboard?.writeText(text).catch(() => {});
 }
 
 // Right-click on something inside a prefab instance
@@ -77,16 +84,24 @@ export function entityContextMenu(entity: EntityData): ContextSection[] {
     const store = sceneStore;
     const isPrefabRoot = store.editingPrefab !== null && store.entities[0] === entity;
 
-    const duplicate = () => {
-        const copy = store.duplicate(entity.id);
-        if (copy) store.select(copy.id);
-    };
-
+    // With several objects selected the menu is about all of them
+    const many = store.selectedIds.length > 1 && store.selectedIds.includes(entity.id);
     const actions: ContextSection = {
         items: [{ label: "Focus", shortcut: "F", run: () => store.focus(entity.id) }]
     };
     if (!isPrefabRoot) {
-        actions.items.push({ label: "Duplicate", icon: "copy", shortcut: "Ctrl+D", run: duplicate });
+        actions.items.push(
+            { label: many ? `Duplicate ${store.selectedRoots.length} Objects` : "Duplicate", icon: "copy", shortcut: "Ctrl+D", run: () => store.duplicateSelected() },
+            { label: "Copy", shortcut: "Ctrl+C", run: () => copyToClipboard() }
+        );
+    }
+    if (store.clipboard) actions.items.push({ label: "Paste", shortcut: "Ctrl+V", run: () => store.paste() });
+    if (!store.editingPrefab || !isPrefabRoot) {
+        actions.items.push({ label: many ? "Group" : "Group (new parent)", icon: "folder", shortcut: "Ctrl+G", run: () => store.groupSelected() });
+    }
+    if (many) {
+        actions.items.push({ label: `Delete ${store.selectedRoots.length} Objects`, icon: "trash", shortcut: "Del", danger: true, run: () => store.removeSelected() });
+        return [actions];
     }
     if (entity.prefab) {
         const prefab = entity.prefab;

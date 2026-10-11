@@ -22,6 +22,9 @@ import { buildGame } from './tools/buildGame'
 const NAME = /^[\w-]+$/
 
 // Folders whose files are JSON assets addressed by name
+// A file an editor may put into assets/
+const IMAGE_NAME = /^[\w-]+\.(png|jpe?g|webp)$/i
+
 const JSON_SECTIONS = ['scenes', 'materials', 'prefabs', 'looks']
 
 const TSCONFIG = `{
@@ -125,13 +128,20 @@ async function listNames(dir: string, ext: string) {
     .map((e) => e.name.slice(0, e.name.length - ext.length))
 }
 
+// The image files of a project's assets/ folder (with subfolders), which materials use as textures
+export async function listImages(assetsDir: string) {
+  const files = await fs.readdir(assetsDir, { recursive: true }).catch(() => [] as string[])
+  return files.map(toPosix).filter((f) => /\.(png|jpe?g|webp)$/i.test(f)).sort()
+}
+
 export function projectsPlugin(dir = 'projects'): Plugin {
   let root = ''
 
   // "<project>" if the file is a script of some project
   const scriptProject = (file: string) => {
     const [project, folder, ...rest] = toPosix(path.relative(root, file)).split('/')
-    return folder === 'scripts' && rest.length > 0 && NAME.test(project) ? project : null
+    // A file of assets/ counts too: the editor loads the project again and so sees a new or changed texture
+    return (folder === 'scripts' || folder === 'assets') && rest.length > 0 && NAME.test(project) ? project : null
   }
 
   return {
@@ -139,7 +149,8 @@ export function projectsPlugin(dir = 'projects'): Plugin {
     apply: 'serve',
 
     // A finished build must not look like a source change to the dev server (an .html there reloads the editor)
-    config: () => ({ server: { watch: { ignored: [`**/${dir}/*/build/**`] } } }),
+    // The same for the pictures of `npm run render`
+    config: () => ({ server: { watch: { ignored: [`**/${dir}/*/build/**`, `**/${dir}/*/renders/**`] } } }),
 
     configureServer(server) {
       root = path.resolve(server.config.root, dir)
@@ -164,6 +175,10 @@ export function projectsPlugin(dir = 'projects'): Plugin {
       }
       server.watcher.on('add', notify)
       server.watcher.on('unlink', notify)
+      // A script that changed is reloaded by Vite itself; an image is not a module, so it is told here
+      server.watcher.on('change', (file) => {
+        if (toPosix(path.relative(root, file)).split('/')[1] === 'assets') notify(file)
+      })
       for (const event of ['add', 'change', 'unlink'] as const) server.watcher.on(event, notifyAsset)
 
       listNames(root, '').then((projects) =>
@@ -207,6 +222,9 @@ export function projectsPlugin(dir = 'projects'): Plugin {
             .map((f) => `/${toPosix(path.relative(server.config.root, path.join(scriptsDir, f)))}`)
             .sort()
         }
+
+        // GET /__api/projects/demo/assets -> the images of assets/, as materials name them: ["bricks.png", "walls/stone.png"]
+        if (section === 'assets' && !item) return listImages(path.join(projectDir, 'assets'))
 
         // POST /__api/projects/demo/build?scene=main -> builds the game into <project>/build
         if (section === 'build' && !item) {
@@ -252,6 +270,27 @@ export function projectsPlugin(dir = 'projects'): Plugin {
         try {
           const [pathname, search = ''] = (req.url ?? '/').split('?')
           const segments = pathname.split('/').filter(Boolean).map(decodeURIComponent)
+
+          // PUT / DELETE /__api/projects/demo/assets/bricks.png -> an image of assets/ is written (the body
+          // is the file itself) or removed. The watcher then tells the editors that the project changed.
+          if (segments.length === 3 && segments[1] === 'assets' && req.method !== 'GET') {
+            const [project, , file] = segments
+            if (!NAME.test(project) || !IMAGE_NAME.test(file)) throw new HttpError(400, 'An image name can have only Latin letters, digits, _ and -, and ends in .png, .jpg or .webp')
+            const assetsDir = path.join(root, project, 'assets')
+            if (!(await fs.stat(path.join(root, project)).then((s) => s.isDirectory(), () => false))) throw new HttpError(404, `Project "${project}" not found`)
+            if (req.method === 'DELETE') {
+              await fs.rm(path.join(assetsDir, file), { force: true })
+            } else if (req.method === 'PUT') {
+              const chunks: Buffer[] = []
+              for await (const chunk of req) chunks.push(chunk as Buffer)
+              await fs.mkdir(assetsDir, { recursive: true })
+              await fs.writeFile(path.join(assetsDir, file), Buffer.concat(chunks))
+            } else {
+              throw new HttpError(405, 'Method not allowed')
+            }
+            return send(200, { ok: true })
+          }
+
           const readBody = async () => {
             const chunks: Buffer[] = []
             for await (const chunk of req) chunks.push(chunk as Buffer)

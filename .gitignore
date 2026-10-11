@@ -11,6 +11,8 @@ node_modules
 dist
 # Built games: npm run build:game -- <project>
 projects/*/build
+# Pictures of scenes: npm run render -- <project>
+projects/*/renders
 dist-ssr
 *.local
 

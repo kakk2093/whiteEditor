@@ -59,7 +59,8 @@ float hatchStroke(vec2 p, float angle) {
 vec4 effect(vec2 uv, vec4 color) {
     vec3 c = toSRGB(clamp(color.rgb, 0.0, 1.0));
     float lum = dot(c, vec3(0.299, 0.587, 0.114)) / light;
-    vec2 p = uv * resolution;
+    // + scroll: with a pixel-snapped camera the strokes stay on the world
+    vec2 p = uv * resolution + scroll;
     float strokes = 0.0;
     if (lum < 0.75) strokes = max(strokes, hatchStroke(p, 0.785));
     if (lum < 0.5) strokes = max(strokes, hatchStroke(p, -0.785));

@@ -1,16 +1,16 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { MouseEvent, ReactNode } from "react";
 import {
-    componentDefs, componentKey, environmentFields, fieldApplies, lookFields, materialFields, MAX_COLORS, paramDefaults, resolveLook
+    builtinEffects, builtinSurfaces, componentDefs, componentKey, environmentFields, fieldApplies, lookFields, materialFields, MAX_COLORS, paramDefaults, resolveLook
 } from "../engine";
 import type {
     ComponentData, EntityData, EnvironmentData, LookData, MaterialData, ParamDef, ParamValue, Params
 } from "../engine";
 import {
-    applyOverrides, createPrefab, deleteLook, deleteMaterial, deletePrefab, deleteScene, openPrefab, openScene, updateLook, updateMaterial
+    addToLook, applyOverrides, createPrefab, deleteLook, deleteMaterial, deletePrefab, deleteScene, deleteTexture, openPrefab, openScene, renameAsset, renameScene, updateLook, updateMaterial
 } from "./core/actions";
 import { instantiateModel, instantiatePrefab } from "./core/dnd";
-import { openContextMenu } from "./contextMenu";
+import { confirmAt, openContextMenu } from "./contextMenu";
 import { getComponent, sceneStore } from "./core/SceneStore";
 import type { AssetRef, TransformProperty } from "./core/SceneStore";
 import { useSceneStore } from "./core/useSceneStore";
@@ -27,8 +27,13 @@ const TRANSFORMS: { property: TransformProperty; title: string }[] = [
 
 const AXES = ["x", "y", "z"] as const;
 
-// Shows a short value, but while the field is focused keeps exactly what is being typed
-function NumberInput({ value, step, min, max, onChange }: {
+// How far the mouse travels for one step of a value that is being dragged, pixels
+const SCRUB_PIXELS = 4;
+
+// A number can be typed, stepped with the two small arrows that show on hover, or dragged: press on the
+// field and move the mouse left or right (Shift: ten times faster, Alt: ten times finer). A click without
+// moving starts typing. While the field is focused it keeps exactly what is being typed.
+function NumberInput({ value, step = 0.1, min, max, onChange }: {
     value: number;
     step?: number;
     min?: number;
@@ -36,23 +41,73 @@ function NumberInput({ value, step, min, max, onChange }: {
     onChange: (value: number) => void;
 }) {
     const [text, setText] = useState<string | null>(null);
+    // A press that may turn into a drag: where it began and what the value was
+    const drag = useRef<{ x: number; start: number; moved: boolean } | null>(null);
+
+    const set = (next: number) => {
+        let v = next;
+        if (min !== undefined) v = Math.max(min, v);
+        if (max !== undefined) v = Math.min(max, v);
+        // Steps of 0.1 must not leave 0.30000000000000004 in the files
+        v = Math.round(v * 1e6) / 1e6;
+        if (text !== null) setText(String(v));
+        onChange(v);
+    };
 
     return (
-        <input
-            className="input"
-            type="number"
-            step={step ?? 0.1}
-            min={min}
-            max={max}
-            value={text ?? String(Math.round(value * 1000) / 1000)}
-            onFocus={(e) => setText(e.target.value)}
-            onBlur={() => setText(null)}
-            onChange={(e) => {
-                setText(e.target.value);
-                const parsed = Number(e.target.value);
-                if (e.target.value !== "" && !Number.isNaN(parsed)) onChange(parsed);
-            }}
-        />
+        <div className="number">
+            <input
+                className="input"
+                type="number"
+                step={step}
+                min={min}
+                max={max}
+                title="Drag left or right to change (Shift faster, Alt finer) · click to type"
+                value={text ?? String(Math.round(value * 1000) / 1000)}
+                onFocus={(e) => setText(e.target.value)}
+                onBlur={() => setText(null)}
+                onChange={(e) => {
+                    setText(e.target.value);
+                    const parsed = Number(e.target.value);
+                    if (e.target.value !== "" && !Number.isNaN(parsed)) onChange(parsed);
+                }}
+                onPointerDown={(e) => {
+                    // A field that is being typed in keeps the mouse for its text
+                    if (e.button !== 0 || document.activeElement === e.currentTarget) return;
+                    e.preventDefault();
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                    drag.current = { x: e.clientX, start: value, moved: false };
+                }}
+                onPointerMove={(e) => {
+                    const d = drag.current;
+                    if (!d) return;
+                    const dx = e.clientX - d.x;
+                    if (!d.moved && Math.abs(dx) < SCRUB_PIXELS) return;
+                    d.moved = true;
+                    const speed = e.shiftKey ? 10 : e.altKey ? 0.1 : 1;
+                    set(d.start + Math.round(dx / SCRUB_PIXELS) * step * speed);
+                }}
+                onPointerUp={(e) => {
+                    const d = drag.current;
+                    drag.current = null;
+                    if (!d) return;
+                    e.currentTarget.releasePointerCapture(e.pointerId);
+                    // It was a click after all
+                    if (!d.moved) {
+                        e.currentTarget.focus();
+                        e.currentTarget.select();
+                    }
+                }}
+                onPointerCancel={() => {
+                    drag.current = null;
+                }}
+            />
+            <span className="number-steps">
+                {/* preventDefault keeps the focus where it is: a field being typed in stays so */}
+                <button tabIndex={-1} title="More" onPointerDown={(e) => e.preventDefault()} onClick={() => set(value + step)}>▲</button>
+                <button tabIndex={-1} title="Less" onPointerDown={(e) => e.preventDefault()} onClick={() => set(value - step)}>▼</button>
+            </span>
+        </div>
     );
 }
 
@@ -256,7 +311,19 @@ function ComponentSection({ entity, component, locked = false }: { entity: Entit
     const override = store.overrideOf(entity.id)?.components?.[key];
 
     return (
-        <Section title={title} onRemove={locked ? undefined : () => store.removeComponent(entity.id, key)}>
+        <Section
+            title={title}
+            onRemove={locked ? undefined : () => store.removeComponent(entity.id, key)}
+            extra={component.type === "collider" && !store.playing && (
+                <button
+                    className={`btn ghost ${store.colliderEdit ? "active" : ""}`}
+                    title="Edit in the viewport: drag the dots on the sides of the collider to resize it, the square to move it"
+                    onClick={() => store.setColliderEdit(!store.colliderEdit)}
+                >
+                    <Icon name="collider" size={12} />
+                </button>
+            )}
+        >
             {def && (
                 <Fields
                     defs={def.fields}
@@ -571,7 +638,7 @@ function LookInspector({ name }: { name: string }) {
     return (
         <>
             <div className="inspector-head">
-                <Icon name="look" /> <b style={{ flex: 1 }}>{name}</b>
+                <Icon name="look" /> <AssetName kind="look" name={name} />
                 <button className="btn ghost danger" title="Delete the look" onClick={() => deleteLook(name)}>
                     <Icon name="trash" />
                 </button>
@@ -624,17 +691,152 @@ function LookInspector({ name }: { name: string }) {
     );
 }
 
+// The name of a material or a look, in the head of its Inspector. Typing another one and pressing Enter (or
+// leaving the field) renames the asset together with everything that refers to it.
+function AssetName({ kind, name }: { kind: "material" | "look" | "prefab" | "scene"; name: string }) {
+    const [text, setText] = useState(name);
+    const commit = () => {
+        const next = text.trim();
+        if (next && next !== name) {
+            if (kind === "scene") renameScene(name, next);
+            else renameAsset(kind, name, next);
+        }
+        // If the name was refused, the field shows the real one again
+        setText(name);
+    };
+    return (
+        <input
+            className="input"
+            style={{ flex: 1 }}
+            value={text}
+            title="Rename: Enter to apply, Esc to cancel. What uses it follows"
+            onChange={(e) => setText(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+                if (e.key === "Escape") {
+                    setText(name);
+                    e.currentTarget.blur();
+                }
+            }}
+        />
+    );
+}
+
+// A behavior, an effect or a surface: what the scripts of the project (or the engine) define. Nothing to
+// edit here: it shows the params, where it is used, and puts it to use.
+function ScriptInspector({ kind, name }: { kind: "behavior" | "effect" | "surface"; name: string }) {
+    const store = useSceneStore();
+    const { registry } = store;
+    const def = kind === "behavior" ? registry.getBehavior(name) : kind === "effect" ? registry.getEffect(name) : registry.getSurface(name);
+    const builtin = (kind === "effect" && builtinEffects.some((d) => d === def)) || (kind === "surface" && builtinSurfaces.some((d) => d === def));
+    const params = Object.entries(def?.params ?? {});
+
+    // Looks that list the effect or surface; objects of the open scene that carry the behavior
+    const users: string[] = [];
+    if (kind === "behavior") {
+        const visit = (entities: EntityData[]) => entities.forEach((entity) => {
+            if (getComponent(store.expand(entity) ?? entity, `script:${name}`)) users.push(entity.name);
+            visit(entity.children);
+        });
+        visit(store.entities);
+    } else {
+        const list = kind === "effect" ? "effects" : "surfaces";
+        for (const look of registry.lookNames()) {
+            const entries = (resolveLook(registry, look)?.[list] ?? []) as Record<string, unknown>[];
+            if (entries.some((entry) => entry[kind] === name)) users.push(look);
+        }
+    }
+
+    return (
+        <>
+            <div className="inspector-head">
+                <Icon name="script" /> <b style={{ flex: 1 }}>{def?.label ?? name}</b>
+            </div>
+            <div className="note">
+                {kind === "behavior" ? (
+                    <button
+                        className="btn primary"
+                        disabled={!store.selectedId}
+                        onClick={() => store.selectedId && store.addComponent(store.selectedId, "script", name)}
+                    >
+                        <Icon name="plus" /> Add to selected object
+                    </button>
+                ) : (
+                    <button className="btn primary" onClick={() => addToLook(kind === "effect" ? "effects" : "surfaces", name)}>
+                        <Icon name="plus" /> Add to the look of the scene
+                    </button>
+                )}
+            </div>
+            <div className="note">
+                {kind === "behavior" && "A behavior: code that moves an object while the game runs. "}
+                {kind === "effect" && "A screen effect: changes the finished picture. "}
+                {kind === "surface" && "A surface: changes how every object is drawn. "}
+                {builtin
+                    ? <>Built into the engine as <b>{name}</b>.</>
+                    : <>Defined as <b>{name}</b> in the project's scripts/ folder; edit it in VS Code, the editor reloads it on save.</>}
+            </div>
+
+            <Section title="Params">
+                {params.map(([key, param]) => (
+                    <div key={key} className="field">
+                        <label title={key}>{key}</label>
+                        <div className="control">
+                            <span className="muted">
+                                {param.type}{param.type === "select" ? ` (${param.options.join(", ")})` : ""} · default {JSON.stringify(param.default)}
+                            </span>
+                        </div>
+                    </div>
+                ))}
+                {params.length === 0 && <div className="muted">No params.</div>}
+            </Section>
+
+            <Section title={kind === "behavior" ? "On objects of this scene" : "Used by looks"}>
+                <div className="muted">{users.length > 0 ? users.join(", ") : "Nothing uses it."}</div>
+            </Section>
+        </>
+    );
+}
+
 function AssetInspector({ asset }: { asset: AssetRef }) {
     const store = useSceneStore();
     const { registry } = store;
 
     if (asset.kind === "look") return <LookInspector name={asset.name} />;
+    if (asset.kind === "texture") {
+        const users = registry.materialNames().filter((name) => registry.getMaterialData(name)?.texture === asset.name);
+        return (
+            <>
+                <div className="inspector-head">
+                    <Icon name="image" /> <b style={{ flex: 1 }}>{asset.name}</b>
+                    <button
+                        className="btn ghost danger"
+                        title="Delete the image file"
+                        onClick={(e) => confirmAt(e, `Delete texture ${asset.name}? This cannot be undone`, "Delete", () => deleteTexture(asset.name))}
+                    >
+                        <Icon name="trash" />
+                    </button>
+                </div>
+                <img className="texture-preview" src={registry.textureUrl(asset.name)} alt={asset.name} />
+                <div className="note">
+                    An image of the project's assets/ folder. A material uses it through its Texture field; drag it onto an
+                    object to give that object a material with it.
+                </div>
+                <Section title="Used by materials">
+                    <div className="muted">{users.length > 0 ? users.join(", ") : "No material uses it."}</div>
+                </Section>
+            </>
+        );
+    }
+    if (asset.kind === "behavior" || asset.kind === "effect" || asset.kind === "surface") {
+        return <ScriptInspector kind={asset.kind} name={asset.name} />;
+    }
 
     if (asset.kind === "material") {
         return (
             <>
                 <div className="inspector-head">
-                    <Icon name="material" /> <b style={{ flex: 1 }}>{asset.name}</b>
+                    <Icon name="material" /> <AssetName kind="material" name={asset.name} />
                     <button className="btn ghost danger" title="Delete the material" onClick={() => deleteMaterial(asset.name)}>
                         <Icon name="trash" />
                     </button>
@@ -655,8 +857,12 @@ function AssetInspector({ asset }: { asset: AssetRef }) {
         return (
             <>
                 <div className="inspector-head">
-                    <Icon name="prefab" /> <b style={{ flex: 1 }}>{asset.name}</b>
-                    <button className="btn ghost danger" title="Delete the prefab" onClick={() => deletePrefab(asset.name)}>
+                    <Icon name="prefab" /> <AssetName kind="prefab" name={asset.name} />
+                    <button
+                        className="btn ghost danger"
+                        title="Delete the prefab"
+                        onClick={(e) => confirmAt(e, `Delete prefab ${asset.name}? This cannot be undone`, "Delete", () => deletePrefab(asset.name))}
+                    >
                         <Icon name="trash" />
                     </button>
                 </div>
@@ -694,9 +900,13 @@ function AssetInspector({ asset }: { asset: AssetRef }) {
     return (
         <>
             <div className="inspector-head">
-                <Icon name="scene" /> <b style={{ flex: 1 }}>{asset.name}</b>
+                <Icon name="scene" /> <AssetName kind="scene" name={asset.name} />
                 {asset.name !== store.sceneName && (
-                    <button className="btn ghost danger" title="Delete the scene file" onClick={() => deleteScene(asset.name)}>
+                    <button
+                        className="btn ghost danger"
+                        title="Delete the scene file"
+                        onClick={(e) => confirmAt(e, `Delete scene ${asset.name}? This cannot be undone`, "Delete", () => deleteScene(asset.name))}
+                    >
                         <Icon name="trash" />
                     </button>
                 )}
@@ -721,6 +931,31 @@ export default function Inspector() {
             <div className="panel-body">
                 {asset ? (
                     <AssetInspector key={`${asset.kind}:${asset.name}:${store.restores}`} asset={asset} />
+                ) : store.selectedIds.length > 1 ? (
+                    // Several objects: what can be done to all of them at once
+                    <>
+                        <div className="inspector-head">
+                            <Icon name="cube" /> <b style={{ flex: 1 }}>{store.selectedIds.length} objects selected</b>
+                        </div>
+                        <div className="note">
+                            <button className="btn" title="Copies next to the originals (Ctrl+D)" onClick={() => store.duplicateSelected()}>
+                                <Icon name="copy" /> Duplicate
+                            </button>
+                            <button className="btn" title="Put them under a new empty object (Ctrl+G)" onClick={() => store.groupSelected()}>
+                                <Icon name="folder" /> Group
+                            </button>
+                            <button className="btn danger" title="Delete (Del)" onClick={() => store.removeSelected()}>
+                                <Icon name="trash" /> Delete
+                            </button>
+                        </div>
+                        <div className="note">
+                            {store.selectedIds.map((id) => store.findEntity(id)?.name).filter(Boolean).join(", ")}
+                        </div>
+                        <div className="empty">
+                            The gizmo moves all of them together: it holds the last one picked.
+                            Ctrl-click adds or removes an object, Shift-click in the Hierarchy takes a range.
+                        </div>
+                    </>
                 ) : selected ? (
                     <EntityInspector key={`${selected.id}:${store.restores}`} entity={selected} />
                 ) : store.editingPrefab ? (

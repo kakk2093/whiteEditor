@@ -24,6 +24,9 @@ export interface LookSettings {
     pixelSize: number;
     toneMapping: string;
     exposure: number;
+    // With an orthographic camera and pixelSize above 1: the camera moves by whole pixels of the picture, so
+    // what stands still does not flicker while it moves; the rest of the move is made by shifting the picture
+    pixelSnap: boolean;
 }
 
 export interface LookData extends Partial<LookSettings> {
@@ -40,6 +43,7 @@ export const lookFields: Record<keyof LookSettings, ParamDef> = {
     pixelSize: { type: "number", default: 1, min: 1, max: 16, step: 1 },
     toneMapping: { type: "select", default: "none", options: ["none", "reinhard", "aces"] },
     exposure: { type: "number", default: 1, min: 0, step: 0.1 },
+    pixelSnap: { type: "boolean", default: true },
 };
 
 // A look with everything it extends folded in
@@ -65,9 +69,11 @@ export interface EffectDef {
     // so a param cannot be called uv, color or like anything below.
     // Also available:
     //   vec4 texel(vec2 uv)      the picture at another place
-    //   float depthAt(vec2 uv)   distance from the camera in meters (needs inputs: ["depth"])
+    //   float depthAt(vec2 uv)   distance from the camera (from its plane) in meters (needs inputs: ["depth"])
     //   vec3 normalAt(vec2 uv)   surface direction relative to the camera (needs inputs: ["normal"])
     //   vec2 resolution          size of the picture in pixels;   float time   seconds
+    //   vec2 scroll              how far a pixel-snapped camera has moved, in pixels of the picture: a pattern
+    //                            made from "uv * resolution + scroll" stays on the world (zero without pixel snap)
     //   vec3 toSRGB(vec3), vec3 toLinear(vec3)
     shader: string;
 }
@@ -135,7 +141,8 @@ float bayer4(vec2 p) {
 vec4 effect(vec2 uv, vec4 color) {
     // Counted in sRGB, where equal steps look equal
     vec3 c = toSRGB(clamp(color.rgb, 0.0, 1.0));
-    float pattern = bayer4(uv * resolution) * dither;
+    // With a pixel-snapped camera the pattern moves with the world, so it does not crawl over what stands still
+    float pattern = bayer4(uv * resolution + scroll) * dither;
     if (colorsCount > 0) {
         // The pattern pushes a pixel between two colors of the list towards one or the other
         c += pattern * 0.25;
@@ -218,6 +225,7 @@ export function resolveLook(registry: Registry, name: string, seen: string[] = [
         pixelSize: lookFields.pixelSize.default as number,
         toneMapping: lookFields.toneMapping.default as string,
         exposure: lookFields.exposure.default as number,
+        pixelSnap: lookFields.pixelSnap.default as boolean,
         surfaces: [],
         effects: [],
     };
@@ -226,6 +234,7 @@ export function resolveLook(registry: Registry, name: string, seen: string[] = [
         pixelSize: data.pixelSize ?? base.pixelSize,
         toneMapping: data.toneMapping ?? base.toneMapping,
         exposure: data.exposure ?? base.exposure,
+        pixelSnap: data.pixelSnap ?? base.pixelSnap,
         surfaces: mergeEntries(base.surfaces, data.surfaces ?? [], "surface"),
         effects: mergeEntries(base.effects, data.effects ?? [], "effect"),
     };

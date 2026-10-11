@@ -156,12 +156,12 @@
     {
       "id": "f50ca1ed",
       "name": "GameObject",
+      "prefab": "GameObject",
       "position": [-2.3858, 0.7243, 4.1172],
       "rotation": [0, 0, 0],
       "scale": [1, 1, 1],
       "components": [],
-      "children": [],
-      "prefab": "GameObject"
+      "children": []
     },
     {
       "id": "81455c65",
@@ -181,6 +181,36 @@
       "rotation": [31.7325, 44.8133, 90],
       "scale": [1, 1.1775, 1.4],
       "components": [],
+      "children": []
+    },
+    {
+      "id": "84e46b04",
+      "name": "Sphere",
+      "position": [0, 0.5663, 1.86],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "model",
+          "model": "desk",
+          "params": {}
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "43ed744b",
+      "name": "323",
+      "position": [-1.8622, 0, 1.5439],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "model",
+          "model": "desk",
+          "params": {}
+        }
+      ],
       "children": []
     }
   ]

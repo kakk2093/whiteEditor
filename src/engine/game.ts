@@ -8,10 +8,28 @@ import type { Registry } from "./Registry";
 import { Runtime } from "./runtime";
 import type { EntityData, SceneData } from "./types";
 
+// What a camera component makes
+export type SceneCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
+
+// Fits the camera to a picture of this shape (width / height)
+export function setCameraAspect(camera: SceneCamera, aspect: number) {
+    if (camera instanceof THREE.PerspectiveCamera) {
+        if (camera.aspect === aspect) return;
+        camera.aspect = aspect;
+    } else {
+        // The height is the size of the camera, the width follows
+        const half = camera.top * aspect;
+        if (camera.right === half) return;
+        camera.left = -half;
+        camera.right = half;
+    }
+    camera.updateProjectionMatrix();
+}
+
 // The first camera component of an active entity
-function findCamera(obj: THREE.Object3D): THREE.PerspectiveCamera | null {
+function findCamera(obj: THREE.Object3D): SceneCamera | null {
     if (!obj.visible) return null;
-    if (obj.userData.component === "camera" && obj instanceof THREE.PerspectiveCamera) return obj;
+    if (obj.userData.component === "camera" && (obj instanceof THREE.PerspectiveCamera || obj instanceof THREE.OrthographicCamera)) return obj;
     for (const child of obj.children) {
         const found = findCamera(child);
         if (found) return found;
@@ -36,7 +54,7 @@ export class Game {
     readonly input = new Input();
 
     // The camera of the scene, null if no active entity has a camera component
-    camera: THREE.PerspectiveCamera | null;
+    camera: SceneCamera | null;
 
     private registry: Registry;
 
@@ -65,13 +83,13 @@ export class Game {
     update(dt: number) {
         this.runtime.update(dt);
         this.input.endFrame();
+        // A behavior may have spawned, destroyed or switched off the camera
+        this.camera = findCamera(this.root);
     }
 
     // Call when the size of the canvas changes
     resize(width: number, height: number) {
-        if (!this.camera || height === 0 || this.camera.aspect === width / height) return;
-        this.camera.aspect = width / height;
-        this.camera.updateProjectionMatrix();
+        if (this.camera && height > 0) setCameraAspect(this.camera, width / height);
     }
 
     // The object of a scene entity, by entity id
@@ -106,6 +124,7 @@ export class Game {
     }
 
     dispose() {
+        this.runtime.dispose();
         disposeObject(this.root);
     }
 }

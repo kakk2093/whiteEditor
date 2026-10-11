@@ -14,6 +14,13 @@ const MENU_SECTIONS: MenuSection[] = CREATE_MENU.map((section, s) => ({
     items: section.items.map((item, i) => ({ key: `${s}:${i}`, label: item.label, icon: item.icon }))
 }));
 
+// A row was dropped onto another (or onto the empty part: parentId = null). If it is one of several selected
+// rows, all of them go.
+function moveDragged(id: string, parentId: string | null) {
+    const roots = sceneStore.selectedRoots.map((entity) => entity.id);
+    for (const moved of roots.includes(id) ? roots : [id]) sceneStore.reparent(moved, parentId);
+}
+
 // `inner` is true for what is inside a prefab instance: it comes from the prefab file, so it can be selected
 // and changed (that makes an override of the instance) but not moved, renamed or deleted
 function Node({ entity, depth, inner = false }: { entity: EntityData; depth: number; inner?: boolean }) {
@@ -27,7 +34,7 @@ function Node({ entity, depth, inner = false }: { entity: EntityData; depth: num
 
     const classes = [
         "tree-row",
-        sceneStore.selectedId === entity.id ? "selected" : "",
+        sceneStore.selectedIds.includes(entity.id) ? "selected" : "",
         dropTarget ? "drop" : "",
         entity.active === false ? "inactive" : "",
         entity.prefab || inner ? "prefab" : "",
@@ -47,11 +54,27 @@ function Node({ entity, depth, inner = false }: { entity: EntityData; depth: num
                 className={classes}
                 draggable={!inner}
                 title={title}
-                onClick={() => sceneStore.select(entity.id)}
+                data-id={entity.id}
+                onClick={(e) => {
+                    // Shift: everything from the main selected row to this one, as the rows stand on the screen
+                    if (e.shiftKey && sceneStore.selectedId) {
+                        const rows = [...document.querySelectorAll<HTMLElement>(".tree-row[data-id]")].map((row) => row.dataset.id!);
+                        const from = rows.indexOf(sceneStore.selectedId);
+                        const to = rows.indexOf(entity.id);
+                        if (from >= 0 && to >= 0) {
+                            const range = rows.slice(Math.min(from, to), Math.max(from, to) + 1);
+                            // The clicked one last: it becomes the main one
+                            sceneStore.selectMany([...range.filter((id) => id !== entity.id), entity.id]);
+                            return;
+                        }
+                    }
+                    sceneStore.select(entity.id, e.ctrlKey || e.metaKey);
+                }}
                 // Like in Unity: a double click brings the camera to the object
                 onDoubleClick={() => sceneStore.focus(entity.id)}
                 onContextMenu={(e) => {
-                    sceneStore.select(entity.id);
+                    // A right click on one of several selected rows is about all of them
+                    if (!sceneStore.selectedIds.includes(entity.id)) sceneStore.select(entity.id);
                     openContextMenu(e, inner ? innerContextMenu(entity) : entityContextMenu(entity));
                 }}
                 onDragStart={(e) => e.dataTransfer.setData(ENTITY_DRAG_TYPE, entity.id)}
@@ -70,7 +93,7 @@ function Node({ entity, depth, inner = false }: { entity: EntityData; depth: num
                     setDropTarget(false);
                     const asset = getDraggedAsset(e);
                     if (asset) dropAsset(asset, entity.id);
-                    else sceneStore.reparent(e.dataTransfer.getData(ENTITY_DRAG_TYPE), entity.id);
+                    else moveDragged(e.dataTransfer.getData(ENTITY_DRAG_TYPE), entity.id);
                 }}
                 style={{ paddingLeft: 6 + depth * 14 }}
             >
@@ -130,7 +153,7 @@ export default function Hierarchy() {
                     e.preventDefault();
                     const asset = getDraggedAsset(e);
                     if (asset) dropAsset(asset, null);
-                    else store.reparent(e.dataTransfer.getData(ENTITY_DRAG_TYPE), null);
+                    else moveDragged(e.dataTransfer.getData(ENTITY_DRAG_TYPE), null);
                 }}
             >
                 {store.entities.map((entity) => (

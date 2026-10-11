@@ -6,7 +6,7 @@ import { applyMaterialData, createSharedMaterial } from "./materials";
 import type { MaterialData } from "./materials";
 import { builtinSurfaces, isSurfaceDef } from "./surface";
 import type { SurfaceDef } from "./surface";
-import type { EntityData, Params, ParamValue } from "./types";
+import type { EntityData, Params, ParamValue, Vec3 } from "./types";
 
 export type ParamDef = (
     | { type: "number"; default: number; min?: number; max?: number; step?: number }
@@ -17,7 +17,8 @@ export type ParamDef = (
     | { type: "string"; default: string }
     | { type: "select"; default: string; options: string[] }
     // A reference to a project asset by name, "" = none
-    | { type: "asset"; kind: "material" | "look"; default: string }
+    // "texture" is an image file of the project's assets/ folder, named with its extension: "bricks.png"
+    | { type: "asset"; kind: "material" | "look" | "prefab" | "texture"; default: string }
 ) & {
     // The field matters only while other fields of the same object have one of these values, e.g.
     // { kind: ["spot"] }; otherwise the Inspector does not show it. The value is kept either way.
@@ -78,6 +79,21 @@ export interface BehaviorSelf<P = Params, S = unknown> {
     input: Input;
     // Seconds since Play started
     time: number;
+    // Puts a new instance of the prefab into the running scene and returns its object; its behaviors start in
+    // this same frame. `position` is relative to `parent`, which is the scene itself if not given.
+    spawn: (prefab: string, position?: Vec3, parent?: THREE.Object3D) => THREE.Object3D;
+    // Removes an object with everything under it, this one if none is given. It goes at the end of the frame;
+    // the behaviors on it get their destroy().
+    destroy: (object?: THREE.Object3D) => void;
+    // Another behavior, by its name: of this object, or of the one given. What comes back is that behavior's
+    // own `self`, so its params and its state can be read and changed. null if the object has no such behavior.
+    get: <T = unknown>(behavior: string, object?: THREE.Object3D) => BehaviorSelf<Params, T> | null;
+    // Moves the object by this much (meters, along the axes of its parent: for an object of the scene root
+    // those of the world). If the object has a solid collider, it stops at other solid colliders, sliding
+    // along them; false if something was in the way.
+    move: (x: number, y: number, z: number) => boolean;
+    // The objects whose colliders this object's collider touches right now
+    touching: () => THREE.Object3D[];
 }
 
 export interface BehaviorDef {
@@ -89,6 +105,11 @@ export interface BehaviorDef {
     start?: (self: BehaviorSelf) => unknown;
     // Called every frame, dt is in seconds
     update?: (self: BehaviorSelf, dt: number) => void;
+    // Called once when the object is removed (self.destroy()) or the game stops; only if start() has run
+    destroy?: (self: BehaviorSelf) => void;
+    // The collider of the object began / stopped touching the collider of `other`
+    enter?: (self: BehaviorSelf, other: THREE.Object3D) => void;
+    exit?: (self: BehaviorSelf, other: THREE.Object3D) => void;
 }
 
 // Used by project scripts:
@@ -99,6 +120,9 @@ export function defineBehavior<P extends Record<string, ParamDef> = Record<strin
     params?: P;
     start?: (self: BehaviorSelf<{ [K in keyof P]: ParamType<P[K]> }, undefined>) => S;
     update?: (self: BehaviorSelf<{ [K in keyof P]: ParamType<P[K]> }, S>, dt: number) => void;
+    destroy?: (self: BehaviorSelf<{ [K in keyof P]: ParamType<P[K]> }, S>) => void;
+    enter?: (self: BehaviorSelf<{ [K in keyof P]: ParamType<P[K]> }, S>, other: THREE.Object3D) => void;
+    exit?: (self: BehaviorSelf<{ [K in keyof P]: ParamType<P[K]> }, S>, other: THREE.Object3D) => void;
 }): BehaviorDef {
     return { kind: "behavior", ...def } as BehaviorDef;
 }
@@ -131,6 +155,16 @@ export class Registry {
 
     // Used by meshes that have no material assigned
     private defaultMaterial = createSharedMaterial();
+
+    // The image files of the project's assets/ folder, and where they are loaded from
+    private textureFiles: string[] = [];
+
+    private textureBase = "";
+
+    private textureQuery = "";
+
+    // Loaded images, and promises of those still on the way
+    private images = new Map<string, HTMLImageElement | Promise<HTMLImageElement>>();
 
     registerModel(def: ModelDef) {
         this.modelDefs.set(def.name, def);
@@ -206,7 +240,50 @@ export class Registry {
     }
 
     // The names of the assets a field of this kind can refer to
-    assetNames(kind: "material" | "look") {
+    // `files` are the images of assets/ ("bricks.png", "walls/stone.png"), `base` the address of that folder
+    // ("./assets/" in a built game); `query` is added to every address, the editor uses it to get a changed
+    // file past the cache of the browser
+    setTextures(base: string, files: string[], query = "") {
+        this.textureBase = base;
+        this.textureFiles = [...files].sort();
+        this.textureQuery = query;
+        this.images.clear();
+        return this;
+    }
+
+    textureNames() {
+        return this.textureFiles;
+    }
+
+    // Where the image of a texture is loaded from
+    textureUrl(name: string) {
+        return this.textureBase + name.split("/").map(encodeURIComponent).join("/") + this.textureQuery;
+    }
+
+    // The image of a texture; loaded once, however many materials use it. null outside of a browser.
+    private loadImage = (name: string) => {
+        if (!name || typeof document === "undefined") return null;
+        let image = this.images.get(name);
+        if (!image) {
+            image = new THREE.ImageLoader().loadAsync(this.textureUrl(name)).then((loaded) => {
+                // From now on the image is given at once: a material made later has its texture in its first frame
+                if (this.images.get(name) === image) this.images.set(name, loaded);
+                return loaded;
+            });
+            this.images.set(name, image);
+        }
+        return image;
+    };
+
+    // Resolves once the textures of every material are loaded (or have failed): for drawing a single picture,
+    // where there is no next frame for a late image to show up in
+    async preloadTextures() {
+        await Promise.allSettled([...this.materialData.values()].map((data) => this.loadImage(data.texture ?? "")));
+    }
+
+    assetNames(kind: "material" | "look" | "prefab" | "texture") {
+        if (kind === "texture") return this.textureNames();
+        if (kind === "prefab") return this.prefabNames();
         return kind === "look" ? this.lookNames() : this.materialNames();
     }
 
@@ -225,7 +302,7 @@ export class Registry {
     setMaterial(name: string, data: Partial<MaterialData>) {
         this.materialData.set(name, data);
         const material = this.materialObjects.get(name);
-        if (material) applyMaterialData(material, data);
+        if (material) applyMaterialData(material, data, this.loadImage);
         return this;
     }
 
@@ -266,7 +343,7 @@ export class Registry {
 
         let material = this.materialObjects.get(name);
         if (!material) {
-            material = createSharedMaterial(data);
+            material = createSharedMaterial(data, this.loadImage);
             this.materialObjects.set(name, material);
         }
         return material;

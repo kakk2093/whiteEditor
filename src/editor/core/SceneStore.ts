@@ -15,6 +15,8 @@ import {
     findInExpanded,
     Game,
     generateId,
+    paramDefaults,
+    parseScene,
     rebuildComponentObject,
     Registry,
     ROOT_PATH
@@ -30,7 +32,9 @@ export type TransformProperty = "position" | "rotation" | "scale";
 export type GizmoMode = "translate" | "rotate" | "scale";
 
 export interface AssetRef {
-    kind: "material" | "model" | "scene" | "prefab" | "look";
+    // The last three are not files: what the scripts of the project (and the engine) define
+    // "texture" is an image file of assets/, named with its extension
+    kind: "material" | "model" | "scene" | "prefab" | "look" | "texture" | "behavior" | "effect" | "surface";
     name: string;
 }
 
@@ -95,18 +99,43 @@ const UNDO_MERGE_MS = 400;
 // cameras. The viewport draws this layer after the look of the scene, sharp and untouched by its effects.
 export const EDITOR_LAYER = 1;
 
-// Lights and cameras draw nothing, so the editor gives them a clickable marker
+// Lights and cameras draw nothing, so the editor gives them a clickable marker; a collider gets its outline
 function createHelper(entity: EntityData): THREE.Object3D | null {
     const light = getComponent(entity, "light");
     const camera = getComponent(entity, "camera");
-    if (!light && !camera) return null;
+    const collider = getComponent(entity, "collider");
+    if (!light && !camera && !collider) return null;
 
     const helper = new THREE.Group();
     const material = new THREE.MeshBasicMaterial({ color: light ? 0xffd54a : 0x9ecbff, wireframe: true, fog: false });
 
+    if (collider) {
+        // The outline of the collider: green if things stop at it, yellow for a trigger. It is not for
+        // clicking: a big trigger zone must not cover what stands inside it.
+        const f = { ...paramDefaults(componentDefs.collider.fields), ...collider } as Record<string, number | string | boolean>;
+        const radius = f.radius as number;
+        const geometry = f.shape === "sphere"
+            ? new THREE.SphereGeometry(radius, 12, 8)
+            : f.shape === "capsule"
+                ? new THREE.CapsuleGeometry(radius, Math.max(0, (f.height as number) - radius * 2), 4, 12)
+                : new THREE.BoxGeometry(f.sizeX as number, f.sizeY as number, f.sizeZ as number);
+        const outline = new THREE.LineSegments(
+            new THREE.EdgesGeometry(geometry, f.shape === "box" ? 1 : 20),
+            new THREE.LineBasicMaterial({ color: collider.solid === false ? 0xffd54a : 0x66dd88, fog: false })
+        );
+        geometry.dispose();
+        outline.raycast = () => {};
+        outline.position.set(
+            (collider.centerX as number | undefined) ?? 0,
+            (collider.centerY as number | undefined) ?? 0,
+            (collider.centerZ as number | undefined) ?? 0
+        );
+        helper.add(outline);
+    }
+
     if (light) {
         helper.add(new THREE.Mesh(new THREE.SphereGeometry(0.15, 8, 6), material));
-    } else {
+    } else if (camera) {
         // A pyramid opening towards -Z, like a camera frustum
         const cone = new THREE.Mesh(new THREE.ConeGeometry(0.25, 0.35, 4), material);
         cone.rotation.set(Math.PI / 2, Math.PI / 4, 0);
@@ -141,7 +170,26 @@ class SceneStore {
 
     environment: EnvironmentData = { ...defaultEnvironment };
 
-    selectedId: string | null = null;
+    // Every selected entity, in the order they were picked. The last one is the main one: the Inspector
+    // shows it and the gizmo holds it; `selectedId` is its id.
+    selectedIds: string[] = [];
+
+    get selectedId(): string | null {
+        return this.selectedIds[this.selectedIds.length - 1] ?? null;
+    }
+
+    // Selecting by this means one entity (or none)
+    set selectedId(id: string | null) {
+        this.selectedIds = id ? [id] : [];
+    }
+
+    // What Copy has taken: the entities as JSON text (the same text goes to the system clipboard)
+    clipboard: string | null = null;
+
+    // Gizmo snapping: moves by whole steps of `snapStep` meters, turns by 15 degrees, scales by 0.25
+    snap = false;
+
+    snapStep = 0.5;
 
     // An asset picked in the Project panel; shown in the Inspector instead of an entity
     selectedAsset: AssetRef | null = null;
@@ -216,6 +264,10 @@ class SceneStore {
     // Play is on, but time stands still; step() moves it by one frame
     paused = false;
 
+    // "Edit Collider": the viewport shows handles on the collider of the selected entity instead of the gizmo
+    // (see colliderHandles.ts). Stays on from one collider to the next; without a collider it shows nothing.
+    colliderEdit = false;
+
     // false draws the viewport without the look of the scene: arranging objects in a pixelated picture is hard.
     // The game itself always has its look.
     lookEnabled = true;
@@ -278,6 +330,29 @@ class SceneStore {
         this.lastChange = time;
         this.lastStep = "scene";
         this.current = now;
+    }
+
+    // An asset got another name: `change` puts the new name into a scene wherever the old one stood. It is
+    // applied to the scene and to every remembered state of it, so that neither undo nor "unsaved changes"
+    // see the old name again. Not for Play and not while a prefab is edited.
+    renameReferences(change: (scene: SceneData) => void, section: AssetStep["section"] | "prefabs", from: string, to: string) {
+        const inSnapshot = (snapshot: string) => {
+            if (!snapshot) return snapshot;
+            const scene = JSON.parse(snapshot) as SceneData;
+            change(scene);
+            return JSON.stringify(scene);
+        };
+        change(this.toJSON());
+        this.savedSnapshot = inSnapshot(this.savedSnapshot);
+        this.current = JSON.stringify(this.toJSON());
+        for (const stack of [this.undoStack, this.redoStack]) {
+            for (const step of stack) {
+                if ("scene" in step) step.scene = inSnapshot(step.scene);
+                else if (step.asset.section === section && step.asset.name === from) step.asset.name = to;
+            }
+        }
+        applyEnvironment(this.scene, this.environment);
+        this.notify();
     }
 
     // A material or a look was changed, created (before = null) or deleted (after = null)
@@ -353,7 +428,7 @@ class SceneStore {
         this.environment = { ...defaultEnvironment, ...data.environment };
         applyEnvironment(this.scene, this.environment);
         this.rebuild();
-        if (this.selectedId && !this.objects.has(this.selectedId)) this.selectedId = null;
+        this.pruneSelection();
         // A field being typed in must forget its text
         this.restores++;
     }
@@ -493,7 +568,12 @@ class SceneStore {
     get previewCamera() {
         if (this.playing) return null;
         const camera = this.selectedObject?.children.find((child) => child.userData.component === "camera");
-        return camera instanceof THREE.PerspectiveCamera ? camera : null;
+        return camera instanceof THREE.PerspectiveCamera || camera instanceof THREE.OrthographicCamera ? camera : null;
+    }
+
+    // The three.js object of an entity of the scene being edited
+    objectOf(id: string) {
+        return this.objects.get(id) ?? null;
     }
 
     get selectedObject() {
@@ -762,10 +842,100 @@ class SceneStore {
         obj.removeFromParent();
         this.unindexObjects(obj);
         disposeObject(obj);
-        if (this.selectedId && !this.objects.has(this.selectedId)) {
-            this.selectedId = null;
-        }
+        this.pruneSelection();
         this.restartGame();
+        this.notify();
+    }
+
+    // Forgets the selected entities that are no longer there
+    private pruneSelection() {
+        this.selectedIds = this.selectedIds.filter((id) => this.objects.has(id));
+    }
+
+    // The selected entities of the scene that are not inside another selected one: what Delete, Duplicate,
+    // Copy and Group act on. What is inside a prefab instance is not among them.
+    get selectedRoots(): EntityData[] {
+        const ids = new Set(this.selectedIds);
+        const roots: EntityData[] = [];
+        const visit = (list: EntityData[]) => {
+            for (const entity of list) {
+                if (ids.has(entity.id)) roots.push(entity);
+                else visit(entity.children);
+            }
+        };
+        visit(this.entities);
+        return roots;
+    }
+
+    // Selects exactly these entities; the last one becomes the main one
+    selectMany(ids: string[]) {
+        this.selectedIds = ids.filter((id) => this.objects.has(id));
+        this.selectedAsset = null;
+        this.notify();
+    }
+
+    removeSelected() {
+        for (const entity of this.selectedRoots) this.removeEntity(entity.id);
+    }
+
+    // Copies of the selected entities next to the originals; the copies become the selection
+    duplicateSelected() {
+        const copies = this.selectedRoots.map((entity) => this.duplicate(entity.id)).filter((copy) => copy !== null);
+        if (copies.length > 0) this.selectMany(copies.map((copy) => copy.id));
+        return copies;
+    }
+
+    // Puts the selected entities under a new empty one, placed in the middle of them
+    groupSelected() {
+        const roots = this.selectedRoots;
+        if (roots.length === 0 || this.editingPrefab && roots.some((entity) => entity === this.entities[0])) return;
+        const center = new THREE.Vector3();
+        for (const entity of roots) center.add(this.objects.get(entity.id)!.getWorldPosition(new THREE.Vector3()));
+        center.divideScalar(roots.length);
+
+        const group = createEntity("Group");
+        group.position = [round(center.x), round(center.y), round(center.z)];
+        this.insertEntity(group);
+        for (const entity of roots) this.reparent(entity.id, group.id);
+        this.select(group.id);
+    }
+
+    // Copy: the selected entities as JSON text, the way they are written in a scene file. null if nothing is selected.
+    copySelected() {
+        const picked = this.selectedRoots.length > 0
+            ? this.selectedRoots
+            // Something inside a prefab instance: it is copied as an ordinary entity
+            : this.selectedIds.map((id) => this.findEntity(id)).filter((entity) => entity !== null);
+        if (picked.length === 0) return null;
+        this.clipboard = JSON.stringify(picked, null, 2);
+        this.status = `Copied ${picked.length === 1 ? picked[0].name : `${picked.length} objects`}`;
+        this.notify();
+        return this.clipboard;
+    }
+
+    // Paste: `text` is what Copy made, or any JSON of one entity or a list of them, also hand-written.
+    // The new entities go next to the selected one. false if the text is not entities.
+    paste(text: string | null = this.clipboard) {
+        let entities: EntityData[];
+        try {
+            const data: unknown = JSON.parse(text ?? "");
+            const list = Array.isArray(data) ? data : [data];
+            if (list.length === 0 || list.some((item) => typeof item !== "object" || item === null || Array.isArray(item))) return false;
+            // The same reading as for a scene file: everything that has a default may be missing
+            entities = parseScene({ version: 3, entities: list }).entities;
+        } catch {
+            return false;
+        }
+        const parentId = this.selectedId ? findEntity(this.entities, this.selectedId.split("/")[0])?.parent?.id ?? null : null;
+        const pasted = entities.map((entity) => this.insertEntity(cloneWithNewIds(entity), parentId));
+        this.selectMany(pasted.map((entity) => entity.id));
+        this.update({ status: `Pasted ${pasted.length === 1 ? pasted[0].name : `${pasted.length} objects`}` });
+        return true;
+    }
+
+    setSnap(on: boolean, step = this.snapStep) {
+        this.snap = on;
+        this.snapStep = step;
         this.notify();
     }
 
@@ -799,8 +969,14 @@ class SceneStore {
         this.focusHandler?.(this.game?.getObject(id) ?? obj);
     }
 
-    select(id: string | null) {
-        this.selectedId = id;
+    // `add` (Ctrl or Shift held) keeps what is selected and adds this entity, or takes it out if it is in
+    select(id: string | null, add = false) {
+        if (add) {
+            if (!id) return;
+            this.selectedIds = this.selectedIds.includes(id) ? this.selectedIds.filter((other) => other !== id) : [...this.selectedIds, id];
+        } else {
+            this.selectedId = id;
+        }
         this.selectedAsset = null;
         this.notify();
     }
@@ -813,6 +989,17 @@ class SceneStore {
 
     setGizmoMode(mode: GizmoMode) {
         this.gizmoMode = mode;
+        this.notify();
+    }
+
+    // true if the selected entity has a collider to edit
+    get hasCollider() {
+        const entity = this.selected;
+        return !!entity && !!getComponent(this.expand(entity) ?? entity, "collider");
+    }
+
+    setColliderEdit(on: boolean) {
+        this.colliderEdit = on;
         this.notify();
     }
 
@@ -864,6 +1051,7 @@ class SceneStore {
         const source = id ? this.game?.getObject(id) : null;
         const obj = id ? this.objects.get(id) : null;
         if (!id || !source || !obj) {
+            if (id && obj) this.moveOthers(id, obj);
             if (id) this.syncFromObject(id);
             return;
         }
@@ -871,6 +1059,35 @@ class SceneStore {
         else if (this.gizmoMode === "rotate") obj.rotation.copy(source.rotation);
         else obj.scale.copy(source.scale);
         this.syncFromObject(id);
+    }
+
+    // Several entities are selected and the gizmo has changed the main one: the others get the same change.
+    // They move by the same distance in the world; a turn or a scale each one makes about its own middle.
+    private moveOthers(id: string, obj: THREE.Object3D) {
+        const main = findEntity(this.entities, id)?.entity;
+        const others = this.selectedRoots.filter((entity) => entity.id !== id);
+        if (!main || others.length === 0 || !this.selectedRoots.includes(main)) return;
+
+        // The data still has what the main one was before the gizmo moved it
+        const before = new THREE.Vector3(...main.position);
+        if (obj.parent) obj.parent.localToWorld(before);
+        const shift = obj.getWorldPosition(new THREE.Vector3()).sub(before);
+        const turn = AXES.map((axis, i) => obj.rotation[axis] - THREE.MathUtils.degToRad(main.rotation[i]));
+        const grow = AXES.map((axis, i) => (main.scale[i] !== 0 ? obj.scale[axis] / main.scale[i] : 1));
+
+        for (const entity of others) {
+            const other = this.objects.get(entity.id);
+            if (!other) continue;
+            if (this.gizmoMode === "translate") {
+                const world = other.getWorldPosition(new THREE.Vector3()).add(shift);
+                other.position.copy(other.parent ? other.parent.worldToLocal(world) : world);
+            } else if (this.gizmoMode === "rotate") {
+                AXES.forEach((axis, i) => { other.rotation[axis] += turn[i]; });
+            } else {
+                AXES.forEach((axis, i) => { other.scale[axis] *= grow[i]; });
+            }
+            this.syncFromObject(entity.id);
+        }
     }
 
     // What the gizmo holds and the camera focuses on: during Play the object of the running copy

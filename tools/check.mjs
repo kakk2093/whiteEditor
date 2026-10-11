@@ -44,9 +44,18 @@ try {
     }
   }
 
+  // Materials name their textures: the images of assets/
+  const assetsDir = path.join(projectDir, 'assets')
+  const images = fs.existsSync(assetsDir)
+    ? fs.readdirSync(assetsDir, { recursive: true }).map((f) => f.split(path.sep).join('/')).filter((f) => /\.(png|jpe?g|webp)$/i.test(f))
+    : []
+  registry.setTextures('', images)
+
   for (const name of jsonNames('materials')) {
     try {
-      registry.setMaterial(name, readJson('materials', name))
+      const material = readJson('materials', name)
+      registry.setMaterial(name, material)
+      for (const problem of engine.validateMaterial(material, registry)) problems.push(`materials/${name}.json: ${problem}`)
     } catch (e) {
       problems.push(`materials/${name}.json: ${e.message}`)
     }

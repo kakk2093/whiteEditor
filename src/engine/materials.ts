@@ -9,6 +9,13 @@ export interface MaterialData {
     emissive: string;
     emissiveIntensity: number;
     opacity: number;
+    // An image from the project's assets/ folder, drawn over the color (multiplied by it); "" for none
+    texture: string;
+    // How many times the image repeats across a face
+    tilingX: number;
+    tilingY: number;
+    // nearest keeps the pixels of the image sharp (pixel art), linear blends them
+    filter: string;
 }
 
 export const materialFields: Record<keyof MaterialData, ParamDef> = {
@@ -18,14 +25,56 @@ export const materialFields: Record<keyof MaterialData, ParamDef> = {
     emissive: { type: "color", default: "#000000" },
     emissiveIntensity: { type: "number", default: 1, min: 0, step: 0.1 },
     opacity: { type: "number", default: 1, min: 0, max: 1, step: 0.05 },
+    texture: { type: "asset", kind: "texture", default: "" },
+    tilingX: { type: "number", default: 1, min: 0.01, step: 0.5 },
+    tilingY: { type: "number", default: 1, min: 0.01, step: 0.5 },
+    filter: { type: "select", default: "nearest", options: ["nearest", "linear"] },
 };
 
 export const defaultMaterialData = Object.fromEntries(
     Object.entries(materialFields).map(([key, def]) => [key, def.default])
 ) as unknown as MaterialData;
 
-export function applyMaterialData(material: THREE.MeshStandardMaterial, data: Partial<MaterialData>) {
+// Gives the image of a texture by its name in assets/: the image itself if it is already loaded, otherwise
+// a promise of it; null where images cannot be loaded
+export type ImageSource = (name: string) => HTMLImageElement | Promise<HTMLImageElement> | null;
+
+function configureMap(map: THREE.Texture, m: MaterialData) {
+    map.wrapS = map.wrapT = THREE.RepeatWrapping;
+    map.repeat.set(m.tilingX, m.tilingY);
+    const nearest = m.filter !== "linear";
+    map.magFilter = nearest ? THREE.NearestFilter : THREE.LinearFilter;
+    map.minFilter = nearest ? THREE.NearestFilter : THREE.LinearMipmapLinearFilter;
+    map.generateMipmaps = !nearest;
+    map.needsUpdate = true;
+}
+
+// `images` loads the texture of the material; without it the material stays plain
+export function applyMaterialData(material: THREE.MeshStandardMaterial, data: Partial<MaterialData>, images?: ImageSource) {
     const m = { ...defaultMaterialData, ...data };
+
+    // The image arrives later: until then, and if it fails, the material has its color alone
+    material.userData.mapSettings = m;
+    if (material.userData.texture !== m.texture) {
+        material.userData.texture = m.texture;
+        material.map?.dispose();
+        material.map = null;
+        const setMap = (image: HTMLImageElement) => {
+            // The material may have got another texture, or none, in the meantime
+            if (material.userData.texture !== m.texture) return;
+            const map = new THREE.Texture(image);
+            map.colorSpace = THREE.SRGBColorSpace;
+            configureMap(map, material.userData.mapSettings as MaterialData);
+            material.map = map;
+            material.needsUpdate = true;
+        };
+        const image = images?.(m.texture);
+        if (image instanceof Promise) image.then(setMap).catch(() => console.warn(`Texture "${m.texture}" could not be loaded`));
+        else if (image) setMap(image);
+    } else if (material.map) {
+        configureMap(material.map, m);
+    }
+
     material.color.set(m.color);
     material.roughness = m.roughness;
     material.metalness = m.metalness;
@@ -37,10 +86,10 @@ export function applyMaterialData(material: THREE.MeshStandardMaterial, data: Pa
 }
 
 // One three.js material per asset, shared by every mesh that uses it
-export function createSharedMaterial(data: Partial<MaterialData> = {}) {
+export function createSharedMaterial(data: Partial<MaterialData> = {}, images?: ImageSource) {
     const material = new THREE.MeshStandardMaterial();
     // Whoever removes a mesh must not dispose a material other meshes still use
     material.userData.shared = true;
-    applyMaterialData(material, data);
+    applyMaterialData(material, data, images);
     return material;
 }

@@ -1,0 +1,232 @@
+{
+  "version": 3,
+  "environment": {
+    "background": "#1b2330",
+    "ambientColor": "#8fa4c8",
+    "ambientIntensity": 0.6,
+    "fog": false,
+    "fogColor": "#222222",
+    "fogNear": 5,
+    "fogFar": 50,
+    "look": "PS1"
+  },
+  "entities": [
+    {
+      "id": "31bada28",
+      "name": "Iso Camera",
+      "position": [10, 10, 10],
+      "rotation": [-41.99, 36.62, 28.23],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "camera",
+          "projection": "orthographic",
+          "size": 5,
+          "far": 100
+        },
+        {
+          "type": "script",
+          "script": "follow",
+          "params": {
+            "target": "Player"
+          }
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "192b1b0c",
+      "name": "Sun",
+      "position": [4, 8, 2],
+      "rotation": [-60, 30, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "light",
+          "kind": "directional",
+          "intensity": 3,
+          "castShadow": true,
+          "shadowSize": 12
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "dd0f9dc4",
+      "name": "Floor",
+      "position": [0, 0, 0],
+      "rotation": [0, 0, 0],
+      "scale": [14, 1, 14],
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "plane",
+          "material": "Tiles"
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "5f982dfe",
+      "name": "Pillars",
+      "prefab": "Pillars",
+      "position": [-3, 0, -2],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [],
+      "children": []
+    },
+    {
+      "id": "b422d27c",
+      "name": "Pillars (1)",
+      "prefab": "Pillars",
+      "overrides": {
+        "Pillar B": {
+          "active": false
+        }
+      },
+      "position": [2, 0, -4],
+      "rotation": [0, 90, 0],
+      "scale": [1, 1, 1],
+      "components": [],
+      "children": []
+    },
+    {
+      "id": "2a492f94",
+      "name": "Crate",
+      "position": [1, 0.5, 1],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "box",
+          "material": "Bricks"
+        },
+        {
+          "type": "collider"
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "5154dbe7",
+      "name": "Wall",
+      "position": [-1, 0.5, -0.5],
+      "rotation": [0, 0, 0],
+      "scale": [4, 1, 0.4],
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "box",
+          "material": "Bricks"
+        },
+        {
+          "type": "collider"
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "4f2e72ae",
+      "name": "Player",
+      "position": [-2, 0.5, 2],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "sphere",
+          "material": "Material_1"
+        },
+        {
+          "type": "collider",
+          "shape": "sphere"
+        },
+        {
+          "type": "script",
+          "script": "drive",
+          "params": {
+            "speed": 3
+          }
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "1ff07b8e",
+      "name": "Coin",
+      "position": [2, 0.4, 3],
+      "rotation": [0, 0, 0],
+      "scale": [0.4, 0.4, 0.4],
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "sphere",
+          "material": "Gold"
+        },
+        {
+          "type": "collider",
+          "shape": "sphere",
+          "radius": 0.75,
+          "solid": false
+        },
+        {
+          "type": "script",
+          "script": "pickup"
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "8ccc18b1",
+      "name": "Coin (1)",
+      "position": [-4, 0.4, -3],
+      "rotation": [0, 0, 0],
+      "scale": [0.4, 0.4, 0.4],
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "sphere",
+          "material": "Gold"
+        },
+        {
+          "type": "collider",
+          "shape": "sphere",
+          "radius": 0.75,
+          "solid": false
+        },
+        {
+          "type": "script",
+          "script": "pickup"
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "812d9cf8",
+      "name": "Coin (2)",
+      "position": [4, 0.4, -1],
+      "rotation": [0, 0, 0],
+      "scale": [0.4, 0.4, 0.4],
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "sphere",
+          "material": "Gold"
+        },
+        {
+          "type": "collider",
+          "shape": "sphere",
+          "radius": 0.75,
+          "solid": false
+        },
+        {
+          "type": "script",
+          "script": "pickup"
+        }
+      ],
+      "children": []
+    }
+  ]
+}

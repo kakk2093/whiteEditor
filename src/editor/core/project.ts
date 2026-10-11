@@ -34,6 +34,15 @@ export async function writeAsset(project: string, section: AssetSection, name: s
     await request(`${project}/${section}/${name}`, { method: "PUT", body: JSON.stringify(data) });
 }
 
+// Puts an image file into the project's assets/ folder, under `name` ("bricks.png")
+export async function uploadImage(project: string, name: string, file: Blob) {
+    await request(`${project}/assets/${encodeURIComponent(name)}`, { method: "PUT", body: file });
+}
+
+export async function deleteImage(project: string, name: string) {
+    await request(`${project}/assets/${encodeURIComponent(name)}`, { method: "DELETE" });
+}
+
 export async function deleteAsset(project: string, section: AssetSection, name: string) {
     await request(`${project}/${section}/${name}`, { method: "DELETE" });
 }
@@ -60,6 +69,8 @@ export async function loadRegistry(project: string) {
         }
     }
 
+    // The time in the address gets an image that was edited past the cache of the browser
+    registry.setTextures(`/projects/${project}/assets/`, await request(`${project}/assets`), `?t=${Date.now()}`);
     for (const name of await listAssets(project, "materials")) {
         registry.setMaterial(name, (await readAsset(project, "materials", name)) as object);
     }

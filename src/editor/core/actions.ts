@@ -1,15 +1,18 @@
-import { applyToPrefab, parsePrefab, parseScene, validateScene } from "../../engine";
-import type { LookData, MaterialData } from "../../engine";
+import { applyToPrefab, parsePrefab, parseScene, resolveLook, validateScene } from "../../engine";
+import type { LookData, MaterialData, SceneData } from "../../engine";
+import { renameInEntities, renameInScene } from "./references";
 import type { AssetSection } from "./project";
 import { sceneStore } from "./SceneStore";
 import {
     buildGame as build,
     createProject,
     deleteAsset,
+    deleteImage,
     listAssets,
     listProjects,
     loadRegistry,
     readAsset,
+    uploadImage,
     writeAsset
 } from "./project";
 
@@ -386,6 +389,111 @@ export function updateMaterial<K extends keyof MaterialData>(name: string, key: 
     }, 300));
 }
 
+// Image files (dropped into the Project panel) go into assets/ and become textures. A name the project
+// cannot keep is tidied up; a file with the name of an existing image replaces it.
+export async function uploadTextures(files: File[]) {
+    const { project } = sceneStore;
+    const images = files.filter((file) => /\.(png|jpe?g|webp)$/i.test(file.name));
+    if (images.length === 0) {
+        sceneStore.update({ status: "Only .png, .jpg and .webp images can be textures" });
+        return;
+    }
+    try {
+        const names: string[] = [];
+        for (const file of images) {
+            const dot = file.name.lastIndexOf(".");
+            const stem = file.name.slice(0, dot).replace(/[^\w-]+/g, "_").replace(/^_+|_+$/g, "") || "image";
+            const name = `${stem}${file.name.slice(dot).toLowerCase()}`;
+            await uploadImage(project, name, file);
+            names.push(name);
+        }
+        // The same reload as after an edit of scripts: the registry gets the new list of images
+        await loadScripts(project);
+        sceneStore.selectAsset({ kind: "texture", name: names[names.length - 1] });
+        sceneStore.update({ status: `Added to assets/: ${names.join(", ")}` });
+    } catch (e) {
+        report(e);
+    }
+}
+
+export async function deleteTexture(name: string) {
+    const { project } = sceneStore;
+    try {
+        await deleteImage(project, name);
+        await loadScripts(project);
+        sceneStore.selectAsset(null);
+        sceneStore.update({ status: `Deleted assets/${name}` });
+    } catch (e) {
+        report(e);
+    }
+}
+
+// A texture dropped onto an object: the object gets a material with that texture. A material named after
+// the image is used if there is one, otherwise it is made.
+export async function applyTexture(entityId: string, texture: string) {
+    const { project, registry } = sceneStore;
+    const entity = sceneStore.findEntity(entityId);
+    const content = entity && (sceneStore.expand(entity) ?? entity);
+    if (!content?.components.some((component) => component.type === "mesh")) {
+        sceneStore.update({ status: "Drop a texture onto an object with a Mesh" });
+        return;
+    }
+    try {
+        const stem = texture.slice(texture.lastIndexOf("/") + 1, texture.lastIndexOf("."));
+        let name = registry.materialNames().find((material) => registry.getMaterialData(material)?.texture === texture);
+        if (!name) {
+            name = freeName(stem.charAt(0).toUpperCase() + stem.slice(1), registry.materialNames());
+            const data = { color: "#ffffff", texture };
+            await writeAsset(project, "materials", name, data);
+            registry.setMaterial(name, data);
+            sceneStore.recordAsset("materials", name, null, data);
+        }
+        sceneStore.setComponentField(entityId, "mesh", "material", name);
+        sceneStore.update({ status: `Material ${name} with ${texture}` });
+    } catch (e) {
+        report(e);
+    }
+}
+
+// A copy of a material or a look under a free name
+export async function duplicateAsset(kind: "material" | "look", name: string) {
+    const { project, registry } = sceneStore;
+    const section = kind === "material" ? "materials" : "looks";
+    try {
+        const source = kind === "material" ? registry.getMaterialData(name) : registry.getLookData(name);
+        if (!source) return;
+        const data = structuredClone(source);
+        const copy = freeName(name, kind === "material" ? registry.materialNames() : registry.lookNames());
+        await writeAsset(project, section, copy, data);
+        if (kind === "material") registry.setMaterial(copy, data as Partial<MaterialData>);
+        else registry.setLook(copy, data as LookData);
+        sceneStore.recordAsset(section, copy, null, data);
+        sceneStore.selectAsset({ kind, name: copy });
+        sceneStore.update({ status: `Created ${section}/${copy}.json` });
+    } catch (e) {
+        report(e);
+    }
+}
+
+// Adds an effect or a surface to the look of the open scene
+export function addToLook(list: "effects" | "surfaces", name: string) {
+    const { registry } = sceneStore;
+    const look = sceneStore.environment.look;
+    const data = look ? registry.getLookData(look) : undefined;
+    if (!look || !data) {
+        sceneStore.update({ status: "The scene has no look to add it to: pick one in the viewport first" });
+        return;
+    }
+    const key = list === "effects" ? "effect" : "surface";
+    const has = (resolveLook(registry, look)?.[list] ?? []).some((entry) => (entry as Record<string, unknown>)[key] === name);
+    if (has) {
+        sceneStore.update({ status: `The look ${look} already has ${name}` });
+        return;
+    }
+    updateLook(look, { ...data, [list]: [...(data[list] ?? []), { [key]: name }] });
+    sceneStore.update({ status: `Added ${name} to the look ${look}` });
+}
+
 // Undo and redo of a material or a look: makes it what it was, in the registry and on disk.
 // null removes it (undo of its creation) or, the other way, a deleted one comes back.
 sceneStore.assetHandler = (section, name, data) => {
@@ -409,6 +517,112 @@ sceneStore.assetHandler = (section, name, data) => {
     // A material that appeared or went away: the meshes that name it have to be built again
     if (section === "materials" && existed !== (data !== null)) sceneStore.setRegistry(registry);
 };
+
+// true if `to` can be the new name of the asset `from`; otherwise says why not in the status line
+function nameIsFree(kind: string, names: string[], from: string, to: string) {
+    if (!/^[A-Za-z0-9_-]+$/.test(to)) {
+        sceneStore.update({ status: "A name can have only Latin letters, digits, _ and -" });
+        return false;
+    }
+    // File names differ by more than the case of the letters
+    if (names.some((name) => name !== from && name.toLowerCase() === to.toLowerCase())) {
+        sceneStore.update({ status: `There already is a ${kind} named ${to}` });
+        return false;
+    }
+    return true;
+}
+
+// Gives a scene file another name. Nothing refers to a scene by name, so only the file changes; for the
+// open scene it is the file as it was last saved, unsaved changes stay unsaved.
+export async function renameScene(from: string, to: string) {
+    const { project } = sceneStore;
+    if (to === from || !sceneStore.scenes.includes(from)) return;
+    if (!nameIsFree("scene", sceneStore.scenes, from, to) || blockedByPlay()) return;
+    try {
+        await writeAsset(project, "scenes", to, await readAsset(project, "scenes", from));
+        if (to.toLowerCase() !== from.toLowerCase()) await deleteAsset(project, "scenes", from);
+        sceneStore.selectAsset({ kind: "scene", name: to });
+        sceneStore.update({
+            ...(sceneStore.sceneName === from ? { sceneName: to } : {}),
+            scenes: await listAssets(project, "scenes"),
+            status: `Renamed scenes/${from} to ${to}`
+        });
+    } catch (e) {
+        report(e);
+    }
+}
+
+// Gives a material, a look or a prefab another name: the file, and every scene, prefab and look that refers
+// to it. The files are rewritten at once, the open scene included (its unsaved changes stay unsaved).
+export async function renameAsset(kind: "material" | "look" | "prefab", from: string, to: string) {
+    const { project, registry } = sceneStore;
+    const section = kind === "material" ? "materials" : kind === "look" ? "looks" : "prefabs";
+    const names = kind === "material" ? registry.materialNames() : kind === "look" ? registry.lookNames() : registry.prefabNames();
+    if (to === from || !names.includes(from)) return;
+    if (!nameIsFree(kind, names, from, to)) return;
+    if (sceneStore.editingPrefab) {
+        sceneStore.update({ status: "Go back to the scene to rename an asset" });
+        return;
+    }
+    if (blockedByPlay()) return;
+
+    try {
+        const key = kind === "material" ? from : `looks/${from}`;
+        clearTimeout(pendingWrites.get(key));
+        pendingWrites.delete(key);
+
+        if (kind === "material") {
+            const data = registry.getMaterialData(from) ?? {};
+            await writeAsset(project, section, to, data);
+            registry.setMaterial(to, data);
+            registry.removeMaterial(from);
+        } else if (kind === "look") {
+            const data = registry.getLookData(from) ?? {};
+            await writeAsset(project, section, to, data);
+            registry.setLook(to, data);
+            registry.removeLook(from);
+        } else {
+            const root = registry.getPrefab(from)!;
+            await writeAsset(project, section, to, { version: 3, root });
+            registry.setPrefab(to, root);
+            registry.removePrefab(from);
+        }
+        // Without a change of case only: there the new file is the old one
+        if (to.toLowerCase() !== from.toLowerCase()) await deleteAsset(project, section, from);
+
+        let files = 0;
+        if (kind === "look") {
+            for (const name of registry.lookNames()) {
+                const look = registry.getLookData(name);
+                if (look?.extends !== from) continue;
+                const next = { ...look, extends: to };
+                registry.setLook(name, next);
+                await writeAsset(project, "looks", name, next);
+                files++;
+            }
+        }
+        for (const name of registry.prefabNames()) {
+            const root = structuredClone(registry.getPrefab(name)!);
+            if (!renameInEntities(registry, [root], kind, from, to)) continue;
+            registry.setPrefab(name, root);
+            await writeAsset(project, "prefabs", name, { version: 3, root });
+            files++;
+        }
+        for (const name of await listAssets(project, "scenes")) {
+            const scene = (await readAsset(project, "scenes", name)) as SceneData;
+            if (!renameInScene(registry, scene, kind, from, to)) continue;
+            await writeAsset(project, "scenes", name, scene);
+            files++;
+        }
+
+        sceneStore.renameReferences((scene) => renameInScene(registry, scene, kind, from, to), section, from, to);
+        sceneStore.setRegistry(registry);
+        sceneStore.selectAsset({ kind, name: to });
+        sceneStore.update({ status: `Renamed ${section}/${from} to ${to}${files > 0 ? `; ${files} file(s) that use it updated` : ""}` });
+    } catch (e) {
+        report(e);
+    }
+}
 
 // A new look starts as the pixel-art one: small picture, outlines, few colors
 export async function createLook() {
