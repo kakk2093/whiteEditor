@@ -27,14 +27,21 @@ const TRANSFORMS: { property: TransformProperty; title: string }[] = [
 
 const AXES = ["x", "y", "z"] as const;
 
+// Shown in a field whose value is not the same in all the selected objects
+const MIXED_MARK = "—";
+// The value of the entry of a list that stands for it
+const MIXED_OPTION = "(mixed)";
+
 // How far the mouse travels for one step of a value that is being dragged, pixels
 const SCRUB_PIXELS = 4;
 
 // A number can be typed, stepped with the two small arrows that show on hover, or dragged: press on the
 // field and move the mouse left or right (Shift: ten times faster, Alt: ten times finer). A click without
 // moving starts typing. While the field is focused it keeps exactly what is being typed.
-function NumberInput({ value, step = 0.1, min, max, onChange }: {
+// `mixed`: several objects are edited and their values differ; the field shows a dash until one is given.
+function NumberInput({ value, step = 0.1, min, max, mixed = false, onChange }: {
     value: number;
+    mixed?: boolean;
     step?: number;
     min?: number;
     max?: number;
@@ -63,7 +70,8 @@ function NumberInput({ value, step = 0.1, min, max, onChange }: {
                 min={min}
                 max={max}
                 title="Drag left or right to change (Shift faster, Alt finer) · click to type"
-                value={text ?? String(Math.round(value * 1000) / 1000)}
+                placeholder={mixed ? MIXED_MARK : undefined}
+                value={text ?? (mixed ? "" : String(Math.round(value * 1000) / 1000))}
                 onFocus={(e) => setText(e.target.value)}
                 onBlur={() => setText(null)}
                 onChange={(e) => {
@@ -111,18 +119,26 @@ function NumberInput({ value, step = 0.1, min, max, onChange }: {
     );
 }
 
-function ParamField({ def, value, onChange }: { def: ParamDef; value: ParamValue; onChange: (value: ParamValue) => void }) {
+function ParamField({ def, value, mixed = false, onChange }: {
+    def: ParamDef;
+    value: ParamValue;
+    // The selected objects have different values here; `value` is the one of the main object
+    mixed?: boolean;
+    onChange: (value: ParamValue) => void;
+}) {
+    const mixedOption = mixed && <option value={MIXED_OPTION} disabled hidden>{MIXED_MARK}</option>;
     switch (def.type) {
         case "number":
-            return <NumberInput value={value as number} step={def.step} min={def.min} max={def.max} onChange={onChange} />;
+            return <NumberInput value={value as number} step={def.step} min={def.min} max={def.max} mixed={mixed} onChange={onChange} />;
         case "color":
             return (
                 <>
                     <input className="color-swatch" type="color" value={value as string} onChange={(e) => onChange(e.target.value)} />
                     <input
                         className="input"
-                        key={value as string}
-                        defaultValue={value as string}
+                        key={mixed ? MIXED_OPTION : value as string}
+                        defaultValue={mixed ? "" : value as string}
+                        placeholder={mixed ? MIXED_MARK : undefined}
                         onChange={(e) => /^#[0-9a-f]{6}$/i.test(e.target.value) && onChange(e.target.value)}
                     />
                 </>
@@ -168,10 +184,21 @@ function ParamField({ def, value, onChange }: { def: ParamDef; value: ParamValue
             );
         }
         case "boolean":
-            return <input className="checkbox" type="checkbox" checked={value as boolean} onChange={(e) => onChange(e.target.checked)} />;
+            return (
+                <input
+                    className="checkbox"
+                    type="checkbox"
+                    ref={(el) => {
+                        if (el) el.indeterminate = mixed;
+                    }}
+                    checked={value as boolean}
+                    onChange={(e) => onChange(e.target.checked)}
+                />
+            );
         case "select":
             return (
-                <select className="select" value={value as string} onChange={(e) => onChange(e.target.value)}>
+                <select className="select" value={mixed ? MIXED_OPTION : value as string} onChange={(e) => onChange(e.target.value)}>
+                    {mixedOption}
                     {def.options.map((option) => (
                         <option key={option} value={option}>{humanize(option)}</option>
                     ))}
@@ -179,7 +206,8 @@ function ParamField({ def, value, onChange }: { def: ParamDef; value: ParamValue
             );
         case "asset":
             return (
-                <select className="select" value={value as string} onChange={(e) => onChange(e.target.value)}>
+                <select className="select" value={mixed ? MIXED_OPTION : value as string} onChange={(e) => onChange(e.target.value)}>
+                    {mixedOption}
                     <option value="">{def.kind === "material" ? "Default (gray)" : "(none)"}</option>
                     {sceneStore.registry.assetNames(def.kind).map((name) => (
                         <option key={name} value={name}>{name}</option>
@@ -187,7 +215,14 @@ function ParamField({ def, value, onChange }: { def: ParamDef; value: ParamValue
                 </select>
             );
         case "string":
-            return <input className="input" value={value as string} onChange={(e) => onChange(e.target.value)} />;
+            return (
+                <input
+                    className="input"
+                    value={mixed ? "" : value as string}
+                    placeholder={mixed ? MIXED_MARK : undefined}
+                    onChange={(e) => onChange(e.target.value)}
+                />
+            );
     }
 }
 
@@ -200,7 +235,16 @@ function revertMenu(e: MouseEvent, run: () => void) {
     openContextMenu(e, [{ items: [{ label: "Revert to Prefab", icon: "back", run }] }]);
 }
 
-function Fields({ defs, values, onChange, changed, onRevert }: {
+// The fields whose value is not the same in all of `list` (what several selected objects have in one place)
+function mixedKeys(defs: Record<string, ParamDef>, list: Params[]) {
+    const defaults = paramDefaults(defs);
+    const text = (values: Params, key: string) => JSON.stringify(values[key] ?? defaults[key]);
+    return new Set(Object.keys(defs).filter((key) => list.some((values) => text(values, key) !== text(list[0], key))));
+}
+
+const MIXED_TITLE = "the selected objects have different values; a value given here goes to all of them";
+
+function Fields({ defs, values, onChange, changed, onRevert, mixed }: {
     defs: Record<string, ParamDef>;
     values: Params;
     onChange: (key: string, value: ParamValue) => void;
@@ -208,6 +252,8 @@ function Fields({ defs, values, onChange, changed, onRevert }: {
     changed?: Record<string, unknown>;
     // Puts such a field back to what the prefab gives
     onRevert?: (key: string) => void;
+    // The fields that differ between the selected objects; `values` are those of the main one
+    mixed?: Set<string>;
 }) {
     const defaults = paramDefaults(defs);
     return (
@@ -216,13 +262,13 @@ function Fields({ defs, values, onChange, changed, onRevert }: {
                 <div key={key} className="field">
                     <label
                         className={changed && key in changed ? "overridden" : undefined}
-                        title={changed && key in changed ? `${key} — ${CHANGED_TITLE}` : key}
+                        title={changed && key in changed ? `${key} — ${CHANGED_TITLE}` : mixed?.has(key) ? `${key} — ${MIXED_TITLE}` : key}
                         onContextMenu={changed && key in changed && onRevert ? (e) => revertMenu(e, () => onRevert(key)) : undefined}
                     >
                         {humanize(key)}
                     </label>
                     <div className="control">
-                        <ParamField def={def} value={values[key] ?? defaults[key]} onChange={(value) => onChange(key, value)} />
+                        <ParamField def={def} value={values[key] ?? defaults[key]} mixed={mixed?.has(key)} onChange={(value) => onChange(key, value)} />
                     </div>
                 </div>
             ))}
@@ -255,8 +301,11 @@ function Section({ title, onRemove, removeTitle = "Remove component", extra, chi
     );
 }
 
-function TransformSection({ entity }: { entity: EntityData }) {
-    const override = sceneStore.overrideOf(entity.id);
+// With several entities the fields show the values of the last one (the main one of the selection) and a
+// dash where the others differ; a value given here goes to all of them
+function TransformSection({ entities }: { entities: EntityData[] }) {
+    const entity = entities[entities.length - 1];
+    const override = entities.length === 1 ? sceneStore.overrideOf(entity.id) : null;
     return (
         <Section title="Transform">
             {TRANSFORMS.map(({ property, title }) => (
@@ -276,8 +325,11 @@ function TransformSection({ entity }: { entity: EntityData }) {
                                 <span>{axis.toUpperCase()}</span>
                                 <NumberInput
                                     value={entity[property][i]}
+                                    mixed={entities.some((other) => other[property][i] !== entity[property][i])}
                                     step={property === "rotation" ? 5 : 0.1}
-                                    onChange={(value) => sceneStore.setTransform(entity.id, property, i as 0 | 1 | 2, value)}
+                                    onChange={(value) => sceneStore.batch(() => {
+                                        for (const each of entities) sceneStore.setTransform(each.id, property, i as 0 | 1 | 2, value);
+                                    })}
                                 />
                             </div>
                         ))}
@@ -288,17 +340,23 @@ function TransformSection({ entity }: { entity: EntityData }) {
     );
 }
 
-// `locked` is for a component that comes from a prefab: its fields can be changed (an override of the
-// instance), the component itself stays
-function ComponentSection({ entity, component, locked = false }: { entity: EntityData; component: ComponentData; locked?: boolean }) {
+// With several entities `components` has the component of each, in the same order; the fields show the
+// last one, and what is changed goes to all.
+function ComponentSection({ entities, components }: { entities: EntityData[]; components: ComponentData[] }) {
     const store = useSceneStore();
+    const entity = entities[entities.length - 1];
+    const component = components[components.length - 1];
+    const single = entities.length === 1;
     const def = componentDefs[component.type];
     const key = componentKey(component);
+    const each = (run: (id: string) => void) => store.batch(() => entities.forEach((other) => run(other.id)));
 
     // A model or a behavior from the project scripts, with its own params
     const source = def?.source;
-    const sourceName = source ? (component[source.key] as string | undefined) ?? "" : "";
-    const sourceDef = source?.get(store.registry, sourceName);
+    const nameOf = (c: ComponentData) => (source ? (c[source.key] as string | undefined) ?? "" : "");
+    const sourceName = nameOf(component);
+    const sourceMixed = components.some((other) => nameOf(other) !== sourceName);
+    const sourceDef = sourceMixed ? undefined : source?.get(store.registry, sourceName);
 
     // A name that is saved in the scene but missing from the scripts stays selectable
     const names = source?.list(store.registry).map((d) => d.name) ?? [];
@@ -308,13 +366,16 @@ function ComponentSection({ entity, component, locked = false }: { entity: Entit
     const title = def?.multiple ? `${sourceDef?.label ?? sourceName} (${def.label})` : def?.label ?? component.type;
 
     // What a prefab instance changes in this component
-    const override = store.overrideOf(entity.id)?.components?.[key];
+    const override = single ? store.overrideOf(entity.id)?.components?.[key] : undefined;
+    // A component the instance has and its prefab does not
+    const added = single && store.overrideOf(entity.id)?.addComponents?.some((other) => componentKey(other) === key);
 
     return (
         <Section
-            title={title}
-            onRemove={locked ? undefined : () => store.removeComponent(entity.id, key)}
-            extra={component.type === "collider" && !store.playing && (
+            title={added ? <span className="overridden" title="Added in this instance: the prefab does not have this component">{title}</span> : title}
+            onRemove={() => each((id) => store.removeComponent(id, key))}
+            removeTitle={single ? undefined : "Remove the component from all the selected objects"}
+            extra={single && component.type === "collider" && !store.playing && (
                 <button
                     className={`btn ghost ${store.colliderEdit ? "active" : ""}`}
                     title="Edit in the viewport: drag the dots on the sides of the collider to resize it, the square to move it"
@@ -328,9 +389,10 @@ function ComponentSection({ entity, component, locked = false }: { entity: Entit
                 <Fields
                     defs={def.fields}
                     values={component as Params}
-                    onChange={(field, value) => store.setComponentField(entity.id, key, field, value)}
+                    onChange={(field, value) => each((id) => store.setComponentField(id, key, field, value))}
                     changed={override}
                     onRevert={(field) => store.revertOverrideField(entity.id, ["components", key, field])}
+                    mixed={single ? undefined : mixedKeys(def.fields, components as Params[])}
                 />
             )}
 
@@ -338,7 +400,7 @@ function ComponentSection({ entity, component, locked = false }: { entity: Entit
                 <div className="field">
                     <label
                         className={override && source.key in override ? "overridden" : undefined}
-                        title={override && source.key in override ? CHANGED_TITLE : undefined}
+                        title={override && source.key in override ? CHANGED_TITLE : sourceMixed ? MIXED_TITLE : undefined}
                         onContextMenu={override && source.key in override
                             ? (e) => revertMenu(e, () => store.revertOverrideField(entity.id, ["components", key]))
                             : undefined}
@@ -348,9 +410,10 @@ function ComponentSection({ entity, component, locked = false }: { entity: Entit
                     <div className="control">
                         <select
                             className="select"
-                            value={sourceName}
-                            onChange={(e) => store.setComponentField(entity.id, key, source.key, e.target.value)}
+                            value={sourceMixed ? MIXED_OPTION : sourceName}
+                            onChange={(e) => each((id) => store.setComponentField(id, key, source.key, e.target.value))}
                         >
+                            {sourceMixed && <option value={MIXED_OPTION} disabled hidden>{MIXED_MARK}</option>}
                             <option value="">(none)</option>
                             {names.map((name) => (
                                 <option key={name} value={name}>{name}</option>
@@ -363,17 +426,73 @@ function ComponentSection({ entity, component, locked = false }: { entity: Entit
                 <Fields
                     defs={sourceDef.params ?? {}}
                     values={(component.params as Params | undefined) ?? {}}
-                    onChange={(param, value) => store.setComponentParam(entity.id, key, param, value)}
+                    onChange={(param, value) => each((id) => store.setComponentParam(id, key, param, value))}
                     changed={override?.params as Params | undefined}
                     onRevert={(param) => store.revertOverrideField(entity.id, ["components", key, "params", param])}
+                    mixed={single ? undefined : mixedKeys(sourceDef.params ?? {}, components.map((c) => (c.params as Params | undefined) ?? {}))}
                 />
             )}
-            {source && sourceName && !sourceDef && (
+            {source && sourceName && !sourceDef && !sourceMixed && (
                 <div className="note">
                     The {source.what} <b>{sourceName}</b> is not defined in the project's scripts/ folder.
                 </div>
             )}
         </Section>
+    );
+}
+
+// Several objects: what can be done to all of them at once, and the fields they all have. The components
+// are those every one of them has; the values shown are of the main object (the last one selected).
+function MultiInspector({ entities }: { entities: EntityData[] }) {
+    const store = useSceneStore();
+    const main = entities[entities.length - 1];
+    // The components of an instance are those of the root of its prefab
+    const lists = entities.map((entity) => (entity.prefab ? store.expand(entity)?.components : entity.components) ?? []);
+    const shared = (lists[lists.length - 1] ?? [])
+        .map((component) => lists.map((list) => list.find((other) => componentKey(other) === componentKey(component))))
+        .filter((found): found is ComponentData[] => found.every((component) => component !== undefined));
+    if (!main) return null;
+    const active = main.active ?? true;
+
+    return (
+        <>
+            <div className="inspector-head">
+                <input
+                    className="checkbox"
+                    type="checkbox"
+                    title="Active: an inactive object is hidden together with its children"
+                    ref={(el) => {
+                        if (el) el.indeterminate = entities.some((entity) => (entity.active ?? true) !== active);
+                    }}
+                    checked={active}
+                    onChange={(e) => store.batch(() => entities.forEach((entity) => store.setActive(entity.id, e.target.checked)))}
+                />
+                <Icon name="cube" /> <b style={{ flex: 1 }}>{entities.length} objects selected</b>
+            </div>
+            <div className="note">
+                <button className="btn" title="Copies next to the originals (Ctrl+D)" onClick={() => store.duplicateSelected()}>
+                    <Icon name="copy" /> Duplicate
+                </button>
+                <button className="btn" title="Put them under a new empty object (Ctrl+G)" onClick={() => store.groupSelected()}>
+                    <Icon name="folder" /> Group
+                </button>
+                <button className="btn danger" title="Delete (Del)" onClick={() => store.removeSelected()}>
+                    <Icon name="trash" /> Delete
+                </button>
+            </div>
+            <div className="note">{entities.map((entity) => entity.name).join(", ")}</div>
+
+            <TransformSection entities={entities} />
+
+            {shared.map((components) => (
+                <ComponentSection key={componentKey(components[0])} entities={entities} components={components} />
+            ))}
+
+            <div className="empty">
+                A value given here goes to all the selected objects; {MIXED_MARK} stands where they differ.
+                Only the components all of them have are shown. The gizmo holds the last one picked.
+            </div>
+        </>
     );
 }
 
@@ -384,6 +503,10 @@ function EntityInspector({ entity }: { entity: EntityData }) {
     const inner = store.isInner(entity.id);
     const instance = store.instanceOf(entity.id);
     const fromPrefab = inner || entity.prefab !== undefined;
+    // One of the entities an instance adds to its prefab
+    const addedIn = store.addedIn(entity.id);
+    // The components of the prefab this instance has removed
+    const removedComponents = (fromPrefab && store.overrideOf(entity.id)?.removeComponents) || [];
     // The components of an instance are those of the root of its prefab
     const components = (entity.prefab ? store.expand(entity)?.components : entity.components) ?? [];
 
@@ -393,13 +516,13 @@ function EntityInspector({ entity }: { entity: EntityData }) {
     const addSections: MenuSection[] = [
         {
             items: types
-                .filter((type) => !componentDefs[type].multiple && !getComponent(entity, type))
+                .filter((type) => !componentDefs[type].multiple && !components.some((c) => c.type === type))
                 .map((type) => ({ key: type, label: componentDefs[type].label }))
         },
         ...types.filter((type) => componentDefs[type].multiple).map((type) => ({
             title: `${componentDefs[type].label}s`,
             items: (componentDefs[type].source?.list(store.registry) ?? [])
-                .filter((d) => !getComponent(entity, `${type}:${d.name}`))
+                .filter((d) => !components.some((c) => componentKey(c) === `${type}:${d.name}`))
                 .map((d) => ({ key: `${type}:${d.name}`, label: d.label ?? d.name, icon: "script" as const }))
         }))
     ];
@@ -429,12 +552,16 @@ function EntityInspector({ entity }: { entity: EntityData }) {
                     title={inner ? "The name comes from the prefab" : undefined}
                     onChange={(e) => store.rename(entity.id, e.target.value)}
                 />
-                {!isPrefabRoot && !inner && (
+                {!isPrefabRoot && (
                     <>
                         <button className="btn ghost" title="Duplicate (Ctrl+D)" onClick={duplicate}>
                             <Icon name="copy" />
                         </button>
-                        <button className="btn ghost danger" title="Delete (Del)" onClick={() => store.removeEntity(entity.id)}>
+                        <button
+                            className="btn ghost danger"
+                            title={inner ? "Remove from this instance; the prefab keeps it (Del)" : "Delete (Del)"}
+                            onClick={() => store.removeEntity(entity.id)}
+                        >
                             <Icon name="trash" />
                         </button>
                     </>
@@ -456,6 +583,11 @@ function EntityInspector({ entity }: { entity: EntityData }) {
             {inner && (
                 <div className="note prefab">
                     <Icon name="prefab" /> Inside an instance of prefab <b>{instance?.prefab}</b>
+                </div>
+            )}
+            {addedIn && (
+                <div className="note prefab">
+                    <Icon name="plus" /> Added in an instance of prefab <b>{addedIn.prefab}</b>: the prefab does not have it
                 </div>
             )}
             {fromPrefab && (
@@ -485,19 +617,28 @@ function EntityInspector({ entity }: { entity: EntityData }) {
                 </div>
             )}
 
-            <TransformSection entity={entity} />
+            <TransformSection entities={[entity]} />
 
             {components.map((component) => (
-                <ComponentSection key={componentKey(component)} entity={entity} component={component} locked={fromPrefab} />
+                <ComponentSection key={componentKey(component)} entities={[entity]} components={[component]} />
             ))}
 
-            {!fromPrefab && (
+            {removedComponents.map((key) => (
+                <div key={key} className="note">
+                    Removed in this instance: <b>{key}</b>
+                    <button className="btn" title="The instance has the component of the prefab again" onClick={() => store.restoreComponent(entity.id, key)}>
+                        <Icon name="back" /> Restore
+                    </button>
+                </div>
+            ))}
+
+            {(
                 <>
 
                     {addSections.some((section) => section.items.length > 0) && (
                         <div className="add-component">
                             <Menu
-                                up={entity.components.length > 1}
+                                up={components.length > 1}
                                 sections={addSections}
                                 onPick={(key) => {
                                     const [type, ...source] = key.split(":");
@@ -512,7 +653,7 @@ function EntityInspector({ entity }: { entity: EntityData }) {
                         </div>
                     )}
 
-                    {!store.editingPrefab && (
+                    {!store.editingPrefab && !fromPrefab && (
                         <div className="note">
                             Reuse this object in many places:
                             <button className="btn" onClick={() => createPrefab(entity.id)}>
@@ -932,30 +1073,10 @@ export default function Inspector() {
                 {asset ? (
                     <AssetInspector key={`${asset.kind}:${asset.name}:${store.restores}`} asset={asset} />
                 ) : store.selectedIds.length > 1 ? (
-                    // Several objects: what can be done to all of them at once
-                    <>
-                        <div className="inspector-head">
-                            <Icon name="cube" /> <b style={{ flex: 1 }}>{store.selectedIds.length} objects selected</b>
-                        </div>
-                        <div className="note">
-                            <button className="btn" title="Copies next to the originals (Ctrl+D)" onClick={() => store.duplicateSelected()}>
-                                <Icon name="copy" /> Duplicate
-                            </button>
-                            <button className="btn" title="Put them under a new empty object (Ctrl+G)" onClick={() => store.groupSelected()}>
-                                <Icon name="folder" /> Group
-                            </button>
-                            <button className="btn danger" title="Delete (Del)" onClick={() => store.removeSelected()}>
-                                <Icon name="trash" /> Delete
-                            </button>
-                        </div>
-                        <div className="note">
-                            {store.selectedIds.map((id) => store.findEntity(id)?.name).filter(Boolean).join(", ")}
-                        </div>
-                        <div className="empty">
-                            The gizmo moves all of them together: it holds the last one picked.
-                            Ctrl-click adds or removes an object, Shift-click in the Hierarchy takes a range.
-                        </div>
-                    </>
+                    <MultiInspector
+                        key={`${store.selectedIds.join()}:${store.restores}`}
+                        entities={store.selectedIds.map((id) => store.findEntity(id)).filter((entity) => entity !== null)}
+                    />
                 ) : selected ? (
                     <EntityInspector key={`${selected.id}:${store.restores}`} entity={selected} />
                 ) : store.editingPrefab ? (

@@ -1,5 +1,5 @@
 {
-  "name": "package.json",
+  "name": "white-editor",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -13,13 +13,10 @@
     "render": "node tools/render.mjs"
   },
   "dependencies": {
-    "@tailwindcss/vite": "^4.3.2",
     "@types/three": "^0.185.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "tailwindcss": "^4.3.2",
-    "three": "^0.185.1",
-    "zustand": "^5.0.14"
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.25.0",

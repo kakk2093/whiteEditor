@@ -47,6 +47,15 @@ export async function deleteAsset(project: string, section: AssetSection, name: 
     await request(`${project}/${section}/${name}`, { method: "DELETE" });
 }
 
+// folders.json of the project: the layout of the Project panel (see folders.ts)
+export function readFolders(project: string): Promise<unknown> {
+    return request(`${project}/folders`);
+}
+
+export async function writeFolders(project: string, data: unknown) {
+    await request(`${project}/folders`, { method: "PUT", body: JSON.stringify(data) });
+}
+
 // Builds the game of the project into its build/ folder; `url` is where the dev server shows it
 export function buildGame(project: string, scene: string): Promise<{ scene: string; files: string[]; url: string }> {
     return request(`${project}/build?scene=${encodeURIComponent(scene)}`, { method: "POST" });
@@ -93,6 +102,13 @@ export function onAssetChanged(fn: (project: string, section: AssetSection, name
         fn(data.project, data.section, data.name);
     import.meta.hot?.on("white:asset-changed", listener);
     return () => import.meta.hot?.off("white:asset-changed", listener);
+}
+
+// folders.json was changed on disk by something other than the editor
+export function onFoldersChanged(fn: (project: string) => void) {
+    const listener = (data: { project: string }) => fn(data.project);
+    import.meta.hot?.on("white:folders-changed", listener);
+    return () => import.meta.hot?.off("white:folders-changed", listener);
 }
 
 export function onScriptsChanged(fn: (project: string) => void) {

@@ -23,6 +23,14 @@ export interface EntityOverride {
     scale?: Vec3;
     // By component key ("mesh", "script:spin"): the fields to replace; "params" are replaced one by one
     components?: Record<string, Record<string, ParamValue | Params>>;
+    // Components this instance has on top of what the prefab gives; changed right here, not through "components"
+    addComponents?: ComponentData[];
+    // Keys of the components of the prefab this instance does not have
+    removeComponents?: string[];
+    // Entities this instance has on top of the children the prefab gives: ordinary entities, written whole
+    addChildren?: EntityData[];
+    // true: the instance does not have this entity of the prefab, nor anything under it
+    removed?: boolean;
 }
 
 // A GameObject: does nothing by itself, everything comes from its components
@@ -80,13 +88,25 @@ function normalizeEntity(raw: Partial<EntityData>, fromRadians: boolean, usedIds
         name: raw.name ?? "GameObject",
         ...(raw.active === false ? { active: false } : {}),
         ...(raw.prefab ? { prefab: raw.prefab } : {}),
-        ...(raw.prefab && raw.overrides ? { overrides: structuredClone(raw.overrides) } : {}),
+        ...(raw.prefab && raw.overrides ? { overrides: normalizeOverrides(raw.overrides, fromRadians, usedIds) } : {}),
         position: raw.position ? [...raw.position] : [0, 0, 0],
         rotation: fromRadians ? (rotation.map((r) => r * RAD_TO_DEG) as Vec3) : rotation,
         scale: raw.scale ? [...raw.scale] : [1, 1, 1],
         components: (raw.components ?? []).map((c) => ({ ...c })),
         children: (raw.children ?? []).map((child) => normalizeEntity(child, fromRadians, usedIds)),
     };
+}
+
+// The entities an instance adds are written like any other, so they are read like any other
+function normalizeOverrides(raw: Record<string, EntityOverride>, fromRadians: boolean, usedIds: Set<string>) {
+    const overrides = structuredClone(raw);
+    if (typeof overrides !== "object" || overrides === null) return overrides;
+    for (const override of Object.values(overrides)) {
+        if (override && Array.isArray(override.addChildren)) {
+            override.addChildren = override.addChildren.map((child) => normalizeEntity(child, fromRadians, usedIds));
+        }
+    }
+    return overrides;
 }
 
 export function parsePrefab(json: unknown): PrefabData {

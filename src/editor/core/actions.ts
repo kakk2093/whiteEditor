@@ -1,6 +1,8 @@
 import { applyToPrefab, parsePrefab, parseScene, resolveLook, validateScene } from "../../engine";
 import type { LookData, MaterialData, SceneData } from "../../engine";
 import { renameInEntities, renameInScene } from "./references";
+import { changeFolder, moveToFolder, parseFolders, renameInFolders } from "./folders";
+import type { Folders, FolderSection } from "./folders";
 import type { AssetSection } from "./project";
 import { sceneStore } from "./SceneStore";
 import {
@@ -12,8 +14,10 @@ import {
     listProjects,
     loadRegistry,
     readAsset,
+    readFolders,
     uploadImage,
-    writeAsset
+    writeAsset,
+    writeFolders
 } from "./project";
 
 // Everything the editor does with the project on disk. Errors end up in the status line.
@@ -65,10 +69,14 @@ export async function openProject(name: string) {
         if (first) note = await loadSceneFile(name, first);
         else sceneStore.newScene();
 
+        // A broken folders.json must not keep the project from opening: everything shows without folders
+        const folders = await readFolders(name).then(parseFolders, () => ({}));
+
         localStorage.setItem(LAST_PROJECT, name);
         sceneStore.update({
             project: name,
             scenes,
+            folders,
             sceneName: first ?? "main",
             status: errors.length > 0 ? errors.join("; ") : `Opened project ${name}${note}`
         });
@@ -96,6 +104,47 @@ export async function init() {
         sceneStore.update({ projects });
         const last = localStorage.getItem(LAST_PROJECT);
         if (last && projects.includes(last)) await openProject(last);
+    } catch (e) {
+        report(e);
+    }
+}
+
+// The folders of the Project panel: shown at once and written to folders.json. Not a part of undo.
+async function saveFolders(folders: Folders, status: string) {
+    try {
+        sceneStore.update({ folders, status });
+        await writeFolders(sceneStore.project, folders);
+    } catch (e) {
+        report(e);
+    }
+}
+
+export function createFolder(section: FolderSection, name: string) {
+    return saveFolders(changeFolder(sceneStore.folders, section, null, name), `Folder ${name} added to ${section}`);
+}
+
+export function renameFolder(section: FolderSection, from: string, to: string) {
+    return saveFolders(changeFolder(sceneStore.folders, section, from, to), `Folder ${from} renamed to ${to}`);
+}
+
+// Only the folder goes: what was in it shows at the top again
+export function deleteFolder(section: FolderSection, name: string) {
+    return saveFolders(changeFolder(sceneStore.folders, section, name, null), `Folder ${name} removed; its ${section} are kept`);
+}
+
+// `folder` = null takes the asset out of its folder
+export function moveAssetToFolder(section: FolderSection, name: string, folder: string | null) {
+    return saveFolders(
+        moveToFolder(sceneStore.folders, section, name, folder),
+        folder === null ? `${name} taken out of its folder` : `${name} moved to folder ${folder}`
+    );
+}
+
+// folders.json edited outside the editor
+export async function foldersChangedOnDisk(project: string) {
+    if (project !== sceneStore.project) return;
+    try {
+        sceneStore.update({ folders: parseFolders(await readFolders(project)), status: "folders.json changed on disk — reloaded" });
     } catch (e) {
         report(e);
     }
@@ -250,7 +299,7 @@ export async function applyOverrides(id: string) {
     if (sceneStore.editingPrefab === instance.prefab) return;
     try {
         const name = instance.prefab;
-        const path = sceneStore.isInner(id) ? id.slice(id.indexOf("/") + 1) : null;
+        const path = sceneStore.pathIn(id);
         const overrides = path === null ? instance.overrides : { [path]: instance.overrides[path] ?? {} };
         const changed = applyToPrefab(root, overrides);
         await writeAsset(project, "prefabs", name, { version: 3, root: changed });
@@ -545,8 +594,8 @@ export async function renameScene(from: string, to: string) {
         sceneStore.update({
             ...(sceneStore.sceneName === from ? { sceneName: to } : {}),
             scenes: await listAssets(project, "scenes"),
-            status: `Renamed scenes/${from} to ${to}`
         });
+        await saveFolders(renameInFolders(sceneStore.folders, "scenes", from, to), `Renamed scenes/${from} to ${to}`);
     } catch (e) {
         report(e);
     }
@@ -618,7 +667,10 @@ export async function renameAsset(kind: "material" | "look" | "prefab", from: st
         sceneStore.renameReferences((scene) => renameInScene(registry, scene, kind, from, to), section, from, to);
         sceneStore.setRegistry(registry);
         sceneStore.selectAsset({ kind, name: to });
-        sceneStore.update({ status: `Renamed ${section}/${from} to ${to}${files > 0 ? `; ${files} file(s) that use it updated` : ""}` });
+        await saveFolders(
+            renameInFolders(sceneStore.folders, section, from, to),
+            `Renamed ${section}/${from} to ${to}${files > 0 ? `; ${files} file(s) that use it updated` : ""}`
+        );
     } catch (e) {
         report(e);
     }

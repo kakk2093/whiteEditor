@@ -1,54 +1,48 @@
-# React + TypeScript + Vite
+# whiteEditor
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Редактор сцен для веб-игр на three.js в духе Unity: объекты с компонентами, Hierarchy, Inspector, окно
+Project с ассетами, префабы, стили рендера (Look). Личный инструмент, не продукт.
 
-Currently, two official plugins are available:
+Игра делается из одного места — из редактора. Проект игры — папка `projects/<имя>/` с обычными текстовыми
+файлами (JSON и TypeScript), которые можно править руками или ИИ-агентом: редактор подхватывает правки с
+диска. Вьюпорт рисует тем же кодом движка, что и собранная игра.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Запуск
 
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default tseslint.config({
-  extends: [
-    // Remove ...tseslint.configs.recommended and replace with this
-    ...tseslint.configs.recommendedTypeChecked,
-    // Alternatively, use this for stricter rules
-    ...tseslint.configs.strictTypeChecked,
-    // Optionally, add this for stylistic rules
-    ...tseslint.configs.stylisticTypeChecked,
-  ],
-  languageOptions: {
-    // other options...
-    parserOptions: {
-      project: ['./tsconfig.node.json', './tsconfig.app.json'],
-      tsconfigRootDir: import.meta.dirname,
-    },
-  },
-})
+```bash
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Редактор откроется на `http://localhost:5173`. В папке `projects/demo/` лежит тестовый проект.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Команды
 
-export default tseslint.config({
-  plugins: {
-    // Add the react-x and react-dom plugins
-    'react-x': reactX,
-    'react-dom': reactDom,
-  },
-  rules: {
-    // other rules...
-    // Enable its recommended typescript rules
-    ...reactX.configs['recommended-typescript'].rules,
-    ...reactDom.configs.recommended.rules,
-  },
-})
+```bash
+npm run dev                          # редактор
+npm run check -- demo                # проверка проекта без браузера: сцены, префабы, материалы, типы скриптов
+npm run render -- demo [сцена]       # картинка сцены в projects/demo/renders/<сцена>.png
+npm run build:game -- demo [сцена]   # сборка игры в projects/demo/build (index.html + game.js)
+npx tsc -b                           # типы редактора
+npx eslint .
 ```
+
+Для `render` нужен установленный Chrome или Edge (путь к другому браузеру — в переменной `WHITE_BROWSER`).
+
+## Где что описано
+
+- [CLAUDE.md](CLAUDE.md) — как устроен редактор, структура кода, управление, что не сделано и план.
+- `projects/<имя>/AGENTS.md` — формат файлов проекта (сцены, материалы, префабы, Look, скрипты) для того,
+  кто пишет их руками. Файл создаётся и обновляется сервером редактора; пример —
+  [projects/demo/AGENTS.md](projects/demo/AGENTS.md).
+
+## Структура
+
+| Путь | Что это |
+|---|---|
+| `src/engine/` | Движок без React: формат данных, компоненты, материалы, рендер, запуск игры. Скрипты проектов импортируют его как `white-engine` |
+| `src/editor/` | Редактор: состояние, действия с диском, панели |
+| `src/components/` | Вьюпорт |
+| `tools/` | Команды `check`, `render`, `build:game` и текст `AGENTS.md` |
+| `vite-plugin-projects.ts` | Серверная часть редактора: API проектов, слежение за файлами |
+| `projects/` | Проекты игр |

@@ -216,19 +216,43 @@ a.btn {
     min-height: 0;
 }
 
+/* The sizes come from App.tsx: the borders between the panels can be dragged */
 .panel.left {
-    width: 250px;
+    width: var(--left-width, 250px);
+    max-width: 40vw;
     border-right: 1px solid var(--border);
 }
 
 .panel.right {
-    width: 290px;
+    width: var(--right-width, 290px);
+    max-width: 45vw;
     border-left: 1px solid var(--border);
 }
 
 .panel.bottom {
-    height: 190px;
+    height: var(--bottom-height, 190px);
+    max-height: 70%;
     border-top: 1px solid var(--border);
+}
+
+/* The border of a panel, a little wider than it looks so that the mouse finds it */
+.splitter {
+    position: relative;
+    flex: 0 0 5px;
+    margin: 0 -2px;
+    cursor: col-resize;
+    z-index: 5;
+}
+
+.splitter.row {
+    margin: -2px 0;
+    cursor: row-resize;
+}
+
+.splitter:hover,
+.splitter:active {
+    background: var(--accent);
+    opacity: 0.6;
 }
 
 .panel-header {
@@ -622,11 +646,19 @@ kbd {
 
 .tile-preview.material {
     border-radius: 50%;
+    background-size: cover;
+    background-position: center;
+    background-blend-mode: multiply;
+    image-rendering: pixelated;
     box-shadow: inset -6px -8px 12px rgba(0, 0, 0, 0.45), inset 4px 5px 8px rgba(255, 255, 255, 0.25);
 }
 
 .tile-preview.prefab {
     color: var(--prefab);
+}
+
+.tile.folder .tile-preview {
+    color: var(--text);
 }
 
 .tile.add .tile-preview {
@@ -674,6 +706,15 @@ kbd {
     width: 1px;
     margin: 3px 3px;
     background: var(--border);
+}
+
+/* The frame of a selection dragged out with Shift */
+.viewport-marquee {
+    position: absolute;
+    display: none;
+    background: rgba(77, 156, 255, 0.15);
+    border: 1px solid #4d9cff;
+    pointer-events: none;
 }
 
 .viewport-hint {
@@ -886,6 +927,26 @@ kbd {
 /* What is inside a prefab instance; a name in bold has changes of this instance */
 .tree-row.inner {
     font-style: italic;
+}
+
+/* An object a prefab instance adds to its prefab */
+.tree-row.added .name::after {
+    content: " +";
+    color: var(--prefab);
+}
+
+/* An object of the prefab the instance leaves out */
+.tree-row.removed {
+    color: var(--muted);
+    font-style: italic;
+}
+
+.tree-row.removed .name {
+    text-decoration: line-through;
+}
+
+.tree-row.removed .eye {
+    opacity: 1;
 }
 
 .tree-row.overridden .name {

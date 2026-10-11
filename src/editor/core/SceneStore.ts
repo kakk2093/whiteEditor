@@ -1,6 +1,9 @@
 import * as THREE from "three";
+import type { Folders } from "./folders";
 import {
+    addedLists,
     applyEnvironment,
+    assignAddedIds,
     componentDefs,
     componentKey,
     createDefaultScene,
@@ -15,6 +18,7 @@ import {
     findInExpanded,
     Game,
     generateId,
+    innerId,
     paramDefaults,
     parseScene,
     rebuildComponentObject,
@@ -43,17 +47,48 @@ const AXES = ["x", "y", "z"] as const;
 // Keeps gizmo results free of float noise, so scene files stay readable and diff well
 const round = (value: number) => Math.round(value * 10000) / 10000;
 
-function findEntity(
-    list: EntityData[],
-    id: string,
-    parent: EntityData | null = null
-): { entity: EntityData; parent: EntityData | null; siblings: EntityData[] } | null {
+// A real entity of the scene: one of its own, or one a prefab instance adds to its prefab (those live in the
+// overrides of the instance). `parentId` is the id of what it is under: for an added one that is the instance
+// or something inside it, which is not a real entity, so `parent` is null there.
+interface Found {
+    entity: EntityData;
+    parent: EntityData | null;
+    parentId: string | null;
+    siblings: EntityData[];
+}
+
+function findEntity(list: EntityData[], id: string, parent: EntityData | null = null, parentId: string | null = null): Found | null {
     for (const entity of list) {
-        if (entity.id === id) return { entity, parent, siblings: list };
-        const found = findEntity(entity.children, id, entity);
+        if (entity.id === id) return { entity, parent, parentId, siblings: list };
+        const found = findEntity(entity.children, id, entity, entity.id) ?? findAdded(entity, id);
         if (found) return found;
     }
     return null;
+}
+
+function findAdded(instance: EntityData, id: string): Found | null {
+    for (const [path, override] of Object.entries(instance.overrides ?? {})) {
+        const found = override.addChildren && findEntity(override.addChildren, id, null, innerId(instance, path));
+        if (found) return found;
+    }
+    return null;
+}
+
+// Every list of real entities right under this one
+const ownLists = (entity: EntityData) => [entity.children, ...addedLists(entity)];
+
+// Drops what an edit has left empty in the overrides of the instances
+function tidyOverrides(entities: EntityData[]) {
+    for (const entity of entities) {
+        for (const [path, override] of Object.entries(entity.overrides ?? {})) {
+            for (const key of ["addChildren", "addComponents", "removeComponents"] as const) {
+                if (override[key]?.length === 0) delete override[key];
+            }
+            if (Object.keys(override).length === 0) delete entity.overrides![path];
+        }
+        if (entity.overrides && Object.keys(entity.overrides).length === 0) delete entity.overrides;
+        for (const list of ownLists(entity)) tidyOverrides(list);
+    }
 }
 
 // What an id stands for. `entity` is the real entity of the scene, or, for what comes from a prefab, a copy
@@ -212,6 +247,9 @@ class SceneStore {
 
     scenes: string[] = [];
 
+    // The folders of the Project panel: folders.json of the project
+    folders: Folders = {};
+
     status = "";
 
     // Name of the prefab being edited: its root is then the only entity, and the scene waits in `stash`
@@ -312,7 +350,29 @@ class SceneStore {
 
     getVersion = () => this.version;
 
+    // Inside batch() the changes are not announced one by one
+    private batching = 0;
+    private pending = false;
+
+    // Several changes as one: the listeners hear of them once, and undo takes them back together
+    batch(run: () => void) {
+        this.batching++;
+        try {
+            run();
+        } finally {
+            this.batching--;
+            if (this.batching === 0 && this.pending) {
+                this.pending = false;
+                this.notify();
+            }
+        }
+    }
+
     private notify() {
+        if (this.batching > 0) {
+            this.pending = true;
+            return;
+        }
         this.record();
         this.version++;
         this.listeners.forEach((fn) => fn());
@@ -453,16 +513,49 @@ class SceneStore {
     // `content` asks for what a prefab instance is made of instead of the instance itself: its components
     // come from the prefab, so changing them is an override too
     private locate(id: string, content = false): Target | null {
-        const slash = id.indexOf("/");
-        const real = findEntity(this.entities, slash < 0 ? id : id.slice(0, slash))?.entity;
-        if (!real) return null;
-        if (slash < 0 && !(content && real.prefab)) return { entity: real, instance: null, path: "" };
+        const real = findEntity(this.entities, id)?.entity;
+        if (real && !(content && real.prefab)) return { entity: real, instance: null, path: "" };
+        const place = real ? { instance: real, path: ROOT_PATH } : this.inside(id);
+        if (!place) return null;
 
-        const expanded = expandInstance(this.registry, real);
+        const expanded = expandInstance(this.registry, place.instance);
         if (!expanded) return null;
-        if (slash < 0) return { entity: expanded, instance: real, path: ROOT_PATH };
+        if (place.path === ROOT_PATH) return { entity: expanded, instance: place.instance, path: ROOT_PATH };
         const entity = findInExpanded(expanded, id);
-        return entity ? { entity, instance: real, path: id.slice(slash + 1) } : null;
+        return entity ? { entity, ...place } : null;
+    }
+
+    // For an id of something that comes from a prefab: the instance that brings it and its path there.
+    // The instance is the nearest real entity the id leads through; it may itself be one another instance adds.
+    private inside(id: string): { instance: EntityData; path: string } | null {
+        if (findEntity(this.entities, id)) return null;
+        const parts = id.split("/");
+        for (let n = parts.length - 1; n > 0; n--) {
+            const real = findEntity(this.entities, parts.slice(0, n).join("/"))?.entity;
+            if (real) return real.prefab ? { instance: real, path: parts.slice(n).join("/") } : null;
+        }
+        return null;
+    }
+
+    // The path of the id in the overrides of its instance; null if it is not something a prefab brings
+    pathIn(id: string) {
+        return this.inside(id)?.path ?? null;
+    }
+
+    // The real entity with this id (one of the scene, or one an instance adds); null for what a prefab brings
+    realEntity(id: string) {
+        return findEntity(this.entities, id)?.entity ?? null;
+    }
+
+    // The instance that adds this entity to its prefab, if it is such an entity (or is under one)
+    addedIn(id: string) {
+        if (!id.includes("/") || !findEntity(this.entities, id)) return null;
+        const parts = id.split("/");
+        for (let n = parts.length - 1; n > 0; n--) {
+            const real = findEntity(this.entities, parts.slice(0, n).join("/"))?.entity;
+            if (real?.prefab) return real;
+        }
+        return null;
     }
 
     // After an edit: what now differs from the prefab becomes the override of the instance at that path
@@ -473,7 +566,10 @@ class SceneStore {
         const before = pristine && findInExpanded(pristine, entity.id);
         if (!before) return;
 
-        const override = diffOverride(this.registry, before, entity, path === ROOT_PATH);
+        const diff = diffOverride(this.registry, before, entity, path === ROOT_PATH);
+        // The entities added here are real ones and are changed as such, not through the copy
+        const addChildren = instance.overrides?.[path]?.addChildren;
+        const override = addChildren ? { ...diff, addChildren } : diff;
         const overrides = { ...instance.overrides };
         if (override) overrides[path] = override;
         else delete overrides[path];
@@ -488,34 +584,36 @@ class SceneStore {
 
     // true if the id is of something inside a prefab instance
     isInner(id: string) {
-        return id.includes("/");
+        return this.inside(id) !== null;
     }
 
     // The instance the id belongs to: itself, or the one it is inside of
     instanceOf(id: string) {
-        const entity = findEntity(this.entities, id.split("/")[0])?.entity;
-        return entity?.prefab ? entity : null;
+        const entity = findEntity(this.entities, id)?.entity;
+        if (entity) return entity.prefab ? entity : null;
+        return this.inside(id)?.instance ?? null;
     }
 
     // true if the instance changes what the prefab gives it (for an inner id: at that very place)
     hasOverrides(id: string) {
         const overrides = this.instanceOf(id)?.overrides;
         if (!overrides) return false;
-        return this.isInner(id) ? id.slice(id.indexOf("/") + 1) in overrides : true;
+        const path = this.pathIn(id);
+        return path !== null ? path in overrides : true;
     }
 
     // What the instance changes at the place the id names (for the instance itself: in its root), if anything.
     // The Inspector marks these fields.
     overrideOf(id: string): EntityOverride | null {
         const overrides = this.instanceOf(id)?.overrides;
-        return overrides?.[this.isInner(id) ? id.slice(id.indexOf("/") + 1) : ROOT_PATH] ?? null;
+        return overrides?.[this.pathIn(id) ?? ROOT_PATH] ?? null;
     }
 
     // Back to what the prefab gives, for one thing the instance changes: `field` is where it is in the
     // override, e.g. ["position"], ["components", "mesh", "shape"], ["components", "model", "params", "steps"]
     revertOverrideField(id: string, field: string[]) {
         const instance = this.instanceOf(id);
-        const path = this.isInner(id) ? id.slice(id.indexOf("/") + 1) : ROOT_PATH;
+        const path = this.pathIn(id) ?? ROOT_PATH;
         const override = instance?.overrides?.[path];
         if (!instance?.overrides || !override) return;
 
@@ -545,16 +643,63 @@ class SceneStore {
     revertOverrides(id: string) {
         const instance = this.instanceOf(id);
         if (!instance?.overrides) return;
-        if (this.isInner(id)) {
-            delete instance.overrides[id.slice(id.indexOf("/") + 1)];
+        const path = this.pathIn(id);
+        if (path !== null) {
+            delete instance.overrides[path];
             if (Object.keys(instance.overrides).length === 0) delete instance.overrides;
         } else {
             delete instance.overrides;
         }
+        // What the instance had added is gone with them
+        this.restructure();
+        this.restores++;
+        this.restartGame();
+        this.notify();
+    }
+
+    // The names of the entities of the prefab that the instance leaves out right under this id
+    removedUnder(id: string): string[] {
+        const real = findEntity(this.entities, id)?.entity;
+        const place = real ? (real.prefab ? { instance: real, path: ROOT_PATH } : null) : this.inside(id);
+        if (!place?.instance.overrides) return [];
+        const prefix = place.path === ROOT_PATH ? "" : `${place.path}/`;
+        return Object.entries(place.instance.overrides)
+            .filter(([path, override]) => override.removed && path.startsWith(prefix) && !path.slice(prefix.length).includes("/"))
+            .map(([path]) => path.slice(prefix.length));
+    }
+
+    // Brings back an entity of the prefab the instance had left out: `name` is its name, `id` what it was under
+    restoreRemoved(id: string, name: string) {
+        const real = findEntity(this.entities, id)?.entity;
+        const place = real ? { instance: real, path: ROOT_PATH } : this.inside(id);
+        const path = place ? (place.path === ROOT_PATH ? name : `${place.path}/${name}`) : "";
+        const override = place?.instance.overrides?.[path];
+        if (!place || !override) return;
+        delete override.removed;
+        this.restructure();
+        this.restartGame();
+        this.notify();
+    }
+
+    // Brings back a component of the prefab the instance had removed
+    restoreComponent(id: string, key: string) {
+        const override = this.overrideOf(id);
+        const instance = this.instanceOf(id);
+        if (!override?.removeComponents || !instance) return;
+        override.removeComponents = override.removeComponents.filter((other) => other !== key);
+        tidyOverrides(this.entities);
         this.rebuildEntity(instance);
         this.restores++;
         this.restartGame();
         this.notify();
+    }
+
+    // After a change of what an instance adds or leaves out: the ids of the added entities follow their
+    // names and places, so everything is tidied and built again
+    private restructure() {
+        tidyOverrides(this.entities);
+        this.rebuild();
+        this.pruneSelection();
     }
 
     // Builds the three.js object of one entity (with all that is under it) again
@@ -565,7 +710,8 @@ class SceneStore {
         parent.remove(old);
         this.unindexObjects(old);
         disposeObject(old);
-        const obj = createEntityObject(this.registry, entity);
+        // What an instance adds stays a part of it for a click in the viewport
+        const obj = createEntityObject(this.registry, entity, [], old.userData.innerId !== undefined);
         parent.add(obj);
         this.adopt(entity, obj);
     }
@@ -630,6 +776,11 @@ class SceneStore {
 
     // Rebuilds every three.js object from the entity data
     private rebuild() {
+        // The entities instances add are known by their places; the selection follows them to their new ids
+        const selected = this.selectedIds.map((id) => findEntity(this.entities, id)?.entity ?? null);
+        assignAddedIds(this.entities);
+        this.selectedIds = this.selectedIds.map((id, i) => selected[i]?.id ?? id);
+
         [...this.root.children].forEach((obj) => {
             this.root.remove(obj);
             disposeObject(obj);
@@ -791,13 +942,17 @@ class SceneStore {
         this.game?.syncComponent(entity, key);
     }
 
-    private uniqueName(base: string) {
+    // `parentId`: where the entity is going; inside a prefab instance the names the prefab gives there count too
+    private uniqueName(base: string, parentId: string | null = null, except: EntityData | null = null) {
         const names = new Set<string>();
         const collect = (list: EntityData[]) => list.forEach((e) => {
-            names.add(e.name);
-            collect(e.children);
+            if (e !== except) names.add(e.name);
+            ownLists(e).forEach(collect);
         });
         collect(this.entities);
+        if (parentId) this.locate(parentId, true)?.entity.children.forEach((child) => child.id !== except?.id && names.add(child.name));
+        // Paths go by names
+        base = base.replace(/\//g, "-");
 
         if (!names.has(base)) return base;
         const stem = base.replace(/ \(\d+\)$/, "");
@@ -806,23 +961,42 @@ class SceneStore {
         return `${stem} (${n})`;
     }
 
-    // Where a new entity may go: a prefab keeps a single root, and an instance has no children of its own
-    private resolveParent(parentId: string | null) {
-        let parent = parentId ? findEntity(this.entities, parentId)?.entity ?? null : null;
-        if (parent?.prefab) parent = findEntity(this.entities, parent.id)?.parent ?? null;
-        if (!parent && this.editingPrefab) parent = this.entities[0] ?? null;
-        return parent;
+    // Where a new entity may go. `id` is what it will be under (null: the scene itself) and `list` gives the
+    // list it joins. A prefab keeps a single root. Under a prefab instance, or under something a prefab brings,
+    // the list is the "addChildren" of the override at that place: the entity becomes one the instance adds.
+    private slot(parentId: string | null): { id: string | null; list: () => EntityData[]; added: boolean } {
+        if (parentId) {
+            const real = findEntity(this.entities, parentId)?.entity;
+            if (real && !real.prefab) return { id: parentId, list: () => real.children, added: parentId.includes("/") };
+            const place = real ? { instance: real, path: ROOT_PATH } : this.inside(parentId);
+            if (place) {
+                const { instance, path } = place;
+                const list = () => {
+                    const overrides = (instance.overrides ??= {});
+                    const override = (overrides[path] ??= {});
+                    return (override.addChildren ??= []);
+                };
+                return { id: parentId, list, added: true };
+            }
+        }
+        const root = this.editingPrefab ? this.entities[0] : null;
+        return root ? { id: root.id, list: () => root.children, added: false } : { id: null, list: () => this.entities, added: false };
     }
 
     // Puts a ready entity (with its children) into the scene
     insertEntity(entity: EntityData, parentId: string | null = null) {
-        entity.name = this.uniqueName(entity.name);
-        const parent = this.resolveParent(parentId);
-        (parent ? parent.children : this.entities).push(entity);
+        const slot = this.slot(parentId);
+        entity.name = this.uniqueName(entity.name, slot.id);
+        slot.list().push(entity);
 
-        const obj = createEntityObject(this.registry, entity);
-        (parent ? this.objects.get(parent.id)! : this.root).add(obj);
-        this.adopt(entity, obj);
+        if (slot.added) {
+            // Its id comes from its place
+            this.restructure();
+        } else {
+            const obj = createEntityObject(this.registry, entity);
+            (slot.id ? this.objects.get(slot.id)! : this.root).add(obj);
+            this.adopt(entity, obj);
+        }
         this.restartGame();
         this.notify();
         return entity;
@@ -834,22 +1008,41 @@ class SceneStore {
 
     duplicate(id: string) {
         const found = findEntity(this.entities, id);
+        if (!found) {
+            // Something a prefab brings: its copy is an entity the instance adds next to it
+            const copy = this.isInner(id) ? this.findEntity(id) : null;
+            return copy ? this.insertEntity(cloneWithNewIds(copy), id.slice(0, id.lastIndexOf("/"))) : null;
+        }
         // The root of a prefab stays the only root
-        if (!found || (this.editingPrefab && !found.parent)) return null;
-        return this.insertEntity(cloneWithNewIds(found.entity), found.parent?.id ?? null);
+        if (this.editingPrefab && found.parentId === null) return null;
+        return this.insertEntity(cloneWithNewIds(found.entity), found.parentId);
     }
 
     removeEntity(id: string) {
         const found = findEntity(this.entities, id);
         const obj = this.objects.get(id);
-        if (!found || !obj) return;
-        if (this.editingPrefab && !found.parent) return;
-
-        found.siblings.splice(found.siblings.indexOf(found.entity), 1);
-        obj.removeFromParent();
-        this.unindexObjects(obj);
-        disposeObject(obj);
-        this.pruneSelection();
+        if (!obj) return;
+        if (!found) {
+            // Something a prefab brings: the instance leaves it out, and what it changed inside goes too
+            const place = this.inside(id);
+            if (!place) return;
+            const overrides = { ...place.instance.overrides };
+            for (const path of Object.keys(overrides)) if (path.startsWith(`${place.path}/`)) delete overrides[path];
+            overrides[place.path] = { removed: true };
+            place.instance.overrides = overrides;
+            this.restructure();
+        } else {
+            if (this.editingPrefab && found.parentId === null) return;
+            found.siblings.splice(found.siblings.indexOf(found.entity), 1);
+            if (id.includes("/")) {
+                this.restructure();
+            } else {
+                obj.removeFromParent();
+                this.unindexObjects(obj);
+                disposeObject(obj);
+                this.pruneSelection();
+            }
+        }
         this.restartGame();
         this.notify();
     }
@@ -867,7 +1060,7 @@ class SceneStore {
         const visit = (list: EntityData[]) => {
             for (const entity of list) {
                 if (ids.has(entity.id)) roots.push(entity);
-                else visit(entity.children);
+                else ownLists(entity).forEach(visit);
             }
         };
         visit(this.entities);
@@ -882,12 +1075,17 @@ class SceneStore {
     }
 
     removeSelected() {
+        // What a prefab brings is not among the roots: its instance leaves it out
+        const inner = this.selectedIds.filter((id) => this.isInner(id));
         for (const entity of this.selectedRoots) this.removeEntity(entity.id);
+        for (const id of inner) this.removeEntity(id);
     }
 
     // Copies of the selected entities next to the originals; the copies become the selection
     duplicateSelected() {
-        const copies = this.selectedRoots.map((entity) => this.duplicate(entity.id)).filter((copy) => copy !== null);
+        // What a prefab brings is copied too: as an entity its instance adds
+        const ids = [...this.selectedRoots.map((entity) => entity.id), ...this.selectedIds.filter((id) => this.isInner(id))];
+        const copies = ids.map((id) => this.duplicate(id)).filter((copy) => copy !== null);
         if (copies.length > 0) this.selectMany(copies.map((copy) => copy.id));
         return copies;
     }
@@ -933,7 +1131,9 @@ class SceneStore {
         } catch {
             return false;
         }
-        const parentId = this.selectedId ? findEntity(this.entities, this.selectedId.split("/")[0])?.parent?.id ?? null : null;
+        // Next to the selected entity; for something a prefab brings, next to its instance
+        const beside = this.selectedId ? findEntity(this.entities, this.selectedId) ?? findEntity(this.entities, this.instanceOf(this.selectedId)?.id ?? "") : null;
+        const parentId = beside?.parentId ?? null;
         const pasted = entities.map((entity) => this.insertEntity(cloneWithNewIds(entity), parentId));
         this.selectMany(pasted.map((entity) => entity.id));
         this.update({ status: `Pasted ${pasted.length === 1 ? pasted[0].name : `${pasted.length} objects`}` });
@@ -956,21 +1156,37 @@ class SceneStore {
         const found = findEntity(this.entities, id);
         const obj = this.objects.get(id);
         if (!found || !obj || id === parentId) return;
-        if (this.editingPrefab && !found.parent) return;
-        // What is inside a prefab instance takes no children
-        if (parentId && this.isInner(parentId)) return;
-        // An entity cannot become a child of its own descendant
-        if (parentId && findEntity(found.entity.children, parentId)) return;
+        if (this.editingPrefab && found.parentId === null) return;
+        // An entity cannot become a child of its own descendant, nor of what its own prefab brings
+        if (parentId && (findEntity(ownLists(found.entity).flat(), parentId) || parentId.startsWith(`${id}/`))) return;
 
-        const parent = this.resolveParent(parentId);
-        if (parent === found.entity || parent === found.parent) return;
+        const slot = this.slot(parentId);
+        const target = slot.id ? this.objects.get(slot.id) : this.root;
+        if (slot.id === id || slot.id === found.parentId || !target) return;
 
-        found.siblings.splice(found.siblings.indexOf(found.entity), 1);
-        (parent ? parent.children : this.entities).push(found.entity);
-
-        (parent ? this.objects.get(parent.id)! : this.root).attach(obj);
-        this.syncFromObject(id);
+        // It stays where it is in the world
+        target.attach(obj);
+        const { entity } = found;
+        this.readTransform(entity, obj);
+        found.siblings.splice(found.siblings.indexOf(entity), 1);
+        // Inside an instance paths go by names, so there it must not be a neighbor's
+        if (slot.added) entity.name = this.uniqueName(entity.name, slot.id, entity);
+        slot.list().push(entity);
+        // Into an instance or out of one: the id changes with the place
+        if (slot.added || id.includes("/")) this.restructure();
+        else this.game?.syncEntity(entity);
         this.restartGame();
+        this.notify();
+    }
+
+    private readTransform(entity: EntityData, obj: THREE.Object3D) {
+        entity.position = [round(obj.position.x), round(obj.position.y), round(obj.position.z)];
+        entity.rotation = [
+            round(THREE.MathUtils.radToDeg(obj.rotation.x)),
+            round(THREE.MathUtils.radToDeg(obj.rotation.y)),
+            round(THREE.MathUtils.radToDeg(obj.rotation.z))
+        ];
+        entity.scale = [round(obj.scale.x), round(obj.scale.y), round(obj.scale.z)];
     }
 
     // Selects the entity (the selected one by default) and brings the editor camera to it
@@ -1016,7 +1232,7 @@ class SceneStore {
     }
 
     // Changes editor state (project, scene name, status...) and re-renders the panels
-    update(patch: Partial<Pick<SceneStore, "project" | "projects" | "sceneName" | "scenes" | "status">>) {
+    update(patch: Partial<Pick<SceneStore, "project" | "projects" | "sceneName" | "scenes" | "folders" | "status">>) {
         Object.assign(this, patch);
         this.notify();
     }
@@ -1044,14 +1260,7 @@ class SceneStore {
         const target = this.locate(id);
         const obj = this.objects.get(id);
         if (!target || !obj) return;
-        const { entity } = target;
-        entity.position = [round(obj.position.x), round(obj.position.y), round(obj.position.z)];
-        entity.rotation = [
-            round(THREE.MathUtils.radToDeg(obj.rotation.x)),
-            round(THREE.MathUtils.radToDeg(obj.rotation.y)),
-            round(THREE.MathUtils.radToDeg(obj.rotation.z))
-        ];
-        entity.scale = [round(obj.scale.x), round(obj.scale.y), round(obj.scale.z)];
+        this.readTransform(target.entity, obj);
         this.commit(target);
         this.notify();
     }
@@ -1129,12 +1338,13 @@ class SceneStore {
         const found = findEntity(this.entities, id);
         if (!found || !target || id === targetId) return;
         // The root of a prefab has no neighbors, and nothing goes inside itself
-        if (this.editingPrefab && (!found.parent || !target.parent)) return;
-        if (findEntity(found.entity.children, targetId)) return;
+        if (this.editingPrefab && (found.parentId === null || target.parentId === null)) return;
+        if (findEntity(ownLists(found.entity).flat(), targetId)) return;
 
-        if (target.parent !== found.parent) this.reparent(id, target.parent?.id ?? null);
-        const now = findEntity(this.entities, id);
-        if (!now || now.parent !== target.parent) return;
+        if (target.parentId !== found.parentId) this.reparent(id, target.parentId);
+        // Its id may have followed it to the new place
+        const now = findEntity(this.entities, found.entity.id);
+        if (!now || now.siblings !== target.siblings) return;
         const list = now.siblings;
         list.splice(list.indexOf(now.entity), 1);
         list.splice(list.indexOf(target.entity) + (after ? 1 : 0), 0, now.entity);
@@ -1160,12 +1370,20 @@ class SceneStore {
     }
 
     rename(id: string, name: string) {
-        const entity = findEntity(this.entities, id)?.entity;
+        const found = findEntity(this.entities, id);
         const obj = this.objects.get(id);
-        if (!entity || !obj) return;
-        entity.name = name;
-        obj.name = name;
-        this.game?.syncEntity(entity);
+        if (!found || !obj) return;
+        const { entity } = found;
+        if (id.includes("/")) {
+            // One a prefab instance adds: its name is a part of its id and must not be a neighbor's
+            entity.name = this.uniqueName(name, found.parentId, entity);
+            this.restructure();
+            this.restartGame();
+        } else {
+            entity.name = name;
+            obj.name = name;
+            this.game?.syncEntity(entity);
+        }
         this.notify();
     }
 
@@ -1185,22 +1403,28 @@ class SceneStore {
     // `source` names the model or behavior, for the components that take one from scripts/
     addComponent(id: string, type: string, source?: string) {
         const def = componentDefs[type];
-        const entity = findEntity(this.entities, id)?.entity;
-        if (!def || !entity || entity.prefab) return;
+        const target = this.locate(id, true);
+        if (!def || !target) return;
+        const { entity } = target;
 
         const component: ComponentData = { type, ...(def.source && source ? { [def.source.key]: source } : {}) };
         const key = componentKey(component);
         if (getComponent(entity, key)) return;
         entity.components.push(component);
         this.rebuildComponent(entity, key);
+        // For an instance or what is inside one: a component the instance adds
+        this.commit(target);
         this.notify();
     }
 
+    // For an instance or what is inside one, a component of the prefab is left out by the instance
     removeComponent(id: string, key: string) {
-        const entity = findEntity(this.entities, id)?.entity;
-        if (!entity || entity.prefab) return;
+        const target = this.locate(id, true);
+        if (!target) return;
+        const { entity } = target;
         entity.components = entity.components.filter((c) => componentKey(c) !== key);
         this.rebuildComponent(entity, key);
+        this.commit(target);
         this.notify();
     }
 

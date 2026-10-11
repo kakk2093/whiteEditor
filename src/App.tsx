@@ -1,11 +1,14 @@
 import { useEffect } from "react";
+import type { CSSProperties } from "react";
 import Viewport from "./components/Viewport";
-import { assetChangedOnDisk, init, reloadScripts, save } from "./editor/core/actions";
-import { onAssetChanged, onScriptsChanged } from "./editor/core/project";
+import { assetChangedOnDisk, foldersChangedOnDisk, init, reloadScripts, save } from "./editor/core/actions";
+import { onAssetChanged, onFoldersChanged, onScriptsChanged } from "./editor/core/project";
 import { sceneStore } from "./editor/core/SceneStore";
 import { useSceneStore } from "./editor/core/useSceneStore";
 import ContextMenuHost from "./editor/ContextMenuHost";
 import Hierarchy from "./editor/Hierarchy";
+import { useLayout } from "./editor/layout";
+import { Splitter } from "./editor/Splitter";
 import Inspector from "./editor/Inspector";
 import ProjectPanel from "./editor/ProjectPanel";
 import Toolbar from "./editor/Toolbar";
@@ -94,11 +97,13 @@ function onPaste(e: ClipboardEvent) {
 
 export default function App() {
     const store = useSceneStore();
+    const [layout, setLayout] = useLayout();
 
     useEffect(() => {
         init();
         const offScripts = onScriptsChanged(reloadScripts);
         const offAssets = onAssetChanged(assetChangedOnDisk);
+        const offFolders = onFoldersChanged(foldersChangedOnDisk);
         window.addEventListener("keydown", onKeyDown);
         window.addEventListener("copy", onCopy);
         window.addEventListener("cut", onCopy);
@@ -106,6 +111,7 @@ export default function App() {
         return () => {
             offScripts();
             offAssets();
+            offFolders();
             window.removeEventListener("keydown", onKeyDown);
             window.removeEventListener("copy", onCopy);
             window.removeEventListener("cut", onCopy);
@@ -116,6 +122,8 @@ export default function App() {
     return (
         <div
             className="app"
+            // The sizes of the panels, which editor.css reads
+            style={{ "--left-width": `${layout.left}px`, "--right-width": `${layout.right}px`, "--bottom-height": `${layout.bottom}px` } as CSSProperties}
             // The editor has its own right-click menus; text fields keep the browser one for copy and paste
             onContextMenu={(e) => {
                 if (!["INPUT", "TEXTAREA"].includes((e.target as HTMLElement).tagName)) e.preventDefault();
@@ -125,10 +133,13 @@ export default function App() {
             {store.project ? (
                 <div className="main">
                     <Hierarchy />
+                    <Splitter side="left" layout={layout} onChange={setLayout} />
                     <div className="center">
                         <Viewport />
+                        <Splitter side="bottom" layout={layout} onChange={setLayout} />
                         <ProjectPanel />
                     </div>
+                    <Splitter side="right" layout={layout} onChange={setLayout} />
                     <Inspector />
                 </div>
             ) : (

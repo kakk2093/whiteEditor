@@ -180,6 +180,14 @@ export function projectsPlugin(dir = 'projects'): Plugin {
         if (toPosix(path.relative(root, file)).split('/')[1] === 'assets') notify(file)
       })
       for (const event of ['add', 'change', 'unlink'] as const) server.watcher.on(event, notifyAsset)
+      // folders.json (the layout of the Project panel) edited by hand
+      const notifyFolders = (file: string) => {
+        const [project, name, ...rest] = toPosix(path.relative(root, file)).split('/')
+        if (rest.length > 0 || name !== 'folders.json') return
+        if (Date.now() - (ownWrites.get(path.normalize(file)) ?? 0) < 2000) return
+        server.ws.send({ type: 'custom', event: 'white:folders-changed', data: { project } })
+      }
+      for (const event of ['add', 'change', 'unlink'] as const) server.watcher.on(event, notifyFolders)
 
       listNames(root, '').then((projects) =>
         Promise.all(projects.map((project) => writeDocs(path.join(root, project), project)))
@@ -233,6 +241,19 @@ export function projectsPlugin(dir = 'projects'): Plugin {
           if (scene && !NAME.test(scene)) throw new HttpError(400, 'Bad name')
           const result = await buildGame(server.config.root, projectDir, scene ?? undefined)
           return { scene: result.scene, files: result.files, url: `/__game/${project}/` }
+        }
+
+        // GET / PUT /__api/projects/demo/folders -> folders.json: which asset lies in which folder of the Project panel
+        if (section === 'folders' && !item) {
+          const file = path.join(projectDir, 'folders.json')
+          if (method === 'PUT') {
+            const data: unknown = JSON.parse(await readBody())
+            markOwn(file)
+            await fs.writeFile(file, formatJson(data))
+            return { ok: true }
+          }
+          const text = await fs.readFile(file, 'utf-8').catch(() => null)
+          return text === null ? {} : JSON.parse(text)
         }
 
         if (JSON_SECTIONS.includes(section)) {

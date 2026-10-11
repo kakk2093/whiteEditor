@@ -1,13 +1,16 @@
 import { useState } from "react";
-import type { MouseEvent } from "react";
+import type { DragEvent, MouseEvent } from "react";
 import { builtinEffects, builtinSurfaces, defaultMaterialData } from "../engine";
 import {
-    addToLook, createLook, createMaterial, createPrefab, deleteLook, deleteMaterial, deletePrefab, deleteScene,
-    deleteTexture, duplicateAsset, newScene, openPrefab, openScene, uploadTextures
+    addToLook, createFolder, createLook, createMaterial, createPrefab, deleteFolder, deleteLook, deleteMaterial, deletePrefab,
+    deleteScene, deleteTexture, duplicateAsset, moveAssetToFolder, newScene, openPrefab, openScene, renameFolder, uploadTextures
 } from "./core/actions";
 import { confirmAt, openContextMenu } from "./contextMenu";
 import type { ContextItem } from "./contextMenu";
-import { ENTITY_DRAG_TYPE, instantiateModel, instantiatePrefab, setDraggedAsset } from "./core/dnd";
+import { ENTITY_DRAG_TYPE, getDraggedAsset, instantiateModel, instantiatePrefab, setDraggedAsset } from "./core/dnd";
+import { placement } from "./core/folders";
+import type { FolderSection } from "./core/folders";
+import { sceneStore } from "./core/SceneStore";
 import type { AssetRef } from "./core/SceneStore";
 import { useSceneStore } from "./core/useSceneStore";
 import { Icon, NameDialog } from "./ui";
@@ -40,13 +43,26 @@ const ICONS: Record<Kind, IconName> = {
     surface: "cube",
 };
 
+// The tabs whose assets can be laid out in folders, and the name of each in folders.json.
+// What scripts define (models, behaviors, effects) is laid out by the files of scripts/ themselves.
+const FOLDERS: Partial<Record<TabKey, FolderSection>> = {
+    scene: "scenes",
+    material: "materials",
+    prefab: "prefabs",
+    look: "looks",
+    texture: "textures"
+};
+
+// The dialog that asks for a name: of a new scene, of a new folder, or the new name of a folder
+type Naming = { what: "scene" } | { what: "folder"; from?: string };
+
 interface Item {
     kind: Kind;
     name: string;
     label: string;
     // CSS color of a material
     color?: string;
-    // Address of the picture of a texture
+    // Address of the picture: of a texture, or of the texture a material has
     image?: string;
     // A second line under the name: what kind of script thing it is
     note?: string;
@@ -56,7 +72,9 @@ interface Item {
 export default function ProjectPanel() {
     const store = useSceneStore();
     const [tabKey, setTabKey] = useState<TabKey>("scene");
-    const [naming, setNaming] = useState(false);
+    const [naming, setNaming] = useState<Naming | null>(null);
+    // The folder that is open on each tab
+    const [opened, setOpened] = useState<Partial<Record<TabKey, string>>>({});
     const { registry } = store;
 
     const itemsOf = (key: TabKey): Item[] => {
@@ -76,16 +94,46 @@ export default function ProjectPanel() {
                 })),
             ];
         }
-        return registry.materialNames().map((name) => ({
-            kind: "material",
-            name,
-            label: name,
-            color: registry.getMaterialData(name)?.color ?? defaultMaterialData.color
-        }));
+        return registry.materialNames().map((name) => {
+            const data = registry.getMaterialData(name);
+            // A texture the project no longer has leaves the plain color
+            const texture = data?.texture && registry.textureNames().includes(data.texture) ? data.texture : "";
+            return {
+                kind: "material",
+                name,
+                label: name,
+                color: data?.color ?? defaultMaterialData.color,
+                image: texture ? registry.textureUrl(texture) : undefined
+            };
+        });
     };
 
     const tab = TABS.find((t) => t.key === tabKey)!;
-    const items = itemsOf(tabKey);
+
+    // Folders: the top of a tab shows them and the assets that are in none; an open folder shows its own
+    const section = FOLDERS[tabKey];
+    const tree = (section && store.folders[section]) || {};
+    const folder = opened[tabKey] !== undefined && opened[tabKey]! in tree ? opened[tabKey]! : null;
+    const placed = section ? placement(store.folders, section) : new Map<string, string>();
+    const all = itemsOf(tabKey);
+    const items = all.filter((item) => (placed.get(item.name) ?? null) === folder);
+    const openFolder = (name: string | null) => setOpened({ ...opened, [tabKey]: name ?? undefined });
+
+    // An asset tile dropped onto a folder (or onto the way back, `to` = null) moves there
+    const dropInto = (e: DragEvent, to: string | null) => {
+        const asset = getDraggedAsset(e);
+        if (!asset || !section || FOLDERS[asset.kind as TabKey] !== section) return;
+        e.preventDefault();
+        e.stopPropagation();
+        moveAssetToFolder(section, asset.name, to);
+    };
+
+    // What is made while a folder is open goes into it
+    const createHere = async (create: () => Promise<void>) => {
+        await create();
+        const made = sceneStore.selectedAsset;
+        if (folder && section && made && FOLDERS[made.kind as TabKey] === section) moveAssetToFolder(section, made.name, folder);
+    };
 
     const addBehavior = (name: string) => {
         if (store.selectedId) store.addComponent(store.selectedId, "script", name);
@@ -135,15 +183,36 @@ export default function ProjectPanel() {
         } else {
             menu.push({ label: "Add to the Look of the Scene", icon: "plus", run: () => addToLook(kind === "effect" ? "effects" : "surfaces", name) });
         }
-        openContextMenu(e, [{ items: menu }]);
+        const moves: ContextItem[] = [];
+        if (section) {
+            const from = placed.get(name) ?? null;
+            if (from !== null) moves.push({ label: "Take Out of Folder", icon: "back", run: () => moveAssetToFolder(section, name, null) });
+            for (const to of Object.keys(tree).sort()) {
+                if (to !== from) moves.push({ label: `Move to ${to}`, icon: "folder", run: () => moveAssetToFolder(section, name, to) });
+            }
+        }
+        openContextMenu(e, [{ items: menu }, { title: "Folder", items: moves }]);
+    };
+
+    const folderMenu = (e: MouseEvent, name: string) => {
+        if (!section) return;
+        openContextMenu(e, [{
+            items: [
+                { label: "Open", icon: "folder", run: () => openFolder(name) },
+                { label: "Rename…", run: () => setNaming({ what: "folder", from: name }) },
+                // Nothing is lost, so it does not ask
+                { label: "Remove Folder (keeps what is in it)", icon: "trash", run: () => deleteFolder(section, name) }
+            ]
+        }]);
     };
 
     // Right-click on the empty part of the panel: what can be created on this tab
     const panelMenu = (e: MouseEvent) => {
         const menu: ContextItem[] = [];
-        if (tabKey === "scene") menu.push({ label: "New Scene…", icon: "plus", run: () => setNaming(true) });
-        if (tabKey === "material") menu.push({ label: "New Material", icon: "plus", run: createMaterial });
-        if (tabKey === "look") menu.push({ label: "New Look", icon: "plus", run: createLook });
+        if (tabKey === "scene") menu.push({ label: "New Scene…", icon: "plus", run: () => setNaming({ what: "scene" }) });
+        if (tabKey === "material") menu.push({ label: "New Material", icon: "plus", run: () => createHere(createMaterial) });
+        if (tabKey === "look") menu.push({ label: "New Look", icon: "plus", run: () => createHere(createLook) });
+        if (section && !folder) menu.push({ label: "New Folder…", icon: "folder", run: () => setNaming({ what: "folder" }) });
         openContextMenu(e, [{ items: menu }]);
     };
 
@@ -179,25 +248,55 @@ export default function ProjectPanel() {
                     createPrefab(entityId);
                 }}
             >
+                {folder !== null && (
+                    <div
+                        className="tile folder"
+                        title="Back to the top of the tab · drop an asset here to take it out of the folder"
+                        onClick={() => openFolder(null)}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={(e) => dropInto(e, null)}
+                    >
+                        <div className="tile-preview"><Icon name="back" size={20} /></div>
+                        <div className="tile-name">{folder}</div>
+                        <div className="tile-note">back</div>
+                    </div>
+                )}
+
                 {tabKey === "scene" && (
-                    <div className="tile add" onClick={() => setNaming(true)} title="Create a new scene">
+                    <div className="tile add" onClick={() => setNaming({ what: "scene" })} title="Create a new scene">
                         <div className="tile-preview"><Icon name="plus" size={18} /></div>
                         <div className="tile-name">New Scene</div>
                     </div>
                 )}
                 {tabKey === "material" && (
-                    <div className="tile add" onClick={createMaterial} title="Create a new material">
+                    <div className="tile add" onClick={() => createHere(createMaterial)} title="Create a new material">
                         <div className="tile-preview"><Icon name="plus" size={18} /></div>
                         <div className="tile-name">New Material</div>
                     </div>
                 )}
 
                 {tabKey === "look" && (
-                    <div className="tile add" onClick={createLook} title="Create a new look">
+                    <div className="tile add" onClick={() => createHere(createLook)} title="Create a new look">
                         <div className="tile-preview"><Icon name="plus" size={18} /></div>
                         <div className="tile-name">New Look</div>
                     </div>
                 )}
+
+                {folder === null && Object.keys(tree).sort().map((name) => (
+                    <div
+                        key={`folder:${name}`}
+                        className="tile folder"
+                        title={`Folder ${name} · double-click to open · drop an asset here to move it in`}
+                        onDoubleClick={() => openFolder(name)}
+                        onContextMenu={(e) => folderMenu(e, name)}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={(e) => dropInto(e, name)}
+                    >
+                        <div className="tile-preview"><Icon name="folder" size={20} /></div>
+                        <div className="tile-name">{name}</div>
+                        <div className="tile-note">{all.filter((item) => placed.get(item.name) === name).length}</div>
+                    </div>
+                ))}
 
                 {items.map((item) => {
                     const { kind } = item;
@@ -215,10 +314,17 @@ export default function ProjectPanel() {
                             onDoubleClick={() => activate(item)}
                             onContextMenu={(e) => itemMenu(e, item)}
                         >
-                            {item.image ? (
+                            {item.color ? (
+                                // The texture is tinted by the color, as the material draws it
+                                <div
+                                    className="tile-preview material"
+                                    style={{
+                                        backgroundColor: item.color,
+                                        backgroundImage: item.image ? `url("${item.image}")` : undefined
+                                    }}
+                                />
+                            ) : item.image ? (
                                 <img className="tile-preview texture" src={item.image} alt="" draggable={false} />
-                            ) : item.color ? (
-                                <div className="tile-preview material" style={{ background: item.color }} />
                             ) : (
                                 <div className={`tile-preview ${kind}`}><Icon name={ICONS[kind]} size={20} /></div>
                             )}
@@ -228,32 +334,48 @@ export default function ProjectPanel() {
                     );
                 })}
 
-                {items.length === 0 && tabKey === "texture" && (
+                {all.length === 0 && tabKey === "texture" && (
                     <div className="empty">
                         No textures yet. Drop image files (.png, .jpg, .webp) here, or put them into the project's assets/ folder.
                     </div>
                 )}
-                {items.length === 0 && tabKey === "prefab" && (
+                {all.length === 0 && tabKey === "prefab" && (
                     <div className="empty">
                         No prefabs yet. Select an object and press <b>Create Prefab</b> in the Inspector, or drag it here from the Hierarchy.
                     </div>
                 )}
-                {items.length === 0 && tabKey === "model" && (
+                {all.length === 0 && tabKey === "model" && (
                     <div className="empty">
                         No code models. Export <b>defineModel(...)</b> from a file in the project's scripts/ folder.
                     </div>
                 )}
             </div>
 
-            {naming && (
+            {naming?.what === "scene" && (
                 <NameDialog
                     title="New scene"
                     confirm="Create"
                     taken={store.scenes}
-                    onCancel={() => setNaming(false)}
+                    onCancel={() => setNaming(null)}
                     onSubmit={(name) => {
-                        setNaming(false);
-                        newScene(name);
+                        setNaming(null);
+                        newScene(name).then(() => {
+                            if (folder) moveAssetToFolder("scenes", name, folder);
+                        });
+                    }}
+                />
+            )}
+            {naming?.what === "folder" && section && (
+                <NameDialog
+                    title={naming.from ? `Rename folder ${naming.from}` : `New folder in ${tab.title}`}
+                    confirm={naming.from ? "Rename" : "Create"}
+                    initial={naming.from}
+                    taken={Object.keys(tree).filter((name) => name !== naming.from)}
+                    onCancel={() => setNaming(null)}
+                    onSubmit={(name) => {
+                        setNaming(null);
+                        if (!naming.from) createFolder(section, name);
+                        else if (name !== naming.from) renameFolder(section, naming.from, name);
                     }}
                 />
             )}

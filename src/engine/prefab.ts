@@ -1,5 +1,6 @@
 import { componentDefs, componentKey, findComponent } from "./components";
 import type { Registry } from "./Registry";
+import { generateId } from "./types";
 import type { ComponentData, EntityData, EntityOverride, Params } from "./types";
 
 // A prefab instance takes its components and children from the prefab file. Its `overrides` change that
@@ -7,6 +8,11 @@ import type { ComponentData, EntityData, EntityOverride, Params } from "./types"
 // The key is the path of names from the root of the prefab; ROOT_PATH is the root itself (only its components
 // can be overridden: its name, active flag and transform are the instance's own). A path may go on into an
 // instance of another prefab that stands inside this one.
+//
+// An override can also change what the entity is made of: "addComponents" and "removeComponents" for its
+// components, "addChildren" for entities the prefab does not have there, "removed" to leave the entity out.
+// What an instance adds is its own: an added entity is written whole and changed right there, and no path
+// leads to it or into it. In an expanded instance it gets an id like everything else, "<id of what it is in>/<name>".
 
 export const ROOT_PATH = ".";
 
@@ -24,6 +30,14 @@ function mergeOverride(base: EntityOverride | undefined, over: EntityOverride): 
             }
         }
     }
+    if (base?.removeComponents && over.removeComponents) {
+        merged.removeComponents = [...new Set([...base.removeComponents, ...over.removeComponents])];
+    }
+    if (base?.addComponents && over.addComponents) {
+        const keys = over.addComponents.map(componentKey);
+        merged.addComponents = [...base.addComponents.filter((c) => !keys.includes(componentKey(c))), ...structuredClone(over.addComponents)];
+    }
+    if (base?.addChildren && over.addChildren) merged.addChildren = [...base.addChildren, ...structuredClone(over.addChildren)];
     return merged;
 }
 
@@ -48,6 +62,7 @@ function applyComponents(entity: EntityData, components: NonNullable<EntityOverr
 function applyAt(root: EntityData, path: string, override: EntityOverride): boolean {
     const names = path === ROOT_PATH ? [] : path.split("/");
     let node = root;
+    let parent = root;
     for (let i = 0; i < names.length; i++) {
         // The path goes on inside an instance of another prefab: that instance carries the rest
         if (node !== root && node.prefab) {
@@ -57,10 +72,15 @@ function applyAt(root: EntityData, path: string, override: EntityOverride): bool
         }
         const next = node.children.find((child) => child.name === names[i]);
         if (!next) return false;
+        parent = node;
         node = next;
     }
 
     if (node !== root) {
+        if (override.removed) {
+            parent.children.splice(parent.children.indexOf(node), 1);
+            return true;
+        }
         if (override.active !== undefined) {
             if (override.active) delete node.active;
             else node.active = false;
@@ -70,15 +90,58 @@ function applyAt(root: EntityData, path: string, override: EntityOverride): bool
             if (value) node[property] = [...value];
         }
     }
-    if (override.components) {
-        if (node !== root && node.prefab) {
-            const { components } = override;
-            node.overrides = { ...node.overrides, [ROOT_PATH]: mergeOverride(node.overrides?.[ROOT_PATH], { components }) };
-        } else {
-            applyComponents(node, override.components);
+    const { components, addComponents, removeComponents, addChildren } = override;
+    if (node !== root && node.prefab) {
+        // What an instance of another prefab is made of is its own business: it gets this as its override
+        const content: EntityOverride = {
+            ...(components ? { components } : {}),
+            ...(addComponents ? { addComponents } : {}),
+            ...(removeComponents ? { removeComponents } : {}),
+            ...(addChildren ? { addChildren } : {}),
+        };
+        if (Object.keys(content).length > 0) {
+            node.overrides = { ...node.overrides, [ROOT_PATH]: mergeOverride(node.overrides?.[ROOT_PATH], content) };
         }
+        return true;
     }
+    if (removeComponents) node.components = node.components.filter((c) => !removeComponents.includes(componentKey(c)));
+    for (const component of addComponents ?? []) {
+        // The prefab may have got such a component since: then that one stays
+        if (!findComponent(node, componentKey(component))) node.components.push(structuredClone(component));
+    }
+    if (components) applyComponents(node, components);
+    for (const child of addChildren ?? []) node.children.push(structuredClone(child));
     return true;
+}
+
+// The lists of entities an instance adds to its prefab: the "addChildren" of its overrides
+export function addedLists(entity: EntityData): EntityData[][] {
+    return Object.values(entity.overrides ?? {}).flatMap((override) => (override.addChildren ? [override.addChildren] : []));
+}
+
+// The id of what an override path of the instance names
+export const innerId = (instance: EntityData, path: string) => (path === ROOT_PATH ? instance.id : `${instance.id}/${path}`);
+
+// Gives every entity an instance adds the id it has in the expanded instance: "<id of what it is in>/<name>",
+// and so on down. An entity that has such an id but is not inside an instance (it was moved out) gets a new one.
+export function assignAddedIds(entities: EntityData[]) {
+    const visit = (entity: EntityData, derived: boolean) => {
+        for (const [path, override] of Object.entries(entity.overrides ?? {})) {
+            for (const child of override.addChildren ?? []) {
+                child.id = `${innerId(entity, path)}/${child.name}`;
+                visit(child, true);
+            }
+        }
+        for (const child of entity.children) {
+            if (derived) child.id = `${entity.id}/${child.name}`;
+            else if (child.id.includes("/")) child.id = generateId();
+            visit(child, derived);
+        }
+    };
+    for (const entity of entities) {
+        if (entity.id.includes("/")) entity.id = generateId();
+        visit(entity, false);
+    }
 }
 
 // What the instance really is: an entity with the content of its prefab and the overrides applied.
@@ -125,6 +188,8 @@ export function expandInstance(registry: Registry, instance: EntityData, stack: 
 export function applyToPrefab(root: EntityData, overrides: Record<string, EntityOverride>): EntityData {
     const changed = structuredClone(root);
     for (const [path, override] of Object.entries(overrides)) applyAt(changed, path, override);
+    // What the instance added is now a part of the prefab, with ids of its own
+    assignAddedIds([changed]);
     return changed;
 }
 
@@ -204,6 +269,12 @@ export function diffOverride(registry: Registry, pristine: EntityData, edited: E
         if (Object.keys(fields).length > 0) components[key] = fields;
     }
     if (Object.keys(components).length > 0) override.components = components;
+
+    // Components the prefab does not give here, and those of the prefab that are gone
+    const added = edited.components.filter((component) => !findComponent(pristine, componentKey(component)));
+    if (added.length > 0) override.addComponents = structuredClone(added);
+    const removed = pristine.components.map(componentKey).filter((key) => !findComponent(edited, key));
+    if (removed.length > 0) override.removeComponents = removed;
 
     return Object.keys(override).length > 0 ? override : null;
 }

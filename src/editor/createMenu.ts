@@ -70,13 +70,26 @@ export function copyToClipboard() {
 export function innerContextMenu(entity: EntityData): ContextSection[] {
     const store = sceneStore;
     const items: ContextSection["items"] = [{ label: "Focus", shortcut: "F", run: () => store.focus(entity.id) }];
-    if (store.hasOverrides(entity.id)) {
+    const many = store.selectedIds.length > 1 && store.selectedIds.includes(entity.id);
+    items.push(
+        { label: "Duplicate", icon: "copy", shortcut: "Ctrl+D", run: () => (many ? store.duplicateSelected() : store.select(store.duplicate(entity.id)?.id ?? entity.id)) },
+        { label: "Copy", shortcut: "Ctrl+C", run: () => copyToClipboard() }
+    );
+    if (store.hasOverrides(entity.id) && !many) {
         items.push(
             { label: "Apply to Prefab", icon: "prefab", run: () => applyOverrides(entity.id) },
             { label: "Revert to Prefab", icon: "back", run: () => store.revertOverrides(entity.id) }
         );
     }
-    return [{ items }];
+    // The prefab keeps it; only this instance is left without it
+    items.push({
+        label: many ? "Remove from This Instance (all selected)" : "Remove from This Instance",
+        icon: "trash",
+        shortcut: "Del",
+        danger: true,
+        run: () => (many ? store.removeSelected() : store.removeEntity(entity.id))
+    });
+    return many ? [{ items }] : [{ items }, ...createSections(entity.id)];
 }
 
 // Right-click on an object
@@ -121,6 +134,6 @@ export function entityContextMenu(entity: EntityData): ContextSection[] {
         actions.items.push({ label: "Delete", icon: "trash", shortcut: "Del", danger: true, run: () => store.removeEntity(entity.id) });
     }
 
-    // An instance has no children of its own
-    return entity.prefab ? [actions] : [actions, ...createSections(entity.id)];
+    // A child of an instance is one the instance adds to its prefab
+    return [actions, ...createSections(entity.id)];
 }

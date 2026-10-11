@@ -81,7 +81,7 @@ function checkComponent(component: ComponentData, at: string, registry: Registry
 }
 
 // The overrides of a prefab instance: every path and component must exist in the prefab
-function checkOverrides(entity: EntityData, where: string, registry: Registry, problems: string[]) {
+function checkOverrides(entity: EntityData, where: string, registry: Registry, ids: Set<string>, problems: string[]) {
     const overrides = entity.overrides ?? {};
     if (typeof overrides !== "object" || Array.isArray(overrides)) {
         problems.push(`${where}.overrides: must be an object of "path": { ... }`);
@@ -102,9 +102,12 @@ function checkOverrides(entity: EntityData, where: string, registry: Registry, p
             continue;
         }
         for (const [key, value] of Object.entries(override)) {
-            if (key === "components") continue;
-            if (!["active", "position", "rotation", "scale"].includes(key)) {
-                problems.push(`${at}: unknown field "${key}" (known: active, position, rotation, scale, components)`);
+            if (["components", "addComponents", "removeComponents", "addChildren"].includes(key)) continue;
+            if (key === "removed") {
+                if (path === ROOT_PATH) problems.push(`${at}.removed: the root of the prefab cannot be removed (delete the instance instead)`);
+                else if (value !== true) problems.push(`${at}.removed: must be true (or leave it out)`);
+            } else if (!["active", "position", "rotation", "scale"].includes(key)) {
+                problems.push(`${at}: unknown field "${key}" (known: active, position, rotation, scale, components, addComponents, removeComponents, addChildren, removed)`);
             } else if (path === ROOT_PATH) {
                 problems.push(`${at}.${key}: the root is the instance itself, write "${key}" on the instance`);
             } else if (key === "active" ? typeof value !== "boolean" : !isVec3(value)) {
@@ -129,6 +132,59 @@ function checkOverrides(entity: EntityData, where: string, registry: Registry, p
             const changed = { type: component.type, ...(sourceKey ? { [sourceKey]: component[sourceKey] } : {}), ...fields };
             checkComponent(changed, `${at}.components["${key}"]`, registry, problems, true);
         }
+
+        const known = target.components.map(componentKey);
+        const removeComponents: unknown = override.removeComponents ?? [];
+        if (!Array.isArray(removeComponents)) {
+            problems.push(`${at}.removeComponents: must be a list of component keys, e.g. ["mesh", "script:spin"]`);
+        } else {
+            for (const key of removeComponents) {
+                if (!known.includes(key)) {
+                    problems.push(`${at}.removeComponents: "${target.name}" has no component "${key}" in the prefab (known: ${known.join(", ") || "none"})`);
+                }
+            }
+        }
+
+        const addComponents: unknown = override.addComponents ?? [];
+        if (!Array.isArray(addComponents)) {
+            problems.push(`${at}.addComponents: must be a list of components, e.g. [{ "type": "collider" }]`);
+        } else {
+            const added = new Set<string>();
+            for (const component of addComponents as ComponentData[]) {
+                if (typeof component !== "object" || component === null || typeof component.type !== "string") {
+                    problems.push(`${at}.addComponents: every item must be a component: { "type": "...", ... }`);
+                    continue;
+                }
+                const key = componentKey(component);
+                const there = `${at}.addComponents [${key}]`;
+                if (known.includes(key)) problems.push(`${there}: the prefab already gives "${target.name}" this component; change its fields through "components"`);
+                if (added.has(key)) problems.push(`${there}: added more than once`);
+                added.add(key);
+                if (!componentDefs[component.type]) {
+                    problems.push(`${there}: unknown component (known: ${Object.keys(componentDefs).join(", ")})`);
+                    continue;
+                }
+                checkComponent(component, there, registry, problems);
+            }
+        }
+
+        const addChildren: unknown = override.addChildren ?? [];
+        if (!Array.isArray(addChildren)) {
+            problems.push(`${at}.addChildren: must be a list of entities`);
+        } else {
+            const names = new Set(target.children.map((child) => child.name));
+            for (const child of addChildren as EntityData[]) {
+                if (typeof child !== "object" || child === null) {
+                    problems.push(`${at}.addChildren: every item must be an entity: { "name": "...", ... }`);
+                    continue;
+                }
+                // Paths go by names, so an added entity must not take the name of a neighbor
+                if (names.has(child.name)) problems.push(`${at}.addChildren: "${target.name}" already has a child named "${child.name}"`);
+                if (child.name.includes("/")) problems.push(`${at}.addChildren: the name "${child.name}" must not have "/" in it`);
+                names.add(child.name);
+                checkEntity(child, `${at}.addChildren`, registry, ids, problems);
+            }
+        }
     }
 }
 
@@ -149,7 +205,7 @@ function checkEntity(entity: EntityData, path: string, registry: Registry, ids: 
         if (entity.components.length > 0 || entity.children.length > 0) {
             problems.push(`${where}: a prefab instance cannot have its own components or children (use "overrides" to change what the prefab gives)`);
         }
-        if (entity.overrides) checkOverrides(entity, where, registry, problems);
+        if (entity.overrides) checkOverrides(entity, where, registry, ids, problems);
         return;
     }
     if (entity.overrides) problems.push(`${where}: only a prefab instance can have overrides`);

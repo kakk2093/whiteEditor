@@ -39,7 +39,8 @@ export function renameInEntities(registry: Registry, entities: Partial<EntityDat
             entity.prefab = to;
             changed = true;
         }
-        for (const component of entity.components ?? []) {
+        const added = Object.values(entity.overrides ?? {}).flatMap((override) => override.addComponents ?? []);
+        for (const component of [...(entity.components ?? []), ...added]) {
             const sourceKey = componentDefs[component.type]?.source?.key;
             if (renameInComponent(registry, component.type, sourceKey && component[sourceKey], component, kind, from, to)) changed = true;
         }
@@ -51,6 +52,8 @@ export function renameInEntities(registry: Registry, entities: Partial<EntityDat
                 const sourceName = name.length > 0 ? name.join(":") : sourceKey && fields[sourceKey];
                 if (renameInComponent(registry, type, sourceName, fields, kind, from, to)) changed = true;
             }
+            // The entities the instance adds are ordinary ones
+            if (renameInEntities(registry, override.addChildren ?? [], kind, from, to)) changed = true;
         }
         if (renameInEntities(registry, entity.children ?? [], kind, from, to)) changed = true;
     }

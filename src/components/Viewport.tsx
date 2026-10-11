@@ -6,6 +6,7 @@ import { createRenderer, RenderPipeline, resolveLook, setCameraAspect } from "..
 import type { Input } from "../engine";
 import { dropAsset, getDraggedAsset } from "../editor/core/dnd";
 import { ColliderHandles } from "./colliderHandles";
+import { entitiesInRect } from "./marquee";
 import { EDITOR_LAYER, sceneStore } from "../editor/core/SceneStore";
 import type { GizmoMode } from "../editor/core/SceneStore";
 import { useSceneStore } from "../editor/core/useSceneStore";
@@ -52,6 +53,8 @@ export default function Viewport() {
     // Where the last mouse button went down, to tell a click from a drag
     // `moved` is set once that press turned into looking around or flying
     const downRef = useRef({ x: 0, y: 0, moved: false });
+    // The frame of a selection being dragged out with Shift
+    const marqueeRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         if (!ref.current) return;
@@ -136,6 +139,7 @@ export default function Viewport() {
         const onPointerUp = (e: PointerEvent) => {
             if (!ctx.renderer || !ctx.raycaster || !ctx.mouse || !ctx.camera) return;
             if (e.button !== 0 || downOnGizmo || handles.grabbed) return;
+            if (endMarquee(e)) return;
             if (Math.hypot(e.clientX - downX, e.clientY - downY) > CLICK_THRESHOLD) return;
             if (sceneStore.gameView) return;
 
@@ -164,8 +168,75 @@ export default function Viewport() {
             return obj ? obj.userData.entityId : null;
         };
 
-        ctx.renderer.domElement.addEventListener("pointerdown", onPointerDown);
-        ctx.renderer.domElement.addEventListener("pointerup", onPointerUp);
+        // =====================
+        // MARQUEE (Shift + drag)
+        // =====================
+        // Selects everything the frame touches; with Ctrl adds it to what is selected
+        let marquee: { x: number; y: number; pointerId: number } | null = null;
+
+        const marqueeRect = (e: PointerEvent) => {
+            const rect = canvas.getBoundingClientRect();
+            const clamp = (value: number, max: number) => Math.min(Math.max(value, 0), max);
+            const x0 = clamp(marquee!.x - rect.left, rect.width);
+            const y0 = clamp(marquee!.y - rect.top, rect.height);
+            const x1 = clamp(e.clientX - rect.left, rect.width);
+            const y1 = clamp(e.clientY - rect.top, rect.height);
+            return { left: Math.min(x0, x1), top: Math.min(y0, y1), width: Math.abs(x1 - x0), height: Math.abs(y1 - y0), rect };
+        };
+
+        // In the capture phase, to turn the orbiting off before OrbitControls gets the press
+        const onMarqueeDown = (e: PointerEvent) => {
+            if (e.button !== 0 || !e.shiftKey || sceneStore.gameView) return;
+            if (ctx.transform?.axis || handles.grabbed || !ctx.controls) return;
+            marquee = { x: e.clientX, y: e.clientY, pointerId: e.pointerId };
+            ctx.controls.enabled = false;
+            canvas.setPointerCapture(e.pointerId);
+        };
+
+        const onMarqueeMove = (e: PointerEvent) => {
+            const frame = marqueeRef.current;
+            if (!marquee || !frame) return;
+            if (Math.hypot(e.clientX - marquee.x, e.clientY - marquee.y) <= CLICK_THRESHOLD) return;
+            const { left, top, width, height } = marqueeRect(e);
+            frame.style.display = "block";
+            frame.style.left = `${left}px`;
+            frame.style.top = `${top}px`;
+            frame.style.width = `${width}px`;
+            frame.style.height = `${height}px`;
+        };
+
+        // Ends the drag; true if it was a frame and not a click
+        const endMarquee = (e: PointerEvent, cancel = false) => {
+            if (!marquee) return false;
+            const dragged = Math.hypot(e.clientX - marquee.x, e.clientY - marquee.y) > CLICK_THRESHOLD;
+            const { left, top, width, height, rect } = marqueeRect(e);
+            if (canvas.hasPointerCapture(marquee.pointerId)) canvas.releasePointerCapture(marquee.pointerId);
+            marquee = null;
+            if (marqueeRef.current) marqueeRef.current.style.display = "none";
+            if (ctx.controls) ctx.controls.enabled = !sceneStore.gameView;
+            if (!dragged || cancel || !ctx.camera) return dragged;
+
+            const ids = entitiesInRect(sceneStore.viewRoot, ctx.camera, {
+                minX: (left / rect.width) * 2 - 1,
+                maxX: ((left + width) / rect.width) * 2 - 1,
+                minY: -((top + height) / rect.height) * 2 + 1,
+                maxY: -(top / rect.height) * 2 + 1
+            });
+            const kept = e.ctrlKey || e.metaKey ? sceneStore.selectedIds.filter((id) => !ids.includes(id)) : [];
+            sceneStore.selectMany([...kept, ...ids]);
+            return true;
+        };
+
+        const onMarqueeCancel = (e: PointerEvent) => {
+            endMarquee(e, true);
+        };
+
+        const canvas = ctx.renderer.domElement;
+        canvas.addEventListener("pointerdown", onMarqueeDown, true);
+        canvas.addEventListener("pointermove", onMarqueeMove);
+        canvas.addEventListener("pointercancel", onMarqueeCancel);
+        canvas.addEventListener("pointerdown", onPointerDown);
+        canvas.addEventListener("pointerup", onPointerUp);
 
         // =====================
         // FLY (hold right mouse button)
@@ -449,6 +520,9 @@ export default function Viewport() {
             ctx.renderer?.domElement.removeEventListener("pointerup", onPointerUp);
             unsubscribe();
 
+            domElement.removeEventListener("pointerdown", onMarqueeDown, true);
+            domElement.removeEventListener("pointermove", onMarqueeMove);
+            domElement.removeEventListener("pointercancel", onMarqueeCancel);
             domElement.removeEventListener("pointerdown", onFlyDown);
             domElement.removeEventListener("pointermove", onFlyMove);
             domElement.removeEventListener("pointerup", onFlyUp);
@@ -508,6 +582,7 @@ export default function Viewport() {
             }}
         >
             <div ref={ref} style={{ width: "100%", height: "100%" }} />
+            <div ref={marqueeRef} className="viewport-marquee" />
 
             <div className="viewport-tools">
                 {!store.gameView && GIZMO_MODES.map(({ mode, icon, title }) => (
@@ -625,7 +700,7 @@ export default function Viewport() {
                 {store.gameView
                     ? "Game view: the camera of the scene, keys and mouse go to the game · " +
                         "switch to Scene to look around, select and move objects"
-                    : "Click — select · drag — orbit · hold right button — look around, W A S D fly, Q E down/up, Shift faster · " +
+                    : "Click — select · drag — orbit · Shift-drag — frame ·hold right button — look around, W A S D fly, Q E down/up, Shift faster · " +
                         "middle-drag — pan · wheel — zoom · right-click — menu"}
             </div>
         </div>

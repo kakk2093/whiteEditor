@@ -98,6 +98,40 @@ try {
       problems.push(`scenes/${name}.json: ${e.message}`)
     }
   }
+
+  // folders.json: the layout of the Project panel. A name that is not in the project is not a problem (the
+  // editor skips it), a wrong shape is.
+  const foldersFile = path.join(projectDir, 'folders.json')
+  if (fs.existsSync(foldersFile)) {
+    try {
+      const folders = JSON.parse(fs.readFileSync(foldersFile, 'utf-8'))
+      const sections = ['scenes', 'materials', 'prefabs', 'looks', 'textures']
+      if (!folders || typeof folders !== 'object' || Array.isArray(folders)) throw new Error('must be an object')
+      for (const [section, tree] of Object.entries(folders)) {
+        if (!sections.includes(section)) {
+          problems.push(`folders.json: unknown section "${section}" (sections: ${sections.join(', ')})`)
+          continue
+        }
+        if (!tree || typeof tree !== 'object' || Array.isArray(tree)) {
+          problems.push(`folders.json: ${section} must be an object: { "<folder>": ["<name>", ...] }`)
+          continue
+        }
+        const seen = new Map()
+        for (const [folder, names] of Object.entries(tree)) {
+          if (!Array.isArray(names) || names.some((name) => typeof name !== 'string')) {
+            problems.push(`folders.json: ${section}.${folder} must be a list of names`)
+            continue
+          }
+          for (const name of names) {
+            if (seen.has(name)) problems.push(`folders.json: ${section}: "${name}" is in two folders, ${seen.get(name)} and ${folder}`)
+            else seen.set(name, folder)
+          }
+        }
+      }
+    } catch (e) {
+      problems.push(`folders.json: ${e.message}`)
+    }
+  }
 } finally {
   await server.close()
 }
