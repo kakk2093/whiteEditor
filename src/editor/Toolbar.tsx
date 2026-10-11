@@ -172,19 +172,8 @@ export default function Toolbar() {
             </div>
             <span className="sep" />
 
-            <span className="label">Project</span>
-            <select
-                className="select"
-                value={project}
-                title="Switch project"
-                onChange={(e) => (e.target.value === NEW ? setDialog("project") : openProject(e.target.value))}
-            >
-                {!project && <option value="">—</option>}
-                {projects.map((p) => (
-                    <option key={p} value={p}>{p}</option>
-                ))}
-                <option value={NEW}>+ New project…</option>
-            </select>
+            {/* Another project is opened from the File menu: the bar keeps its middle for Play */}
+            {project && <span className="project-name" title="The open project · File → Open … switches to another">{project}</span>}
 
             {project && !editingPrefab && (
                 <>
@@ -220,7 +209,36 @@ export default function Toolbar() {
 
             {project && (
                 <>
-                    <span className="sep" />
+                    {/* Play, Pause and Step: in the middle of what is left of the bar */}
+                    {!editingPrefab && (
+                        <div className="topbar-play">
+                            <button
+                                className={`btn play ${store.playing ? "playing" : ""}`}
+                                onClick={() => (store.playing ? store.requestStop() : store.play())}
+                                title={store.playing ? "Stop the scene (Ctrl+P)" : "Run the scene with its scripts (Ctrl+P)"}
+                            >
+                                <Icon name={store.playing ? "stop" : "play"} size={16} />
+                            </button>
+                            <button
+                                className={`btn ${store.paused ? "playing" : ""}`}
+                                onClick={() => store.togglePause()}
+                                disabled={!store.playing}
+                                title={store.paused ? "Resume (Ctrl+Shift+P)" : "Pause: freeze the scene to look at it and edit it (Ctrl+Shift+P)"}
+                            >
+                                <Icon name="pause" size={16} />
+                            </button>
+                            <button
+                                className="btn"
+                                onClick={() => store.step()}
+                                disabled={!store.playing}
+                                title="Pause and move by one frame (Ctrl+Alt+P)"
+                            >
+                                <Icon name="step" size={16} />
+                            </button>
+                        </div>
+                    )}
+                    {/* Undo, redo and the settings stand at the right end */}
+                    <span className="spacer" />
                     <button className="btn ghost" onClick={() => store.undo()} disabled={!store.canUndo} title="Undo (Ctrl+Z)">
                         <Icon name="undo" />
                     </button>
@@ -232,34 +250,6 @@ export default function Toolbar() {
                         <Icon name="settings" />
                     </button>
                     {building && <span className="label">Building the game…</span>}
-                    {/* Play, Pause and Step: in the middle of what is left of the bar */}
-                    {!editingPrefab && (
-                    <div className="topbar-play">
-                        <button
-                            className={`btn ${store.playing ? "playing" : ""}`}
-                            onClick={() => (store.playing ? store.requestStop() : store.play())}
-                            title={store.playing ? "Stop the scene (Ctrl+P)" : "Run the scene with its scripts (Ctrl+P)"}
-                        >
-                            <Icon name={store.playing ? "stop" : "play"} />
-                        </button>
-                        <button
-                            className={`btn ${store.paused ? "playing" : ""}`}
-                            onClick={() => store.togglePause()}
-                            disabled={!store.playing}
-                            title={store.paused ? "Resume (Ctrl+Shift+P)" : "Pause: freeze the scene to look at it and edit it (Ctrl+Shift+P)"}
-                        >
-                            <Icon name="pause" />
-                        </button>
-                        <button
-                            className="btn"
-                            onClick={() => store.step()}
-                            disabled={!store.playing}
-                            title="Pause and move by one frame (Ctrl+Alt+P)"
-                        >
-                            <Icon name="step" />
-                        </button>
-                    </div>
-                    )}
                 </>
             )}
 
