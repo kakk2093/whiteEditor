@@ -5,12 +5,14 @@ import { assetChangedOnDisk, foldersChangedOnDisk, init, reloadScripts, save } f
 import { onAssetChanged, onFoldersChanged, onScriptsChanged } from "./editor/core/project";
 import { sceneStore } from "./editor/core/SceneStore";
 import { useSceneStore } from "./editor/core/useSceneStore";
+import Console from "./editor/Console";
 import ContextMenuHost from "./editor/ContextMenuHost";
 import Hierarchy from "./editor/Hierarchy";
 import { useLayout } from "./editor/layout";
 import { Splitter } from "./editor/Splitter";
 import Inspector from "./editor/Inspector";
 import ProjectPanel from "./editor/ProjectPanel";
+import SettingsWindow from "./editor/SettingsWindow";
 import Toolbar from "./editor/Toolbar";
 import Welcome from "./editor/Welcome";
 import "./editor/editor.css";
@@ -33,8 +35,8 @@ function onKeyDown(e: KeyboardEvent) {
         return;
     }
 
-    // In the Game view the keys belong to the scripts of the running scene
-    if (sceneStore.gameView) return;
+    // In the Game view the keys belong to the scripts of the running scene; an open window keeps them too
+    if (sceneStore.gameView || sceneStore.settingsPage) return;
 
     const target = e.target as HTMLElement;
     if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
@@ -123,7 +125,7 @@ export default function App() {
         <div
             className="app"
             // The sizes of the panels, which editor.css reads
-            style={{ "--left-width": `${layout.left}px`, "--right-width": `${layout.right}px`, "--bottom-height": `${layout.bottom}px` } as CSSProperties}
+            style={{ "--left-width": `${layout.left}px`, "--right-width": `${layout.right}px`, "--bottom-height": `${layout.bottom}px`, "--console-width": `${layout.console}px` } as CSSProperties}
             // The editor has its own right-click menus; text fields keep the browser one for copy and paste
             onContextMenu={(e) => {
                 if (!["INPUT", "TEXTAREA"].includes((e.target as HTMLElement).tagName)) e.preventDefault();
@@ -137,7 +139,15 @@ export default function App() {
                     <div className="center">
                         <Viewport />
                         <Splitter side="bottom" layout={layout} onChange={setLayout} />
-                        <ProjectPanel />
+                        <div className="bottom-row">
+                            <ProjectPanel />
+                            {store.consoleOpen && (
+                                <>
+                                    <Splitter side="console" layout={layout} onChange={setLayout} />
+                                    <Console />
+                                </>
+                            )}
+                        </div>
                     </div>
                     <Splitter side="right" layout={layout} onChange={setLayout} />
                     <Inspector />
@@ -157,6 +167,7 @@ export default function App() {
                 <span><kbd>Ctrl</kbd>+<kbd>S</kbd> save</span>
                 <span><kbd>Ctrl</kbd>+<kbd>P</kbd> play</span>
             </div>
+            <SettingsWindow />
             <ContextMenuHost />
         </div>
     );

@@ -156,6 +156,7 @@ export function expandInstance(registry: Registry, instance: EntityData, stack: 
         id: instance.id,
         name: instance.name,
         ...(instance.active === false ? { active: false } : {}),
+        ...(instance.tag ?? root.tag ? { tag: instance.tag ?? root.tag } : {}),
         position: [...instance.position],
         rotation: [...instance.rotation],
         scale: [...instance.scale],

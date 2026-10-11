@@ -6,13 +6,15 @@ export interface Layout {
     left: number;
     // Width of the Inspector
     right: number;
-    // Height of the Project panel
+    // Height of the Project panel and of the Console next to it
     bottom: number;
+    // Width of the Console
+    console: number;
 }
 
-export const DEFAULT_LAYOUT: Layout = { left: 250, right: 290, bottom: 190 };
+export const DEFAULT_LAYOUT: Layout = { left: 250, right: 290, bottom: 190, console: 380 };
 
-export const LIMITS: Record<keyof Layout, [number, number]> = { left: [150, 700], right: [200, 800], bottom: [80, 700] };
+export const LIMITS: Record<keyof Layout, [number, number]> = { left: [150, 700], right: [200, 800], bottom: [80, 700], console: [160, 1200] };
 
 const LAYOUT_KEY = "white:layout";
 
@@ -29,9 +31,21 @@ function loadLayout(): Layout {
     }
 }
 
+const RESET_EVENT = "white:reset-layout";
+
+// Puts every panel back to its default size (the Settings window does that)
+export function resetLayout() {
+    window.dispatchEvent(new Event(RESET_EVENT));
+}
+
 // The layout of the editor window, remembered between runs (in the browser, not in the project)
 export function useLayout() {
     const [layout, setLayout] = useState(loadLayout);
+    useEffect(() => {
+        const reset = () => setLayout({ ...DEFAULT_LAYOUT });
+        window.addEventListener(RESET_EVENT, reset);
+        return () => window.removeEventListener(RESET_EVENT, reset);
+    }, []);
     useEffect(() => {
         localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout));
     }, [layout]);

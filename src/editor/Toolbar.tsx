@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { buildGame, closePrefab, newProject, newScene, openProject, openScene, save, saveSceneAs } from "./core/actions";
 import { useSceneStore } from "./core/useSceneStore";
+import { openContextMenu } from "./contextMenu";
+import type { ContextSection } from "./contextMenu";
+import { copyToClipboard, CREATE_MENU, createObject } from "./createMenu";
+import { resetLayout } from "./layout";
 import { Icon, NameDialog } from "./ui";
 
 type Dialog = "project" | "scene" | "saveAs" | null;
@@ -18,9 +22,148 @@ export default function Toolbar() {
     // A new scene exists only in the editor until it is saved
     const sceneOptions = scenes.includes(sceneName) ? scenes : [...scenes, sceneName];
 
+    const build = async () => {
+        setBuilding(true);
+        setGameUrl(await buildGame() ?? gameUrl);
+        setBuilding(false);
+    };
+
+    // The menu bar: everything the editor can do, by the usual names. What cannot be done now is left out.
+    const selected = store.selectedIds.length > 0;
+    const inScene = project !== "" && !editingPrefab;
+    const menus: { title: string; sections: ContextSection[] }[] = [
+        {
+            title: "File",
+            sections: [
+                {
+                    items: !inScene ? [] : [
+                        { label: "New Scene…", icon: "plus", run: () => setDialog("scene") },
+                        { label: "Save Scene", icon: "save", shortcut: "Ctrl+S", run: save },
+                        { label: "Save Scene As…", run: () => setDialog("saveAs") }
+                    ]
+                },
+                {
+                    items: !editingPrefab ? [] : [
+                        { label: "Save Prefab", icon: "save", shortcut: "Ctrl+S", run: save },
+                        { label: "Back to Scene", icon: "back", run: closePrefab }
+                    ]
+                },
+                {
+                    title: inScene ? "Game" : undefined,
+                    items: !inScene ? [] : [
+                        { label: "Build Game", icon: "build", run: build },
+                        ...(gameUrl ? [{ label: "Open Built Game", run: () => void window.open(gameUrl, "_blank") }] : [])
+                    ]
+                },
+                {
+                    title: "Project",
+                    items: [
+                        { label: "New Project…", icon: "plus", run: () => setDialog("project") },
+                        ...projects.filter((name) => name !== project).map((name) => ({ label: `Open ${name}`, icon: "folder" as const, run: () => void openProject(name) })),
+                        ...(project ? [{ label: "Project Settings…", icon: "settings" as const, run: () => store.openSettings("project") }] : [])
+                    ]
+                }
+            ]
+        },
+        {
+            title: "Edit",
+            sections: [
+                {
+                    items: [
+                        ...(store.canUndo ? [{ label: "Undo", icon: "undo" as const, shortcut: "Ctrl+Z", run: () => store.undo() }] : []),
+                        ...(store.canRedo ? [{ label: "Redo", icon: "redo" as const, shortcut: "Ctrl+Y", run: () => store.redo() }] : [])
+                    ]
+                },
+                {
+                    items: [
+                        ...(selected ? [
+                            { label: "Copy", icon: "copy" as const, shortcut: "Ctrl+C", run: copyToClipboard },
+                            { label: "Duplicate", shortcut: "Ctrl+D", run: () => void store.duplicateSelected() }
+                        ] : []),
+                        ...(store.clipboard ? [{ label: "Paste", shortcut: "Ctrl+V", run: () => void store.paste() }] : []),
+                        ...(selected ? [
+                            { label: "Rename", shortcut: "F2", run: () => store.startRename() },
+                            { label: "Group", icon: "folder" as const, shortcut: "Ctrl+G", run: () => store.groupSelected() },
+                            { label: "Delete", icon: "trash" as const, shortcut: "Del", danger: true, run: () => store.removeSelected() }
+                        ] : [])
+                    ]
+                },
+                { items: [{ label: "Editor Settings…", icon: "settings", run: () => store.openSettings("editor") }] }
+            ]
+        },
+        {
+            // Like Unity's GameObject menu; with one object selected the new one becomes its child
+            title: "Object",
+            sections: CREATE_MENU.map((section, i) => ({
+                title: section.title ?? (i === 0 ? (store.selectedIds.length === 1 ? `Create under ${store.selected?.name}` : "Create") : undefined),
+                items: section.items.map((item) => ({
+                    label: item.label,
+                    icon: item.icon,
+                    run: () => createObject(item, store.selectedIds.length === 1 ? store.selectedId : null)
+                }))
+            }))
+        },
+        {
+            title: "Play",
+            sections: [{
+                items: editingPrefab ? [] : [
+                    store.playing
+                        ? { label: "Stop", icon: "stop", shortcut: "Ctrl+P", run: () => store.requestStop() }
+                        : { label: "Play", icon: "play", shortcut: "Ctrl+P", run: () => store.play() },
+                    ...(store.playing ? [
+                        { label: store.paused ? "Resume" : "Pause", icon: "pause" as const, shortcut: "Ctrl+Shift+P", run: () => store.togglePause() },
+                        { label: "Step One Frame", icon: "step" as const, shortcut: "Ctrl+Alt+P", run: () => store.step() }
+                    ] : [])
+                ]
+            }]
+        },
+        {
+            title: "Window",
+            sections: [
+                {
+                    title: "Settings",
+                    items: [
+                        { label: "Project: collision layers", icon: "folder", run: () => store.openSettings("project") },
+                        { label: "Scene: environment", icon: "scene", run: () => store.openSettings("scene") },
+                        { label: "Editor: gizmo, viewport, panels", icon: "settings", run: () => store.openSettings("editor") }
+                    ]
+                },
+                {
+                    items: [
+                        { label: store.consoleOpen ? "Hide Console" : "Show Console", icon: "script", run: () => store.setConsoleOpen(!store.consoleOpen) },
+                        { label: "Reset Panel Sizes", run: resetLayout }
+                    ]
+                }
+            ]
+        },
+        {
+            title: "Help",
+            sections: [{ items: [{ label: "Controls: mouse and keys", run: () => store.openSettings("controls") }] }]
+        }
+    ];
+    // Without a project there is only what opens one
+    const shownMenus = project ? menus : menus.slice(0, 1);
+
     return (
         <div className="topbar">
             <span className="brand">whiteEditor</span>
+
+            <div className="menubar">
+                {shownMenus.map((menu) => (
+                    <button
+                        key={menu.title}
+                        className="menubar-item"
+                        onClick={(e) => {
+                            // The list opens right under its name
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            openContextMenu({ clientX: rect.left, clientY: rect.bottom + 2, preventDefault: () => {}, stopPropagation: () => {} }, menu.sections);
+                        }}
+                    >
+                        {menu.title}
+                    </button>
+                ))}
+            </div>
+            <span className="sep" />
 
             <span className="label">Project</span>
             <select
@@ -52,12 +195,6 @@ export default function Toolbar() {
                         <option value={NEW}>+ New scene…</option>
                     </select>
                     {store.dirty && <span className="dirty-dot" title="Unsaved changes" />}
-                    <button className="btn primary" onClick={save} title="Save the scene (Ctrl+S)">
-                        <Icon name="save" /> Save
-                    </button>
-                    <button className="btn" onClick={() => setDialog("saveAs")} title="Save the scene under another name">
-                        Save As…
-                    </button>
                 </>
             )}
 
@@ -71,9 +208,6 @@ export default function Toolbar() {
                         <Icon name="prefab" /> Prefab: {editingPrefab}
                     </span>
                     {store.dirty && <span className="dirty-dot" title="Unsaved changes" />}
-                    <button className="btn primary" onClick={save} title="Save the prefab (Ctrl+S)">
-                        <Icon name="save" /> Save
-                    </button>
                 </>
             )}
 
@@ -87,52 +221,10 @@ export default function Toolbar() {
                         <Icon name="redo" />
                     </button>
                     <span className="sep" />
-                    <button
-                        className={`btn ${store.playing ? "playing" : ""}`}
-                        onClick={() => (store.playing ? store.requestStop() : store.play())}
-                        disabled={editingPrefab !== null}
-                        title={editingPrefab
-                            ? "Go back to the scene to play it"
-                            : store.playing
-                                ? "Stop the scene (Ctrl+P)"
-                                : "Run the scene with its scripts (Ctrl+P)"}
-                    >
-                        <Icon name={store.playing ? "stop" : "play"} /> {store.playing ? "Stop" : "Play"}
+                    <button className="btn ghost" onClick={() => store.openSettings("project")} title="Settings">
+                        <Icon name="settings" />
                     </button>
-                    <button
-                        className={`btn ${store.paused ? "playing" : ""}`}
-                        onClick={() => store.togglePause()}
-                        disabled={!store.playing}
-                        title={store.paused ? "Resume (Ctrl+Shift+P)" : "Pause: freeze the scene to look at it and edit it (Ctrl+Shift+P)"}
-                    >
-                        <Icon name="pause" />
-                    </button>
-                    <button
-                        className="btn"
-                        onClick={() => store.step()}
-                        disabled={!store.playing}
-                        title="Pause and move by one frame (Ctrl+Alt+P)"
-                    >
-                        <Icon name="step" />
-                    </button>
-                    <span className="sep" />
-                    <button
-                        className="btn"
-                        disabled={building || editingPrefab !== null}
-                        onClick={async () => {
-                            setBuilding(true);
-                            setGameUrl(await buildGame() ?? gameUrl);
-                            setBuilding(false);
-                        }}
-                        title="Build the game into the project's build/ folder; it starts with the open scene"
-                    >
-                        <Icon name="build" /> {building ? "Building…" : "Build"}
-                    </button>
-                    {gameUrl && (
-                        <a className="btn" href={gameUrl} target="_blank" rel="noreferrer" title="Open the built game in a new tab">
-                            Open game ↗
-                        </a>
-                    )}
+                    {building && <span className="label">Building the game…</span>}
                 </>
             )}
 

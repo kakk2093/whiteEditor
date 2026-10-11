@@ -188,6 +188,14 @@ export function projectsPlugin(dir = 'projects'): Plugin {
         server.ws.send({ type: 'custom', event: 'white:folders-changed', data: { project } })
       }
       for (const event of ['add', 'change', 'unlink'] as const) server.watcher.on(event, notifyFolders)
+      // project.json (the settings: collision layers) edited by hand: the editor loads the project again
+      const notifySettings = (file: string) => {
+        const [project, name, ...rest] = toPosix(path.relative(root, file)).split('/')
+        if (rest.length > 0 || name !== 'project.json') return
+        if (Date.now() - (ownWrites.get(path.normalize(file)) ?? 0) < 2000) return
+        server.ws.send({ type: 'custom', event: 'white:scripts-changed', data: { project } })
+      }
+      for (const event of ['add', 'change', 'unlink'] as const) server.watcher.on(event, notifySettings)
 
       listNames(root, '').then((projects) =>
         Promise.all(projects.map((project) => writeDocs(path.join(root, project), project)))
@@ -246,6 +254,19 @@ export function projectsPlugin(dir = 'projects'): Plugin {
         // GET / PUT /__api/projects/demo/folders -> folders.json: which asset lies in which folder of the Project panel
         if (section === 'folders' && !item) {
           const file = path.join(projectDir, 'folders.json')
+          if (method === 'PUT') {
+            const data: unknown = JSON.parse(await readBody())
+            markOwn(file)
+            await fs.writeFile(file, formatJson(data))
+            return { ok: true }
+          }
+          const text = await fs.readFile(file, 'utf-8').catch(() => null)
+          return text === null ? {} : JSON.parse(text)
+        }
+
+        // GET / PUT /__api/projects/demo/settings -> project.json: the settings of the project (collision layers)
+        if (section === 'settings' && !item) {
+          const file = path.join(projectDir, 'project.json')
           if (method === 'PUT') {
             const data: unknown = JSON.parse(await readBody())
             markOwn(file)

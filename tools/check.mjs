@@ -44,6 +44,18 @@ try {
     }
   }
 
+  // project.json: the collision layers the colliders name
+  const settingsFile = path.join(projectDir, 'project.json')
+  if (fs.existsSync(settingsFile)) {
+    try {
+      const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf-8'))
+      for (const problem of engine.validateSettings(settings)) problems.push(`project.json: ${problem}`)
+      registry.setSettings(engine.parseSettings(settings))
+    } catch (e) {
+      problems.push(`project.json: ${e.message}`)
+    }
+  }
+
   // Materials name their textures: the images of assets/
   const assetsDir = path.join(projectDir, 'assets')
   const images = fs.existsSync(assetsDir)

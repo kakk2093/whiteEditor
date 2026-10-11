@@ -4,6 +4,8 @@ import { builtinEffects, isEffectDef } from "./look";
 import type { EffectDef, LookData } from "./look";
 import { applyMaterialData, createSharedMaterial } from "./materials";
 import type { MaterialData } from "./materials";
+import { defaultSettings, layersCollide } from "./settings";
+import type { ProjectSettings } from "./settings";
 import { builtinSurfaces, isSurfaceDef } from "./surface";
 import type { SurfaceDef } from "./surface";
 import type { EntityData, Params, ParamValue, Vec3 } from "./types";
@@ -18,7 +20,8 @@ export type ParamDef = (
     | { type: "select"; default: string; options: string[] }
     // A reference to a project asset by name, "" = none
     // "texture" is an image file of the project's assets/ folder, named with its extension: "bricks.png"
-    | { type: "asset"; kind: "material" | "look" | "prefab" | "texture"; default: string }
+    // "layer" is a collision layer of the project settings (project.json); "" is the default layer
+    | { type: "asset"; kind: "material" | "look" | "prefab" | "texture" | "layer"; default: string }
 ) & {
     // The field matters only while other fields of the same object have one of these values, e.g.
     // { kind: ["spot"] }; otherwise the Inspector does not show it. The value is kept either way.
@@ -65,6 +68,38 @@ export function isModelDef(value: unknown): value is ModelDef {
     return typeof value === "object" && value !== null && (value as ModelDef).kind === "model";
 }
 
+// A point or a direction: a three.js vector or [x, y, z]
+export type VectorLike = THREE.Vector3 | Vec3;
+
+// What a ray has hit: the entity object whose collider it is, where, and which way the surface faces there
+export interface RayHit {
+    object: THREE.Object3D;
+    point: THREE.Vector3;
+    normal: THREE.Vector3;
+    // Meters from the start of the ray
+    distance: number;
+}
+
+export interface RayOptions {
+    // How far the ray reaches, meters; without it, as far as it takes
+    distance?: number;
+    // Only the colliders of these layers; without it, of all
+    layers?: string[];
+    // true: colliders that are not solid (triggers) are hit too
+    triggers?: boolean;
+    // An object whose colliders (its own and those under it) the ray goes through. A behavior's own object by
+    // default; null to hit that one as well.
+    ignore?: THREE.Object3D | null;
+}
+
+// Which entities to find: all the given things must fit
+export interface FindQuery {
+    tag?: string;
+    name?: string;
+    // The name of a behavior the entity has
+    behavior?: string;
+}
+
 // What a behavior gets about the entity it is attached to
 export interface BehaviorSelf<P = Params, S = unknown> {
     // The three.js group of the entity: move, rotate and scale it here
@@ -94,6 +129,22 @@ export interface BehaviorSelf<P = Params, S = unknown> {
     move: (x: number, y: number, z: number) => boolean;
     // The objects whose colliders this object's collider touches right now
     touching: () => THREE.Object3D[];
+    // The nearest collider a ray meets, null if none: self.raycast(self.object.position, [0, -1, 0], { distance: 2 }).
+    // The start and the direction are in the world. A collider the ray starts inside of is not hit.
+    raycast: (origin: VectorLike, direction: VectorLike, options?: RayOptions) => RayHit | null;
+    // The ray from the camera of the scene through a point of the screen, for raycast(): where the mouse is,
+    // or at x, y (from -1 to 1, left to right and bottom to top). null if the scene has no camera.
+    screenRay: (x?: number, y?: number) => { origin: THREE.Vector3; direction: THREE.Vector3 } | null;
+    // The active entities of the running scene that fit: self.findAll({ tag: "enemy" }), self.find({ behavior: "drive" })
+    findAll: (query: FindQuery) => THREE.Object3D[];
+    find: (query: FindQuery) => THREE.Object3D | null;
+    // Gravity for an object moved with move(): call it every frame. The object gains speed downwards
+    // (`gravity` is meters per second squared, 20 by default) and stops on a solid collider. true while it stands on one.
+    fall: (dt: number, gravity?: number) => boolean;
+    // Sets the vertical speed fall() goes on from, meters per second: self.jump(7) throws the object up
+    jump: (speed: number) => void;
+    // true if the object stands on a solid collider
+    grounded: () => boolean;
 }
 
 export interface BehaviorDef {
@@ -145,6 +196,9 @@ export class Registry {
     private surfaceDefs = new Map<string, SurfaceDef>(builtinSurfaces.map((def) => [def.name, def]));
 
     private lookData = new Map<string, LookData>();
+
+    // project.json: the collision layers
+    settings: ProjectSettings = defaultSettings;
 
     private materialData = new Map<string, Partial<MaterialData>>();
 
@@ -281,7 +335,18 @@ export class Registry {
         await Promise.allSettled([...this.materialData.values()].map((data) => this.loadImage(data.texture ?? "")));
     }
 
-    assetNames(kind: "material" | "look" | "prefab" | "texture") {
+    setSettings(settings: ProjectSettings) {
+        this.settings = settings;
+        return this;
+    }
+
+    // true if colliders of these two layers notice each other
+    layersCollide(a: string, b: string) {
+        return layersCollide(this.settings, a, b);
+    }
+
+    assetNames(kind: "material" | "look" | "prefab" | "texture" | "layer") {
+        if (kind === "layer") return this.settings.layers;
         if (kind === "texture") return this.textureNames();
         if (kind === "prefab") return this.prefabNames();
         return kind === "look" ? this.lookNames() : this.materialNames();

@@ -1,13 +1,14 @@
 import { useRef, useState } from "react";
 import type { MouseEvent, ReactNode } from "react";
 import {
-    builtinEffects, builtinSurfaces, componentDefs, componentKey, environmentFields, fieldApplies, lookFields, materialFields, MAX_COLORS, paramDefaults, resolveLook
+    builtinEffects, builtinSurfaces, componentDefs, componentKey, DEFAULT_LAYER, environmentFields, fieldApplies, layersCollide, lookFields, materialFields,
+    MAX_COLORS, paramDefaults, resolveLook, setLayersCollide
 } from "../engine";
 import type {
     ComponentData, EntityData, EnvironmentData, LookData, MaterialData, ParamDef, ParamValue, Params
 } from "../engine";
 import {
-    addToLook, applyOverrides, createPrefab, deleteLook, deleteMaterial, deletePrefab, deleteScene, deleteTexture, openPrefab, openScene, renameAsset, renameScene, updateLook, updateMaterial
+    addToLook, applyOverrides, createPrefab, deleteLook, deleteMaterial, deletePrefab, deleteScene, deleteTexture, openPrefab, openScene, renameAsset, renameScene, updateLook, updateMaterial, updateSettings
 } from "./core/actions";
 import { instantiateModel, instantiatePrefab } from "./core/dnd";
 import { confirmAt, openContextMenu } from "./contextMenu";
@@ -208,7 +209,7 @@ function ParamField({ def, value, mixed = false, onChange }: {
             return (
                 <select className="select" value={mixed ? MIXED_OPTION : value as string} onChange={(e) => onChange(e.target.value)}>
                     {mixedOption}
-                    <option value="">{def.kind === "material" ? "Default (gray)" : "(none)"}</option>
+                    <option value="">{def.kind === "material" ? "Default (gray)" : def.kind === "layer" ? DEFAULT_LAYER : "(none)"}</option>
                     {sceneStore.registry.assetNames(def.kind).map((name) => (
                         <option key={name} value={name}>{name}</option>
                     ))}
@@ -244,7 +245,7 @@ function mixedKeys(defs: Record<string, ParamDef>, list: Params[]) {
 
 const MIXED_TITLE = "the selected objects have different values; a value given here goes to all of them";
 
-function Fields({ defs, values, onChange, changed, onRevert, mixed }: {
+export function Fields({ defs, values, onChange, changed, onRevert, mixed }: {
     defs: Record<string, ParamDef>;
     values: Params;
     onChange: (key: string, value: ParamValue) => void;
@@ -276,7 +277,7 @@ function Fields({ defs, values, onChange, changed, onRevert, mixed }: {
     );
 }
 
-function Section({ title, onRemove, removeTitle = "Remove component", extra, children }: {
+export function Section({ title, onRemove, removeTitle = "Remove component", extra, children }: {
     title: ReactNode;
     onRemove?: () => void;
     removeTitle?: string;
@@ -616,6 +617,27 @@ function EntityInspector({ entity }: { entity: EntityData }) {
                     )}
                 </div>
             )}
+
+            <div className="section-body">
+                <div className="field">
+                    <label title="A word to find the object by in the running game: self.findAll({ tag: &quot;enemy&quot; })">Tag</label>
+                    <div className="control">
+                        <input
+                            className="input"
+                            list="white-tags"
+                            value={entity.tag ?? ""}
+                            // An instance without a tag of its own has the one of its prefab
+                            placeholder={(entity.prefab && store.expand(entity)?.tag) || "none"}
+                            disabled={inner}
+                            title={inner ? "The tag comes from the prefab" : undefined}
+                            onChange={(e) => store.setTag(entity.id, e.target.value.trim())}
+                        />
+                        <datalist id="white-tags">
+                            {store.tags.map((tag) => <option key={tag} value={tag} />)}
+                        </datalist>
+                    </div>
+                </div>
+            </div>
 
             <TransformSection entities={[entity]} />
 
@@ -1061,6 +1083,91 @@ function AssetInspector({ asset }: { asset: AssetRef }) {
     );
 }
 
+// The collision layers of the project (project.json): their names, and which pairs of them collide.
+// Shown in the Settings window, on the Project page.
+export function LayersSection() {
+    const store = useSceneStore();
+    const { settings } = store.registry;
+    const [name, setName] = useState("");
+    const layers = [DEFAULT_LAYER, ...settings.layers];
+
+    const add = () => {
+        const layer = name.trim();
+        if (!layer || layers.includes(layer)) return;
+        updateSettings({ ...settings, layers: [...settings.layers, layer] });
+        setName("");
+    };
+    const remove = (layer: string) => updateSettings({
+        layers: settings.layers.filter((other) => other !== layer),
+        noCollision: settings.noCollision.filter((pair) => !pair.includes(layer))
+    });
+
+    return (
+        <Section title="Collision Layers">
+            {settings.layers.map((layer) => (
+                <div key={layer} className="field">
+                    <label title={layer}>{layer}</label>
+                    <div className="control">
+                        <span style={{ flex: 1 }} />
+                        <button className="btn ghost" title="Remove the layer; colliders that name it must be given another" onClick={() => remove(layer)}>
+                            <Icon name="close" size={12} />
+                        </button>
+                    </div>
+                </div>
+            ))}
+            <div className="field">
+                <label>New layer</label>
+                <div className="control">
+                    <input
+                        className="input"
+                        value={name}
+                        placeholder="name"
+                        onChange={(e) => setName(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && add()}
+                    />
+                    <button className="btn ghost" title="Add the layer" onClick={add}>
+                        <Icon name="plus" size={12} />
+                    </button>
+                </div>
+            </div>
+            {layers.length > 1 && (
+                <table className="layer-matrix">
+                    <thead>
+                        <tr>
+                            <th />
+                            {layers.map((layer) => <th key={layer}><span>{layer}</span></th>)}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {layers.map((row, i) => (
+                            <tr key={row}>
+                                <th>{row}</th>
+                                {layers.map((column, j) => (
+                                    <td key={column}>
+                                        {/* Each pair once: the order of the two does not matter */}
+                                        {j <= i && (
+                                            <input
+                                                className="checkbox"
+                                                type="checkbox"
+                                                title={`${row} and ${column}: ${layersCollide(settings, row, column) ? "collide" : "do not notice each other"}`}
+                                                checked={layersCollide(settings, row, column)}
+                                                onChange={(e) => updateSettings(setLayersCollide(settings, row, column, e.target.checked))}
+                                            />
+                                        )}
+                                    </td>
+                                ))}
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            )}
+            <div className="note">
+                A collider names its layer. Unchecked pairs do not notice each other: they neither stop each other nor get enter / exit.
+            </div>
+        </Section>
+    );
+}
+
 export default function Inspector() {
     const store = useSceneStore();
     const selected = store.selected;
@@ -1094,6 +1201,12 @@ export default function Inspector() {
                                 onChange={(key, value) => store.setEnvironment(key as keyof EnvironmentData, value as never)}
                             />
                         </Section>
+                        <div className="note">
+                            Layers, editor options and the list of keys:
+                            <button className="btn" onClick={() => store.openSettings("project")}>
+                                <Icon name="settings" /> Settings
+                            </button>
+                        </div>
                         <div className="empty">Select an object in the Hierarchy or the viewport to edit it.</div>
                     </>
                 )}

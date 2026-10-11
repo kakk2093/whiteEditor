@@ -109,9 +109,13 @@ const images = fs.existsSync(assetsDir)
   ? fs.readdirSync(assetsDir, { recursive: true }).map((f) => f.split(path.sep).join('/')).filter((f) => /\.(png|jpe?g|webp)$/i.test(f)).sort()
   : []
 
+// project.json: the collision layers
+const settingsFile = path.join(projectDir, 'project.json')
+const settings = fs.existsSync(settingsFile) ? JSON.parse(fs.readFileSync(settingsFile, 'utf-8')) : {}
+
 // The same assembly as a built game (tools/buildGame.ts), ending in one picture instead of a running game
 const entryCode = () => [
-  `import { Registry, parsePrefab, parseScene, renderStill } from "/src/engine/index.ts"`,
+  `import { Registry, parsePrefab, parseScene, parseSettings, renderStill } from "/src/engine/index.ts"`,
   `const send = (body) => fetch("/__render/done", { method: "POST", body: JSON.stringify(body) })`,
   `window.addEventListener("error", (e) => send({ error: e.message }))`,
   `window.addEventListener("unhandledrejection", (e) => send({ error: String(e.reason?.message ?? e.reason) }))`,
@@ -122,6 +126,7 @@ const entryCode = () => [
     return `try { registry.registerExports(await import(${JSON.stringify(url)})) } catch (e) { problems.push(${JSON.stringify(`scripts/${file}: `)} + e.message) }`
   }),
   `registry.setTextures(${JSON.stringify(`/projects/${project}/assets/`)}, ${JSON.stringify(images)})`,
+  `registry.setSettings(parseSettings(${JSON.stringify(settings)}))`,
   `for (const [name, data] of Object.entries(${JSON.stringify(readSection('materials'))})) registry.setMaterial(name, data)`,
   `for (const [name, data] of Object.entries(${JSON.stringify(readSection('prefabs'))})) registry.setPrefab(name, parsePrefab(data).root)`,
   `for (const [name, data] of Object.entries(${JSON.stringify(readSection('looks'))})) registry.setLook(name, data)`,

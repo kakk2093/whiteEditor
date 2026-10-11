@@ -8,6 +8,7 @@ export * from "./surface";
 export * from "./shaderParams";
 export * from "./pipeline";
 export * from "./prefab";
+export * from "./settings";
 export * from "./loadScene";
 export * from "./input";
 export * from "./runtime";

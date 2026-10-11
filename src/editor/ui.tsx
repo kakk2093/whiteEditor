@@ -38,6 +38,7 @@ const ICON_PATHS = {
     down: "M4 6l4 4 4-4",
     build: "M2.5 13.5h11 M8 2.5v8 M4.5 7l3.5 3.5L11.5 7",
     step: "M4 3.5v9l6.5-4.5z M12 3.5v9",
+    settings: "M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z M8 1.5v2 M8 12.5v2 M1.5 8h2 M12.5 8h2 M3.4 3.4l1.4 1.4 M11.2 11.2l1.4 1.4 M3.4 12.6l1.4-1.4 M11.2 4.8l1.4-1.4",
 } as const;
 
 export type IconName = keyof typeof ICON_PATHS | "prefab";

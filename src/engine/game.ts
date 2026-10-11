@@ -73,6 +73,7 @@ export class Game {
         });
         this.camera = findCamera(this.root);
         this.runtime = new Runtime(registry, this.root, this.input);
+        this.runtime.camera = this.camera;
     }
 
     start() {
@@ -85,6 +86,7 @@ export class Game {
         this.input.endFrame();
         // A behavior may have spawned, destroyed or switched off the camera
         this.camera = findCamera(this.root);
+        this.runtime.camera = this.camera;
     }
 
     // Call when the size of the canvas changes
@@ -106,8 +108,11 @@ export class Game {
         if (!obj) return;
         obj.name = entity.name;
         obj.visible = entity.active ?? true;
+        if (entity.tag) obj.userData.tag = entity.tag;
+        else delete obj.userData.tag;
         if (transform) applyTransform(obj, entity, transform);
         this.camera = findCamera(this.root);
+        this.runtime.camera = this.camera;
     }
 
     // A component of the entity was added, removed or changed; `key` is its componentKey()
@@ -117,6 +122,7 @@ export class Game {
         rebuildComponentObject(this.registry, obj, entity, key);
         this.runtime.refresh(obj);
         this.camera = findCamera(this.root);
+        this.runtime.camera = this.camera;
     }
 
     setEnvironment(data: Partial<EnvironmentData>) {

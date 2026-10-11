@@ -4,6 +4,7 @@ import { lookFields } from "./look";
 import type { LookData } from "./look";
 import { materialFields } from "./materials";
 import { expandPristine, findInExpanded, innerPaths, ROOT_PATH } from "./prefab";
+import { DEFAULT_LAYER } from "./settings";
 import type { ParamDef, Registry } from "./Registry";
 import { MAX_COLORS } from "./shaderParams";
 import type { ComponentData, EntityData, ParamValue, PrefabData, SceneData } from "./types";
@@ -31,6 +32,10 @@ function checkValue(def: ParamDef, value: unknown, registry: Registry): string |
         case "asset":
             if (value === "") return null;
             if (registry.assetNames(def.kind).includes(value as string)) return null;
+            if (def.kind === "layer") {
+                if (value === DEFAULT_LAYER) return null;
+                return `there is no layer "${value}" in project.json (layers: ${[DEFAULT_LAYER, ...registry.settings.layers].join(", ")})`;
+            }
             return def.kind === "texture"
                 ? `there is no image "${value}" in assets/ (images: ${registry.textureNames().join(", ") || "none"})`
                 : `${def.kind} "${value}" does not exist`;
@@ -197,6 +202,7 @@ function checkEntity(entity: EntityData, path: string, registry: Registry, ids: 
     for (const key of ["position", "rotation", "scale"] as const) {
         if (!isVec3(entity[key])) problems.push(`${where}.${key}: must be [x, y, z]`);
     }
+    if (entity.tag !== undefined && typeof entity.tag !== "string") problems.push(`${where}.tag: must be a string`);
 
     if (entity.prefab) {
         if (!registry.getPrefab(entity.prefab)) {

@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import type { Folders } from "./folders";
+import { editorLog } from "./log";
 import {
     addedLists,
     applyEnvironment,
@@ -34,6 +35,9 @@ type Listener = () => void;
 export type TransformProperty = "position" | "rotation" | "scale";
 
 export type GizmoMode = "translate" | "rotate" | "scale";
+
+// The pages of the Settings window
+export type SettingsPage = "project" | "scene" | "editor" | "controls";
 
 export interface AssetRef {
     // The last three are not files: what the scripts of the project (and the engine) define
@@ -246,6 +250,12 @@ class SceneStore {
     sceneName = "main";
 
     scenes: string[] = [];
+
+    // The Console panel, next to the Project one; remembered in the browser
+    consoleOpen = localStorage.getItem("white:console") !== "hidden";
+
+    // The page of the Settings window that is open, null while the window is closed
+    settingsPage: SettingsPage | null = null;
 
     // The folders of the Project panel: folders.json of the project
     folders: Folders = {};
@@ -861,6 +871,8 @@ class SceneStore {
     play() {
         if (this.playing || this.editingPrefab) return;
         this.playSnapshot = JSON.stringify(this.toJSON());
+        // A new run starts with a clean Console, like in Unity
+        editorLog.clear();
         this.status = "";
         this.paused = false;
         // Play starts the way the game does; the Scene view is one click away
@@ -1140,6 +1152,18 @@ class SceneStore {
         return true;
     }
 
+    setConsoleOpen(open: boolean) {
+        this.consoleOpen = open;
+        localStorage.setItem("white:console", open ? "shown" : "hidden");
+        this.notify();
+    }
+
+    // Opens the Settings window on a page; null closes it
+    openSettings(page: SettingsPage | null) {
+        this.settingsPage = page;
+        this.notify();
+    }
+
     setGizmoSpace(space: "world" | "local") {
         this.gizmoSpace = space;
         this.notify();
@@ -1385,6 +1409,32 @@ class SceneStore {
             this.game?.syncEntity(entity);
         }
         this.notify();
+    }
+
+    // The tag of a real entity (what a prefab brings has the tag the prefab gives it)
+    setTag(id: string, tag: string) {
+        const entity = findEntity(this.entities, id)?.entity;
+        const obj = this.objects.get(id);
+        if (!entity || !obj) return;
+        if (tag) entity.tag = tag;
+        else delete entity.tag;
+        // An instance without a tag of its own shows the one of its prefab
+        const shown = this.expand(entity)?.tag ?? entity.tag;
+        if (shown) obj.userData.tag = shown;
+        else delete obj.userData.tag;
+        this.game?.syncEntity(this.expand(entity) ?? entity);
+        this.notify();
+    }
+
+    // Every tag the entities of the scene have, for the Inspector to offer
+    get tags(): string[] {
+        const tags = new Set<string>();
+        const visit = (list: EntityData[]) => list.forEach((entity) => {
+            if (entity.tag) tags.add(entity.tag);
+            ownLists(entity).forEach(visit);
+        });
+        visit(this.entities);
+        return [...tags].sort();
     }
 
     setActive(id: string, active: boolean) {

@@ -40,6 +40,9 @@ export interface EntityData {
     name: string;
     // false hides the entity together with its children; missing means true
     active?: boolean;
+    // Any word to find the entity by in the running game: self.findAll({ tag: "enemy" }). An instance without
+    // a tag of its own has the tag of the root of its prefab.
+    tag?: string;
     // Name of a prefab asset: the entity is an instance of it. Its components and children then come
     // from the prefab file; the instance itself only keeps its name, active flag, transform and overrides.
     prefab?: string;
@@ -87,6 +90,7 @@ function normalizeEntity(raw: Partial<EntityData>, fromRadians: boolean, usedIds
         id,
         name: raw.name ?? "GameObject",
         ...(raw.active === false ? { active: false } : {}),
+        ...(raw.tag ? { tag: raw.tag } : {}),
         ...(raw.prefab ? { prefab: raw.prefab } : {}),
         ...(raw.prefab && raw.overrides ? { overrides: normalizeOverrides(raw.overrides, fromRadians, usedIds) } : {}),
         position: raw.position ? [...raw.position] : [0, 0, 0],

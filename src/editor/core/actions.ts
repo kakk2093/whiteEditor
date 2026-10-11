@@ -1,5 +1,5 @@
 import { applyToPrefab, parsePrefab, parseScene, resolveLook, validateScene } from "../../engine";
-import type { LookData, MaterialData, SceneData } from "../../engine";
+import type { LookData, MaterialData, ProjectSettings, SceneData } from "../../engine";
 import { renameInEntities, renameInScene } from "./references";
 import { changeFolder, moveToFolder, parseFolders, renameInFolders } from "./folders";
 import type { Folders, FolderSection } from "./folders";
@@ -17,7 +17,8 @@ import {
     readFolders,
     uploadImage,
     writeAsset,
-    writeFolders
+    writeFolders,
+    writeSettings
 } from "./project";
 
 // Everything the editor does with the project on disk. Errors end up in the status line.
@@ -145,6 +146,19 @@ export async function foldersChangedOnDisk(project: string) {
     if (project !== sceneStore.project) return;
     try {
         sceneStore.update({ folders: parseFolders(await readFolders(project)), status: "folders.json changed on disk — reloaded" });
+    } catch (e) {
+        report(e);
+    }
+}
+
+// The settings of the project (collision layers): applied at once and written to project.json. Not a part of undo.
+export async function updateSettings(settings: ProjectSettings) {
+    const { project, registry } = sceneStore;
+    try {
+        registry.setSettings(settings);
+        // The colliders of a running scene read the layers from the registry
+        sceneStore.setRegistry(registry);
+        await writeSettings(project, settings);
     } catch (e) {
         report(e);
     }

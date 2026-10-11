@@ -1,5 +1,5 @@
-import { parsePrefab, Registry } from "../../engine";
-import type { LookData } from "../../engine";
+import { parsePrefab, parseSettings, Registry } from "../../engine";
+import type { LookData, ProjectSettings } from "../../engine";
 
 // Talks to the dev-server API from vite-plugin-projects.ts
 const API = "/__api/projects";
@@ -56,6 +56,11 @@ export async function writeFolders(project: string, data: unknown) {
     await request(`${project}/folders`, { method: "PUT", body: JSON.stringify(data) });
 }
 
+// project.json of the project: its settings (collision layers)
+export async function writeSettings(project: string, settings: ProjectSettings) {
+    await request(`${project}/settings`, { method: "PUT", body: JSON.stringify(settings) });
+}
+
 // Builds the game of the project into its build/ folder; `url` is where the dev server shows it
 export function buildGame(project: string, scene: string): Promise<{ scene: string; files: string[]; url: string }> {
     return request(`${project}/build?scene=${encodeURIComponent(scene)}`, { method: "POST" });
@@ -80,6 +85,11 @@ export async function loadRegistry(project: string) {
 
     // The time in the address gets an image that was edited past the cache of the browser
     registry.setTextures(`/projects/${project}/assets/`, await request(`${project}/assets`), `?t=${Date.now()}`);
+    try {
+        registry.setSettings(parseSettings(await request(`${project}/settings`)));
+    } catch (e) {
+        errors.push(`project.json: ${e instanceof Error ? e.message : String(e)}`);
+    }
     for (const name of await listAssets(project, "materials")) {
         registry.setMaterial(name, (await readAsset(project, "materials", name)) as object);
     }

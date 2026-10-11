@@ -40,6 +40,7 @@ export function createEntityObject(registry: Registry, entity: EntityData, prefa
         stack = [...prefabStack, entity.prefab];
     }
 
+    if (source.tag) group.userData.tag = source.tag;
     setScripts(group, source.components);
     for (const component of source.components) {
         const obj = createComponentObject(registry, component);

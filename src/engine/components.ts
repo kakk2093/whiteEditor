@@ -149,6 +149,8 @@ export const componentDefs: Record<string, ComponentDef> = {
             centerZ: { type: "number", default: 0, step: 0.1 },
             // false: nothing stops at it, it only tells what touches it (a trigger: a coin, a door zone)
             solid: { type: "boolean", default: true },
+            // A collision layer of the project (project.json); layers can be set not to collide with each other
+            layer: { type: "asset", kind: "layer", default: "" },
         },
         create: (f) => {
             const marker = new THREE.Object3D();

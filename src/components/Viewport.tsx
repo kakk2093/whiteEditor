@@ -584,6 +584,34 @@ export default function Viewport() {
             <div ref={ref} style={{ width: "100%", height: "100%" }} />
             <div ref={marqueeRef} className="viewport-marquee" />
 
+            {!store.editingPrefab && (
+                <div className="viewport-play">
+                    <button
+                        className={`btn ${store.playing ? "playing" : ""}`}
+                        onClick={() => (store.playing ? store.requestStop() : store.play())}
+                        title={store.playing ? "Stop the scene (Ctrl+P)" : "Run the scene with its scripts (Ctrl+P)"}
+                    >
+                        <Icon name={store.playing ? "stop" : "play"} />
+                    </button>
+                    <button
+                        className={`btn ${store.paused ? "playing" : ""}`}
+                        onClick={() => store.togglePause()}
+                        disabled={!store.playing}
+                        title={store.paused ? "Resume (Ctrl+Shift+P)" : "Pause: freeze the scene to look at it and edit it (Ctrl+Shift+P)"}
+                    >
+                        <Icon name="pause" />
+                    </button>
+                    <button
+                        className="btn"
+                        onClick={() => store.step()}
+                        disabled={!store.playing}
+                        title="Pause and move by one frame (Ctrl+Alt+P)"
+                    >
+                        <Icon name="step" />
+                    </button>
+                </div>
+            )}
+
             <div className="viewport-tools">
                 {!store.gameView && GIZMO_MODES.map(({ mode, icon, title }) => (
                     <button
