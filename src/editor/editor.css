@@ -1333,6 +1333,16 @@ kbd {
     outline-offset: 1px;
 }
 
+/* The shape of the picture of the game, while the interface of the scene is edited (Viewport.tsx places it) */
+.viewport-frame {
+    display: none;
+    position: absolute;
+    box-sizing: border-box;
+    border: 1px dashed rgba(255, 255, 255, 0.55);
+    outline: 1px solid rgba(0, 0, 0, 0.5);
+    pointer-events: none;
+}
+
 /* The frame around the view of a selected camera; the picture itself is drawn on the canvas (Viewport.tsx) */
 .viewport-preview {
     position: absolute;

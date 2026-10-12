@@ -155,6 +155,67 @@ export const clicker = defineBehavior({
     },
 });
 
+// Put it on an object with a Slider or an Input Field: what the player sets there is shown by the Text of
+// another object. change() comes with every move of the slider and every letter, submit() with Enter.
+export const echo = defineBehavior({
+    name: "echo",
+    label: "Echo",
+    params: {
+        // Name of the object whose Text shows the value
+        label: { type: "string", default: "" },
+        prefix: { type: "string", default: "" },
+        // Wait for Enter instead of showing every letter (an Input Field)
+        onSubmit: { type: "boolean", default: false },
+        // Name of an object with the "spin" behavior: a number becomes its speed
+        spin: { type: "string", default: "" },
+    },
+    change: (self, value) => {
+        if (self.params.onSubmit) return;
+        const label = self.find({ name: self.params.label });
+        if (label) self.setText(self.params.prefix + value, label);
+        const spinning = self.params.spin ? self.find({ name: self.params.spin }) : null;
+        const spin = spinning && self.get("spin", spinning);
+        if (spin && typeof value === "number") spin.params.speed = value;
+    },
+    submit: (self, value) => {
+        const label = self.find({ name: self.params.label });
+        if (label) self.setText(self.params.prefix + value, label);
+    },
+});
+
+// Interface made with HTML instead of drawn: a line of text and a button in self.overlay, the page element
+// over the picture. Sizes use var(--unit), one unit of the interface, so they follow the size of the picture.
+export const htmlBadge = defineBehavior({
+    name: "htmlBadge",
+    label: "HTML Badge",
+    params: {
+        text: { type: "string", default: "Made with HTML" },
+    },
+    start: (self) => {
+        const box = document.createElement("div");
+        box.style.cssText =
+            "position: absolute; left: calc(var(--unit) * 16); bottom: calc(var(--unit) * 16); padding: calc(var(--unit) * 8) calc(var(--unit) * 12);" +
+            "font: calc(var(--unit) * 18) sans-serif; color: #fff; background: rgba(16, 24, 32, 0.85); border-radius: calc(var(--unit) * 6); pointer-events: auto;";
+        const label = document.createElement("span");
+        const button = document.createElement("button");
+        button.textContent = "+1";
+        button.style.cssText = "margin-left: calc(var(--unit) * 10); font: inherit; cursor: pointer;";
+        let count = 0;
+        const show = () => (label.textContent = `${self.params.text}: ${count}`);
+        button.onclick = () => {
+            count++;
+            show();
+        };
+        show();
+        box.append(label, button);
+        // Nothing to add it to where there is no page (a check from the command line)
+        self.overlay?.append(box);
+        return { box };
+    },
+    // The overlay is emptied with the scene, but this object may be removed before that
+    destroy: (self) => self.state.box.remove(),
+});
+
 // A character: walks with W A S D, the arrows or the left stick of a gamepad, jumps with Space or the A
 // button, falls, and walks up onto ledges not higher than `step`. The object needs a solid Collider.
 export const walker = defineBehavior({
@@ -181,6 +242,51 @@ export const walker = defineBehavior({
         }
         if (params.jump > 0 && (input.keyPressed("Space") || input.keyPressed("Pad0")) && self.grounded()) self.jump(params.jump);
         self.fall(dt);
+    },
+});
+
+// Looks for the object with a tag and tells on its Label whether it is seen: a ray towards it (self.raycast)
+// that reaches it before anything solid does. The object itself needs no Collider.
+export const watcher = defineBehavior({
+    name: "watcher",
+    label: "Watcher",
+    params: {
+        // Whom it looks for (the Tag of the object)
+        tag: { type: "string", default: "player" },
+        // How far it sees, meters
+        distance: { type: "number", default: 12, min: 0, step: 1 },
+    },
+    start: () => ({ seen: null as boolean | null }),
+    update: (self) => {
+        const target = self.find({ tag: self.params.tag });
+        if (!target) return;
+        const from = self.object.getWorldPosition(new THREE.Vector3());
+        const towards = target.getWorldPosition(new THREE.Vector3()).sub(from);
+        const seen = self.raycast(from, towards, { distance: self.params.distance })?.object === target;
+        if (seen === self.state.seen) return;
+        self.state.seen = seen;
+        self.setText(seen ? "I see you" : "...");
+    },
+});
+
+// A door to another scene: an object with the tag walks into it (a Collider with "solid" off) and the scene
+// changes (self.loadScene). How many times a scene with a portal was entered is kept in self.globals, which
+// outlive the scene, and is shown on the Label of the object.
+export const portal = defineBehavior({
+    name: "portal",
+    label: "Portal",
+    params: {
+        scene: { type: "asset", kind: "scene", default: "" },
+        // Who goes through (the Tag of the object)
+        tag: { type: "string", default: "player" },
+    },
+    start: (self) => {
+        const visits = Number(self.globals.visits ?? 0) + 1;
+        self.globals.visits = visits;
+        self.setText(`Visit ${visits}`);
+    },
+    enter: (self, other) => {
+        if (other.userData.tag === self.params.tag && self.params.scene) self.loadScene(self.params.scene);
     },
 });
 

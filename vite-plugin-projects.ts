@@ -229,6 +229,15 @@ export function projectsPlugin(dir = 'projects'): Plugin {
         Promise.all(projects.map((project) => writeDocs(path.join(root, project), project)))
       ).catch((e) => server.config.logger.error(String(e)))
 
+      // folders.json and project.json hold only what differs from the defaults: with nothing left to say
+      // (an undo back to the start) the file goes instead of staying as "{}"
+      const writeOrRemove = async (file: string, data: unknown) => {
+        markOwn(file)
+        const empty = typeof data === 'object' && data !== null && Object.keys(data).length === 0
+        if (empty) await fs.rm(file, { force: true })
+        else await fs.writeFile(file, formatJson(data))
+      }
+
       const handle = async (
         method: string,
         segments: string[],
@@ -303,8 +312,7 @@ export function projectsPlugin(dir = 'projects'): Plugin {
           const file = path.join(projectDir, 'folders.json')
           if (method === 'PUT') {
             const data: unknown = JSON.parse(await readBody())
-            markOwn(file)
-            await fs.writeFile(file, formatJson(data))
+            await writeOrRemove(file, data)
             return { ok: true }
           }
           const text = await fs.readFile(file, 'utf-8').catch(() => null)
@@ -316,8 +324,7 @@ export function projectsPlugin(dir = 'projects'): Plugin {
           const file = path.join(projectDir, 'project.json')
           if (method === 'PUT') {
             const data: unknown = JSON.parse(await readBody())
-            markOwn(file)
-            await fs.writeFile(file, formatJson(data))
+            await writeOrRemove(file, data)
             return { ok: true }
           }
           const text = await fs.readFile(file, 'utf-8').catch(() => null)

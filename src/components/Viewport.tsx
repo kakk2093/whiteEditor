@@ -55,6 +55,8 @@ export default function Viewport() {
     const downRef = useRef({ x: 0, y: 0, moved: false });
     // The frame of a selection being dragged out with Shift
     const marqueeRef = useRef<HTMLDivElement>(null);
+    // The frame of the picture of the game, shown while the interface is edited
+    const frameRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         if (!ref.current) return;
@@ -196,7 +198,15 @@ export default function Viewport() {
         const uiPlace = (id: string) => sceneStore.findEntity(id)?.components.find((component) => component.type === "ui");
 
         // The size handle of the selected element under the mouse, if there is one
-        const uiHandleAt = (e: PointerEvent, rect: DOMRect) => {
+        // Where the interface is drawn while the scene is edited: the part of the view that has the shape of
+        // the picture of the game, in the pixels of the window
+        const uiRect = () => {
+            const rect = canvas.getBoundingClientRect();
+            const area = sceneStore.gameArea(rect.width, rect.height);
+            return { left: rect.left + area.left, top: rect.top + area.top, width: area.width, height: area.height };
+        };
+
+        const uiHandleAt = (e: PointerEvent, rect: { left: number; top: number; height: number }) => {
             const id = sceneStore.selectedId;
             const object = id ? sceneStore.objectOf(id) : null;
             const box = object && editorUi.placeOf(object);
@@ -220,7 +230,7 @@ export default function Viewport() {
             uiPressed = false;
             if (e.button !== 0 || e.shiftKey || sceneStore.playing || !sceneStore.uiVisible || !ctx.controls) return;
             if (ctx.transform?.axis || handles.grabbed) return;
-            const rect = canvas.getBoundingClientRect();
+            const rect = uiRect();
             // A handle first: it sticks out of its element, and may lie over another one
             const grabbed = uiHandleAt(e, rect);
             const object = grabbed ? null : editorUi.elementAt(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
@@ -646,10 +656,37 @@ export default function Viewport() {
                     }
                     ui = editorUi;
                 }
-                pipeline.render(scene, camera, Math.min(dt, 0.1), ui);
-                if (framed) {
+                // While the scene is edited the view is the editor's, but the interface keeps the shape of the
+                // picture of the game: it is drawn into that part of the view, with a frame around it
+                const shape = ui === editorUi ? sceneStore.gameArea(canvas.clientWidth, canvas.clientHeight) : null;
+                const shaped = shape !== null && (shape.width !== canvas.clientWidth || shape.height !== canvas.clientHeight);
+                pipeline.render(scene, camera, Math.min(dt, 0.1), shaped ? null : ui);
+                if (shaped) {
+                    const bottom = canvas.clientHeight - shape.top - shape.height;
+                    renderer.setViewport(shape.left, bottom, shape.width, shape.height);
+                    renderer.setScissor(shape.left, bottom, shape.width, shape.height);
+                    renderer.setScissorTest(true);
+                    pipeline.drawUi(editorUi);
+                }
+                if (framed || shaped) {
                     renderer.setScissorTest(false);
                     renderer.setViewport(0, 0, canvas.clientWidth, canvas.clientHeight);
+                }
+                const frame = frameRef.current;
+                const framePlace = shaped ? `${shape.left},${shape.top},${shape.width},${shape.height}` : "";
+                if (frame && frame.dataset.place !== framePlace) {
+                    frame.dataset.place = framePlace;
+                    Object.assign(frame.style, shaped
+                        ? { display: "block", left: `${shape.left}px`, top: `${shape.top}px`, width: `${shape.width}px`, height: `${shape.height}px` }
+                        : { display: "none" });
+                }
+
+                // What the behaviors have put over the picture with HTML (self.overlay): seen in the Game view
+                const game = sceneStore.runningGame;
+                if (game?.overlay) {
+                    if (game.overlay.parentElement !== canvas.parentElement) canvas.after(game.overlay);
+                    game.overlay.style.display = area ? "" : "none";
+                    if (area) game.placeOverlay(area.left, area.top, area.width, area.height);
                 }
 
                 renderer.autoClear = false;
@@ -774,6 +811,7 @@ export default function Viewport() {
         >
             <div ref={ref} style={{ width: "100%", height: "100%" }} />
             <div ref={marqueeRef} className="viewport-marquee" />
+            <div ref={frameRef} className="viewport-frame" />
 
             <div className="viewport-tools">
                 {!store.gameView && GIZMO_MODES.map(({ mode, icon, title }) => (

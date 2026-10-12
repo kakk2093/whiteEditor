@@ -42,6 +42,12 @@ export const CREATE_MENU: { title?: string; items: CreateItem[] }[] = [
                 label: "Button",
                 icon: "image",
                 components: [{ type: "ui", width: 160, height: 44 }, { type: "image", color: "#2d6cdf" }, { type: "text", text: "Button" }, { type: "button" }]
+            },
+            { label: "Slider", icon: "image", components: [{ type: "ui", width: 200, height: 20 }, { type: "image", color: "#2a3b4d" }, { type: "slider" }] },
+            {
+                label: "Input Field",
+                icon: "image",
+                components: [{ type: "ui", width: 220, height: 36 }, { type: "image", color: "#0a1118" }, { type: "text", size: 18 }, { type: "input" }]
             }
         ]
     },

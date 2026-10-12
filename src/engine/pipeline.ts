@@ -71,6 +71,33 @@ void main() {
     gl_FragColor = texture2D(tUi, vUv);
 }`;
 
+// The glow of the materials: the light of the glowing surfaces (tGlow: they alone, the rest black) spread
+// around them and added to the picture. Four rings of eight samples, the near ones counting for more.
+const GLOW = `
+uniform sampler2D tColor;
+uniform sampler2D tGlow;
+uniform vec2 resolution;
+uniform float radius;
+varying vec2 vUv;
+void main() {
+    vec3 sum = vec3(0.0);
+    float total = 0.0;
+    for (int ring = 1; ring <= 4; ring++) {
+        float reach = radius * float(ring) / 4.0;
+        float weight = 1.25 - float(ring) / 4.0;
+        for (int i = 0; i < 8; i++) {
+            float angle = 6.2831853 * (float(i) + 0.5 * float(ring)) / 8.0;
+            sum += texture2D(tGlow, vUv + vec2(cos(angle), sin(angle)) * reach / resolution).rgb * weight;
+            total += weight;
+        }
+    }
+    vec4 color = texture2D(tColor, vUv);
+    gl_FragColor = vec4(color.rgb + sum / total, color.a);
+}`;
+
+// How far the glow of a material spreads, as a part of the height of the picture
+const GLOW_RADIUS = 0.03;
+
 const TONE_MAPPINGS = ["none", "reinhard", "aces"];
 
 interface Pass {
@@ -111,6 +138,24 @@ export class RenderPipeline {
     private targets = [createTarget(false), createTarget(false)];
 
     private normalMaterial = new THREE.MeshNormalMaterial();
+
+    // The glowing surfaces alone, and the picture with their glow added
+    private glowTarget = createTarget(true);
+
+    private litTarget = createTarget(false);
+
+    // What stands for a material in the picture of the glow: black for one that does not glow
+    private darkMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
+
+    private glowMaterials = new Map<THREE.Material, THREE.MeshBasicMaterial>();
+
+    private glowPass = new THREE.ShaderMaterial({
+        vertexShader: VERTEX,
+        fragmentShader: GLOW,
+        uniforms: { tColor: { value: null }, tGlow: { value: null }, resolution: { value: new THREE.Vector2(1, 1) }, radius: { value: 1 } },
+        depthTest: false,
+        depthWrite: false,
+    });
 
     private outputMaterial = new THREE.ShaderMaterial({
         vertexShader: VERTEX,
@@ -243,9 +288,81 @@ export class RenderPipeline {
         };
     }
 
+    // true if something the camera draws has a material with "glow"
+    private glows(scene: THREE.Scene, camera: THREE.Camera) {
+        let found = false;
+        scene.traverseVisible((object) => {
+            const mesh = object as THREE.Mesh;
+            if (found || !mesh.isMesh || !mesh.layers.test(camera.layers)) return;
+            found = (Array.isArray(mesh.material) ? mesh.material : [mesh.material]).some((material) => material.userData.glow > 0);
+        });
+        return found;
+    }
+
+    // The material that stands for another one in the picture of the glow
+    private glowOf(material: THREE.Material) {
+        const source = material as THREE.MeshStandardMaterial;
+        if (!(material.userData.glow > 0) || !source.emissive) return this.darkMaterial;
+        let own = this.glowMaterials.get(material);
+        if (!own) {
+            own = new THREE.MeshBasicMaterial();
+            this.glowMaterials.set(material, own);
+            const forget = () => {
+                material.removeEventListener("dispose", forget);
+                this.glowMaterials.get(material)?.dispose();
+                this.glowMaterials.delete(material);
+            };
+            material.addEventListener("dispose", forget);
+        }
+        own.color.copy(source.emissive).multiplyScalar(source.emissiveIntensity * material.userData.glow);
+        own.side = material.side;
+        return own;
+    }
+
+    // The glow of the materials (their "glow" field), in any look and without one: draws the scene once more
+    // with the glowing surfaces in the color of their light and everything else black (so what stands in
+    // front hides the light), then adds that picture, spread, to `source`. Returns the target with the sum.
+    private drawGlow(scene: THREE.Scene, camera: THREE.Camera, source: THREE.WebGLRenderTarget, width: number, height: number) {
+        const { renderer } = this;
+        const swapped: [THREE.Mesh, THREE.Material | THREE.Material[]][] = [];
+        const hidden: THREE.Object3D[] = [];
+        scene.traverseVisible((object) => {
+            const mesh = object as THREE.Mesh;
+            // Particles, lines and what else is not a surface neither glows nor hides the glow
+            const drawn = mesh.isMesh || (object as THREE.Line).isLine || (object as THREE.Points).isPoints || (object as THREE.Sprite).isSprite;
+            if (!drawn || !object.layers.test(camera.layers)) return;
+            if (!mesh.isMesh || object.userData.skipNormal) hidden.push(object);
+            else swapped.push([mesh, mesh.material]);
+        });
+        hidden.forEach((object) => (object.visible = false));
+        for (const [mesh, material] of swapped) {
+            mesh.material = Array.isArray(material) ? material.map((one) => this.glowOf(one)) : this.glowOf(material);
+        }
+
+        const { background } = scene;
+        const clearColor = renderer.getClearColor(new THREE.Color());
+        const clearAlpha = renderer.getClearAlpha();
+        scene.background = null;
+        renderer.setClearColor(0x000000, 1);
+        renderer.setRenderTarget(this.glowTarget);
+        renderer.render(scene, camera);
+        scene.background = background;
+        renderer.setClearColor(clearColor, clearAlpha);
+        for (const [mesh, material] of swapped) mesh.material = material;
+        hidden.forEach((object) => (object.visible = true));
+
+        const u = this.glowPass.uniforms;
+        u.tColor.value = source.texture;
+        u.tGlow.value = this.glowTarget.texture;
+        u.resolution.value.set(width, height);
+        u.radius.value = Math.max(1, height * GLOW_RADIUS);
+        this.drawQuad(this.glowPass, this.litTarget);
+        return this.litTarget;
+    }
+
     // Lays the interface over what was drawn: after the effects, so they do not touch it, but in the big
     // pixels of the picture if the look has them (and does not say otherwise)
-    private drawUi(ui: UiLayer) {
+    drawUi(ui: UiLayer) {
         const { renderer, look } = this;
         const area = renderer.getViewport(new THREE.Vector4()).multiplyScalar(renderer.getPixelRatio());
         const pixel = look && look.pixelUi ? Math.max(1, look.pixelSize) : 1;
@@ -269,15 +386,24 @@ export class RenderPipeline {
         const height = Math.max(1, Math.round(size.y / Math.max(1, look?.pixelSize ?? 1)));
         this.surfaces.prepare(scene, camera, width, height, this.time);
 
+        // The glow of the materials does not wait for a look
+        const glows = this.glows(scene, camera);
+
         // Nothing to do to the picture: draw straight onto the canvas, exactly as without a pipeline
-        if (!look || (look.pixelSize <= 1 && this.passes.length === 0 && look.toneMapping === "none" && look.exposure === 1)) {
+        if (!glows && (!look || (look.pixelSize <= 1 && this.passes.length === 0 && look.toneMapping === "none" && look.exposure === 1))) {
             renderer.setRenderTarget(null);
             renderer.render(scene, camera);
             if (ui) this.drawUi(ui);
             return;
         }
 
-        for (const target of [this.sceneTarget, this.normalTarget, ...this.targets]) {
+        // A picture of full size keeps the smooth edges it has when drawn straight onto the canvas
+        const samples = (look?.pixelSize ?? 1) <= 1 ? 4 : 0;
+        if (this.sceneTarget.samples !== samples) {
+            this.sceneTarget.samples = samples;
+            this.sceneTarget.dispose();
+        }
+        for (const target of [this.sceneTarget, this.normalTarget, this.glowTarget, this.litTarget, ...this.targets]) {
             if (target.width !== width || target.height !== height) target.setSize(width, height);
         }
 
@@ -308,10 +434,11 @@ export class RenderPipeline {
             hidden.forEach((object) => (object.visible = true));
             renderer.setClearColor(clearColor, clearAlpha);
         }
+        let source = this.sceneTarget;
+        if (glows) source = this.drawGlow(scene, camera, source, width, height);
         snap?.restore();
 
         const perspective = camera as THREE.PerspectiveCamera;
-        let source = this.sceneTarget;
         this.passes.forEach((pass, i) => {
             const u = pass.material.uniforms;
             u.tColor.value = source.texture;
@@ -329,8 +456,8 @@ export class RenderPipeline {
         });
 
         this.outputMaterial.uniforms.tColor.value = source.texture;
-        this.outputMaterial.uniforms.toneMapping.value = Math.max(0, TONE_MAPPINGS.indexOf(look.toneMapping));
-        this.outputMaterial.uniforms.exposure.value = look.exposure;
+        this.outputMaterial.uniforms.toneMapping.value = Math.max(0, TONE_MAPPINGS.indexOf(look?.toneMapping ?? "none"));
+        this.outputMaterial.uniforms.exposure.value = look?.exposure ?? 1;
         (this.outputMaterial.uniforms.offset.value as THREE.Vector2).copy(snap?.offset ?? new THREE.Vector2());
         this.drawQuad(this.outputMaterial, null);
         if (ui) this.drawUi(ui);
@@ -339,7 +466,11 @@ export class RenderPipeline {
     dispose() {
         this.surfaces.restore();
         this.passes.forEach((pass) => pass.material.dispose());
-        [this.sceneTarget, this.normalTarget, ...this.targets].forEach((target) => {
+        this.darkMaterial.dispose();
+        this.glowMaterials.forEach((material) => material.dispose());
+        this.glowMaterials.clear();
+        this.glowPass.dispose();
+        [this.sceneTarget, this.normalTarget, this.glowTarget, this.litTarget, ...this.targets].forEach((target) => {
             target.depthTexture?.dispose();
             target.dispose();
         });

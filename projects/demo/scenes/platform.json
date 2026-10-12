@@ -1,0 +1,76 @@
+{
+  "version": 3,
+  "environment": { "sky": true, "ambientIntensity": 0.8 },
+  "entities": [
+    { "name": "Camera", "position": [0.5, 6, 12], "rotation": [-25, 0, 0], "components": [{ "type": "camera" }] },
+    {
+      "name": "Sun",
+      "position": [3, 6, 4],
+      "rotation": [-50, 30, 0],
+      "components": [{ "type": "light", "kind": "directional", "castShadow": true }]
+    },
+    {
+      "name": "Floor",
+      "position": [0, -0.5, 0],
+      "scale": [16, 1, 12],
+      "components": [{ "type": "mesh", "material": "Tiles" }, { "type": "collider" }]
+    },
+    {
+      "name": "Player",
+      "tag": "player",
+      "position": [-6, 1, 2],
+      "components": [
+        { "type": "mesh", "shape": "capsule" },
+        { "type": "collider", "shape": "capsule", "radius": 0.5, "height": 2, "layer": "Player" },
+        { "type": "script", "script": "walker" }
+      ]
+    },
+    {
+      "name": "Ledge",
+      "position": [-3, 0.125, 2],
+      "scale": [2, 0.25, 2],
+      "components": [{ "type": "mesh", "material": "Stone" }, { "type": "collider" }]
+    },
+    {
+      "name": "Block",
+      "position": [-1, 0.5, 2],
+      "scale": [2, 1, 2],
+      "components": [{ "type": "mesh", "material": "Bricks" }, { "type": "collider" }]
+    },
+    {
+      "name": "Ghost Wall",
+      "position": [2.5, 1, 2],
+      "scale": [0.3, 2, 4],
+      "components": [{ "type": "mesh", "material": "Glowing" }, { "type": "collider", "layer": "Ghost" }]
+    },
+    {
+      "name": "Wall",
+      "position": [-3, 1, -1.5],
+      "scale": [5, 2, 0.3],
+      "components": [{ "type": "mesh", "material": "Bricks" }, { "type": "collider" }]
+    },
+    {
+      "name": "Watcher",
+      "position": [-3, 2.6, -5],
+      "components": [
+        { "type": "label", "text": "...", "size": 0.4 },
+        { "type": "script", "script": "watcher" }
+      ],
+      "children": [
+        { "name": "Eye", "position": [0, -0.7, 0], "scale": [0.6, 0.6, 0.6], "components": [{ "type": "mesh", "shape": "sphere", "material": "Gold" }] }
+      ]
+    },
+    {
+      "name": "Portal",
+      "position": [6, 2.5, 2],
+      "components": [
+        { "type": "collider", "sizeY": 2, "centerY": -1.5, "solid": false },
+        { "type": "label", "text": "Visit", "size": 0.4 },
+        { "type": "script", "script": "portal", "params": { "scene": "platform" } }
+      ],
+      "children": [
+        { "name": "Frame", "position": [0, -1.5, 0], "scale": [0.2, 2, 1.4], "components": [{ "type": "mesh", "material": "Gold" }] }
+      ]
+    }
+  ]
+}

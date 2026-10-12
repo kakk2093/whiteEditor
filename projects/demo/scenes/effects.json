@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "environment": { "sky": true, "ambientIntensity": 0.7, "look": "Glow" },
+  "environment": { "sky": true, "ambientIntensity": 0.7 },
   "entities": [
     { "name": "Camera", "position": [0, 2.4, 8], "rotation": [-12, 0, 0], "components": [{ "type": "camera" }] },
     {

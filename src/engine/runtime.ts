@@ -12,6 +12,7 @@ import { SoundPlayer } from "./sound";
 import type { SoundHandle } from "./sound";
 import { setLabelText } from "./sprites";
 import { uiOf } from "./ui";
+import type { UiEvent } from "./ui";
 import type { ComponentData, Params, Vec3 } from "./types";
 
 interface Instance {
@@ -200,6 +201,9 @@ export class Runtime {
     // The camera the scene is seen through, for screenRay(); whoever runs the scene keeps it up to date
     camera: THREE.Camera | null = null;
 
+    // The page element over the picture (self.overlay); the Game gives it
+    overlay: HTMLElement | null = null;
+
     // What the behaviors keep from scene to scene (self.globals); whoever runs the scenes gives every one
     // of them the same object
     globals: Record<string, unknown> = {};
@@ -278,6 +282,9 @@ export class Runtime {
                 setEnvironment: (change) => this.onEnvironment(change),
                 get environment() {
                     return runtime.environment;
+                },
+                get overlay() {
+                    return runtime.overlay;
                 },
                 // Read through the runtime: the object is given after the behaviors are attached
                 get globals() {
@@ -450,6 +457,9 @@ export class Runtime {
     // For an object with a solid collider: a test that tells whether its collider, wherever it has got to, is
     // stopped by another solid one. undefined if the object has no solid collider, so nothing stops it.
     private obstacles(object: THREE.Object3D) {
+        // Where the object is now, not where it was drawn last: in the first frame nothing has been drawn
+        // yet, and a collider taken from the origin would count as stuck in the floor and fall through it
+        object.updateWorldMatrix(true, true);
         const mine = this.bodyOf(object);
         if (!mine?.solid) return undefined;
         const inside = new Set<THREE.Object3D>();
@@ -695,12 +705,15 @@ export class Runtime {
         this.processes = this.processes.filter((process) => process.running);
     }
 
-    // The Button of the object was clicked: its behaviors are told
-    click(object: THREE.Object3D) {
+    // Something happened to the interface element of the object (a Button clicked, a Slider or an Input Field
+    // changed, Enter in an Input Field): its behaviors are told through the hook of that name
+    uiEvent(event: UiEvent) {
         for (const instance of [...this.instances]) {
-            if (instance.self.object !== object || !instance.started || instance.failed) continue;
+            if (instance.self.object !== event.object || !instance.started || instance.failed) continue;
             try {
-                instance.def.click?.(instance.self);
+                if (event.hook === "click") instance.def.click?.(instance.self);
+                else if (event.hook === "change") instance.def.change?.(instance.self, event.value!);
+                else instance.def.submit?.(instance.self, String(event.value));
             } catch (e) {
                 instance.failed = true;
                 this.report(instance, e);

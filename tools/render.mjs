@@ -77,6 +77,7 @@ if (flags.state) options.state = true
 //   KeyD@0-1.5      the key is held from 0 to 1.5 s      Space@1     pressed at 1 s for a moment
 //   click:Play@2    a click on the object named Play     click:0.5,-0.2@2   on a point of the screen (-1..1)
 //   mouse:0.5,0@1   the mouse goes there                 Mouse2@1-2  the right button is held
+//   type:Ann\n@1    typed into the Input Field that was clicked ("_" is a space, "\n" Enter, "\b" Backspace)
 if (flags.input) {
   const TAP = 0.1
   options.inputs = []
@@ -92,6 +93,9 @@ if (flags.input) {
     const place = (text) => (/^-?[\d.]+,-?[\d.]+$/.test(text) ? text.split(',').map(Number) : text)
     if (what.startsWith('click:')) {
       options.inputs.push({ at: from, mouse: place(what.slice(6)), key: 'Mouse0', down: true }, { at: until, key: 'Mouse0', down: false })
+    } else if (what.startsWith('type:')) {
+      // Spaces cannot be written here: "_" stands for one; Enter ends the line with "type:Ann\n"
+      options.inputs.push({ at: from, type: what.slice(5).replace(/_/g, ' ').replace(/\\n/g, '\n').replace(/\\b/g, '\b') })
     } else if (what.startsWith('mouse:')) {
       options.inputs.push({ at: from, mouse: place(what.slice(6)) })
     } else {
@@ -274,7 +278,7 @@ try {
     for (const line of result.logs ?? []) console.log(`  ${line}`)
     if (result.state) {
       for (const e of result.state.entities) {
-        console.log(`  state: ${e.name}  [${e.position.join(', ')}]${e.scale ? `  scale [${e.scale.join(', ')}]` : ''}${e.active ? '' : '  inactive'}${e.text !== undefined ? `  text ${JSON.stringify(e.text)}` : ''}`)
+        console.log(`  state: ${e.name}  [${e.position.join(', ')}]${e.scale ? `  scale [${e.scale.join(', ')}]` : ''}${e.active ? '' : '  inactive'}${e.text !== undefined ? `  text ${JSON.stringify(e.text)}` : ''}${e.value !== undefined ? `  value ${e.value}` : ''}`)
       }
       if (Object.keys(result.state.globals).length > 0) console.log(`  globals: ${JSON.stringify(result.state.globals)}`)
     }

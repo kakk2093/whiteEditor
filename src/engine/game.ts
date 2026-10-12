@@ -97,6 +97,11 @@ export class Game {
     // The objects of the scene entities by entity id; of what is inside prefab instances by "<instance id>/<path>"
     private objects = new Map<string, THREE.Object3D>();
 
+    // A page element over the picture, for what is easier made with HTML and CSS than drawn (self.overlay):
+    // empty and see-through until a behavior puts something in. Whoever shows the game puts it into the page
+    // and over the picture (placeOverlay); it goes with the scene. null where there is no page.
+    readonly overlay: HTMLElement | null = null;
+
     // Builds its own objects; `data` is only read. `globals` is what the behaviors keep from scene to scene:
     // a game of several scenes gives each of them the same object. The same with `sound`: given the
     // player of the scene before, the music goes on.
@@ -120,6 +125,25 @@ export class Game {
         this.runtime.globals = globals;
         this.runtime.environment = this.environment;
         this.runtime.onEnvironment = (change) => this.setEnvironment(change);
+        if (typeof document !== "undefined") {
+            this.overlay = document.createElement("div");
+            this.overlay.className = "white-overlay";
+            // Lets the mouse through to the game; what is put inside asks for it back (pointer-events: auto)
+            Object.assign(this.overlay.style, { position: "absolute", overflow: "hidden", pointerEvents: "none" });
+            this.runtime.overlay = this.overlay;
+        }
+    }
+
+    // Puts the overlay over the picture: its place in the element it was added to, in pixels. Inside it
+    // var(--unit) is the length of one unit of the interface (of a canvas 540 units high), so what is sized
+    // with it keeps its part of the picture: font-size: calc(var(--unit) * 24).
+    placeOverlay(left: number, top: number, width: number, height: number) {
+        if (!this.overlay) return;
+        const place = `${left},${top},${width},${height}`;
+        if (this.overlay.dataset.place === place) return;
+        this.overlay.dataset.place = place;
+        Object.assign(this.overlay.style, { left: `${left}px`, top: `${top}px`, width: `${width}px`, height: `${height}px` });
+        this.overlay.style.setProperty("--unit", `${height / 540}px`);
     }
 
     start() {
@@ -133,7 +157,7 @@ export class Game {
         // A gamepad has to be asked what it holds
         this.input.poll();
         // The buttons first: a click is known to the behaviors in the same frame
-        for (const object of this.ui.update(this.aspect, this.input)) this.runtime.click(object);
+        for (const event of this.ui.update(this.aspect, this.input)) this.runtime.uiEvent(event);
         this.runtime.update(dt);
         this.input.endFrame();
         // A behavior may have spawned, destroyed or switched off the camera
@@ -225,6 +249,7 @@ export class Game {
 
     dispose() {
         this.runtime.dispose();
+        this.overlay?.remove();
         this.ui.dispose();
         if (this.ownSound) this.sound.dispose();
         else this.sound.endScene();

@@ -1,0 +1,12 @@
+{
+  "layers": [
+    "Player",
+    "Ghost"
+  ],
+  "noCollision": [
+    [
+      "Player",
+      "Ghost"
+    ]
+  ]
+}

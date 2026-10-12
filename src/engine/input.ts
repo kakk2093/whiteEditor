@@ -56,6 +56,13 @@ export class Input {
 
     mouseDY = 0;
 
+    // What was typed since the previous frame, for the input fields of the interface: the characters, with
+    // "\b" for Backspace and "\n" for Enter. A held key repeats here, as it does in any text field.
+    typed = "";
+
+    // How far the mouse wheel was turned since the previous frame; down is positive
+    wheel = 0;
+
     // Keys and mouse buttons that are held now
     private down = new Set<string>();
 
@@ -206,6 +213,11 @@ export class Input {
         }
     }
 
+    // Typed text, as the keyboard would give it
+    type(text: string) {
+        this.typed += text;
+    }
+
     setMouseButton(button: number, isDown: boolean) {
         if (button === 0) this.setPointer(0, this.mouseX, this.mouseY, isDown);
         else this.setKey(mouseCode(button), isDown);
@@ -255,6 +267,8 @@ export class Input {
         this.released.clear();
         this.mouseDX = 0;
         this.mouseDY = 0;
+        this.typed = "";
+        this.wheel = 0;
         for (const [id, state] of this.pointerStates) {
             state.pressed = false;
             state.released = false;
@@ -275,6 +289,13 @@ export class Input {
             if (isTyping(e.target)) return;
             if (SCROLL_KEYS.includes(e.code)) e.preventDefault();
             this.setKey(e.code, e.type === "keydown");
+            if (e.type !== "keydown" || e.ctrlKey || e.metaKey || e.altKey) return;
+            if (e.key.length === 1) this.typed += e.key;
+            else if (e.key === "Backspace") this.typed += "\b";
+            else if (e.key === "Enter") this.typed += "\n";
+        };
+        const onWheel = (e: WheelEvent) => {
+            this.wheel += e.deltaY;
         };
         const onPointer = (e: PointerEvent) => {
             const whole = element.getBoundingClientRect();
@@ -324,6 +345,7 @@ export class Input {
         window.addEventListener("blur", onBlur);
         element.addEventListener("pointerdown", onPointer);
         element.addEventListener("pointermove", onPointer);
+        element.addEventListener("wheel", onWheel, { passive: true });
         // On the window: the button may be released outside of the view
         window.addEventListener("pointerup", onPointer);
         window.addEventListener("pointercancel", onPointer);
@@ -334,6 +356,7 @@ export class Input {
             window.removeEventListener("blur", onBlur);
             element.removeEventListener("pointerdown", onPointer);
             element.removeEventListener("pointermove", onPointer);
+            element.removeEventListener("wheel", onWheel);
             window.removeEventListener("pointerup", onPointer);
             window.removeEventListener("pointercancel", onPointer);
             element.style.touchAction = touchAction;

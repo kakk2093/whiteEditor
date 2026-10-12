@@ -27,6 +27,8 @@ export interface PlayEvent {
     // Where the mouse goes: a point of the screen (-1..1, as Input gives it), or the name of an object: the
     // middle of its interface element, or the place of the object on the screen
     mouse?: [number, number] | string;
+    // Text typed on the keyboard ("\n" is Enter, "\b" Backspace): it goes to the Input Field that was clicked
+    type?: string;
 }
 
 // One entity of the scene after a run, for checking what the game has come to
@@ -37,8 +39,10 @@ export interface EntityState {
     active: boolean;
     // Its size in the world, if it is not 1, 1, 1
     scale?: Vec3;
-    // What its Text says, if it has one
+    // What its Text says, if it has one; for an Input Field, what was typed into it
     text?: string;
+    // The value of its Slider
+    value?: number;
 }
 
 export interface StillOptions {
@@ -115,6 +119,7 @@ export function renderStill(registry: Registry, data: SceneData, options: StillO
             } else if (event.mouse) {
                 game.input.setMouse(event.mouse[0], event.mouse[1]);
             }
+            if (event.type) game.input.type(event.type);
             const button = /^Mouse(\d)$/.exec(event.key ?? "");
             if (button) game.input.setMouseButton(Number(button[1]), event.down ?? true);
             else if (event.key) game.input.setKey(event.key, event.down ?? true);
@@ -138,11 +143,13 @@ export function renderStill(registry: Registry, data: SceneData, options: StillO
         const visit = (object: THREE.Object3D, active: boolean) => {
             const shown = active && object.visible;
             if (object.userData.entityId !== undefined || object.userData.innerId !== undefined) {
-                const text = uiOf(object)?.text?.text;
+                const element = uiOf(object);
+                const text = element?.input?.text ?? element?.text?.text;
+                const value = element?.slider?.value;
                 const position = object.getWorldPosition(new THREE.Vector3()).toArray().map((n) => Math.round(n * 1000) / 1000) as Vec3;
                 const scale = object.getWorldScale(new THREE.Vector3()).toArray().map((n) => Math.round(n * 1000) / 1000) as Vec3;
                 const scaled = scale.some((n) => n !== 1);
-                entities.push({ name: object.name, position, active: shown, ...(scaled ? { scale } : {}), ...(text !== undefined ? { text } : {}) });
+                entities.push({ name: object.name, position, active: shown, ...(scaled ? { scale } : {}), ...(text !== undefined ? { text } : {}), ...(value !== undefined ? { value } : {}) });
             }
             for (const child of object.children) {
                 if (child.userData.component === undefined) visit(child, shown);
@@ -247,6 +254,7 @@ export function runGame(container: HTMLElement, registry: Registry, scenes: Scen
         canvas.style.top = `${area.top}px`;
         renderer.setSize(area.width, area.height);
         game.resize(area.width, area.height);
+        game.placeOverlay(area.left, area.top, area.width, area.height);
     };
 
     // Starts a scene; the one that was running is taken down first
@@ -259,6 +267,7 @@ export function runGame(container: HTMLElement, registry: Registry, scenes: Scen
         pipeline.setLook(shownLook ? resolveLook(registry, shownLook) : null, registry);
         game.runtime.onError = (message) => showMessage(container, message);
         detachInput = game.input.attach(canvas);
+        if (game.overlay) container.appendChild(game.overlay);
         showMessage(container, game.camera ? "" : `The scene "${name}" has no active object with a Camera component.`);
         resize();
         game.start();

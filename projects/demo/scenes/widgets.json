@@ -1,0 +1,147 @@
+{
+  "version": 3,
+  "environment": { "background": "#27405c", "ambientIntensity": 0.8 },
+  "entities": [
+    { "name": "Camera", "position": [0, 2.2, 6], "rotation": [-15, 0, 0], "components": [{ "type": "camera" }] },
+    {
+      "name": "Sun",
+      "position": [3, 6, 4],
+      "rotation": [-50, 30, 0],
+      "components": [{ "type": "light", "kind": "directional", "castShadow": true }]
+    },
+    { "name": "Floor", "scale": [12, 1, 12], "components": [{ "type": "mesh", "shape": "plane", "material": "Tiles" }] },
+    {
+      "name": "Cube",
+      "position": [-2.2, 0.8, 0],
+      "components": [
+        { "type": "mesh", "material": "Bricks" },
+        { "type": "script", "script": "spin", "params": { "speed": 45 } },
+        { "type": "script", "script": "htmlBadge" }
+      ]
+    },
+    {
+      "name": "HUD",
+      "components": [{ "type": "canvas" }],
+      "children": [
+        {
+          "name": "Panel",
+          "components": [
+            { "type": "ui", "anchor": "right", "x": -24, "width": 300, "height": -48 },
+            { "type": "image", "color": "#101820", "opacity": 0.85 },
+            { "type": "layout", "gap": 10, "padding": 14, "align": "stretch" }
+          ],
+          "children": [
+            {
+              "name": "Title",
+              "components": [
+                { "type": "ui", "height": 30 },
+                { "type": "text", "text": "Speed: 45", "size": 20, "align": "left" }
+              ]
+            },
+            {
+              "name": "Speed",
+              "components": [
+                { "type": "ui", "height": 22 },
+                { "type": "image", "color": "#2a3b4d" },
+                { "type": "slider", "value": 45, "min": 0, "max": 360, "step": 15 },
+                { "type": "script", "script": "echo", "params": { "label": "Title", "prefix": "Speed: ", "spin": "Cube" } }
+              ]
+            },
+            {
+              "name": "Name",
+              "components": [
+                { "type": "ui", "height": 34 },
+                { "type": "image", "color": "#0a1118" },
+                { "type": "text", "size": 18 },
+                { "type": "input", "placeholder": "Your name, then Enter", "max": 16 },
+                { "type": "script", "script": "echo", "params": { "label": "Greeting", "prefix": "Hello, ", "onSubmit": true } }
+              ]
+            },
+            {
+              "name": "Greeting",
+              "components": [
+                { "type": "ui", "height": 26 },
+                { "type": "text", "text": "Hello, ...", "size": 16, "color": "#c8d4e0", "align": "left" }
+              ]
+            },
+            {
+              "name": "List",
+              "components": [
+                { "type": "ui", "height": 130 },
+                { "type": "image", "color": "#0a1118" },
+                { "type": "scroll" },
+                { "type": "layout", "gap": 4, "padding": 6, "align": "stretch" }
+              ],
+              "children": [
+                {
+                  "name": "Row 1",
+                  "components": [
+                    { "type": "ui", "width": 0, "height": 28 },
+                    { "type": "image", "color": "#1a2c40" },
+                    { "type": "text", "text": "Row 1", "size": 16 }
+                  ]
+                },
+                {
+                  "name": "Row 2",
+                  "components": [
+                    { "type": "ui", "width": 0, "height": 28 },
+                    { "type": "image", "color": "#22384f" },
+                    { "type": "text", "text": "Row 2", "size": 16 }
+                  ]
+                },
+                {
+                  "name": "Row 3",
+                  "components": [
+                    { "type": "ui", "width": 0, "height": 28 },
+                    { "type": "image", "color": "#1a2c40" },
+                    { "type": "text", "text": "Row 3", "size": 16 }
+                  ]
+                },
+                {
+                  "name": "Row 4",
+                  "components": [
+                    { "type": "ui", "width": 0, "height": 28 },
+                    { "type": "image", "color": "#22384f" },
+                    { "type": "text", "text": "Row 4", "size": 16 }
+                  ]
+                },
+                {
+                  "name": "Row 5",
+                  "components": [
+                    { "type": "ui", "width": 0, "height": 28 },
+                    { "type": "image", "color": "#1a2c40" },
+                    { "type": "text", "text": "Row 5", "size": 16 }
+                  ]
+                },
+                {
+                  "name": "Row 6",
+                  "components": [
+                    { "type": "ui", "width": 0, "height": 28 },
+                    { "type": "image", "color": "#22384f" },
+                    { "type": "text", "text": "Row 6", "size": 16 }
+                  ]
+                },
+                {
+                  "name": "Row 7",
+                  "components": [
+                    { "type": "ui", "width": 0, "height": 28 },
+                    { "type": "image", "color": "#1a2c40" },
+                    { "type": "text", "text": "Row 7", "size": 16 }
+                  ]
+                },
+                {
+                  "name": "Row 8",
+                  "components": [
+                    { "type": "ui", "width": 0, "height": 28 },
+                    { "type": "image", "color": "#22384f" },
+                    { "type": "text", "text": "Row 8", "size": 16 }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

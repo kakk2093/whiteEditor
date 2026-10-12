@@ -89,7 +89,7 @@ function marker(key: string, fields: Params) {
 }
 
 // The components of the interface that need a UI Element next to them
-export const UI_PARTS = ["text", "image", "button"];
+export const UI_PARTS = ["text", "image", "button", "layout", "slider", "input", "scroll"];
 
 // The built-in component types; the Inspector is generated from `fields`
 export const componentDefs: Record<string, ComponentDef> = {
@@ -351,9 +351,10 @@ export const componentDefs: Record<string, ComponentDef> = {
             // canvas says): x to the right, y down
             x: { type: "number", default: 0, step: 1 },
             y: { type: "number", default: 0, step: 1 },
-            // 0: as wide, as high, as the parent
-            width: { type: "number", default: 200, min: 0, step: 1 },
-            height: { type: "number", default: 50, min: 0, step: 1 },
+            // 0: as wide, as high, as the parent; below 0: the parent with so much taken off (-20 leaves 10 on
+            // either side of an element anchored at the center)
+            width: { type: "number", default: 200, step: 1 },
+            height: { type: "number", default: 50, step: 1 },
         },
         create: (f) => marker("ui", f),
     },
@@ -398,6 +399,61 @@ export const componentDefs: Record<string, ComponentDef> = {
             enabled: { type: "boolean", default: true },
         },
         create: (f) => marker("uiButton", f),
+    },
+    // Puts the child elements one after another, each next to the previous one; their own anchor, x and y
+    // do not count, their sizes do
+    layout: {
+        label: "Layout",
+        fields: {
+            direction: { type: "select", default: "column", options: ["column", "row"] },
+            // Between the children, and from the edges of the element to them
+            gap: { type: "number", default: 8, min: 0, step: 1 },
+            padding: { type: "number", default: 0, min: 0, step: 1 },
+            // Across the line: at its start (the left of a column, the top of a row), in the middle, at the
+            // end, or stretched from side to side
+            align: { type: "select", default: "start", options: ["start", "center", "end", "stretch"] },
+        },
+        create: (f) => marker("uiLayout", f),
+    },
+    // A value set by dragging along the element: the behaviors of the entity get change(self, value)
+    slider: {
+        label: "Slider",
+        fields: {
+            value: { type: "number", default: 0.5, step: 0.05 },
+            min: { type: "number", default: 0, step: 0.1 },
+            max: { type: "number", default: 1, step: 0.1 },
+            // The value goes in steps of this; 0: any value
+            step: { type: "number", default: 0, min: 0, step: 0.05 },
+            enabled: { type: "boolean", default: true },
+            // The part of the element up to the value, and the knob at it
+            fill: { type: "color", default: "#4d9cff" },
+            knob: { type: "color", default: "#ffffff" },
+        },
+        create: (f) => marker("uiSlider", f),
+    },
+    // A line of text the player types, shown by the Text of the same entity: a click on the element takes the
+    // keyboard, the behaviors get change(self, text) at every letter and submit(self, text) at Enter
+    input: {
+        label: "Input Field",
+        fields: {
+            text: { type: "string", default: "" },
+            // Shown, paler, while there is no text
+            placeholder: { type: "string", default: "Type here" },
+            // The longest text, in characters; 0: any
+            max: { type: "number", default: 32, min: 0, step: 1 },
+            enabled: { type: "boolean", default: true },
+        },
+        create: (f) => marker("uiInput", f),
+    },
+    // Shows only what of its child elements is inside it; the rest comes by dragging or by the mouse wheel
+    scroll: {
+        label: "Scroll",
+        fields: {
+            // How far the content has gone up, in the units of the interface
+            offset: { type: "number", default: 0, min: 0, step: 10 },
+            enabled: { type: "boolean", default: true },
+        },
+        create: (f) => marker("uiScroll", f),
     },
     // A model built by a project script (defineModel)
     model: {

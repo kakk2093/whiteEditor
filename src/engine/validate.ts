@@ -248,6 +248,8 @@ function checkEntity(entity: EntityData, path: string, registry: Registry, ids: 
         if (keys.has(part) && !keys.has("ui")) problems.push(`${where} [${part}]: is drawn only with a UI Element next to it: add { "type": "ui" }`);
     }
 
+    if (keys.has("input") && !keys.has("text")) problems.push(`${where} [input]: what is typed is shown by a Text next to it: add { "type": "text" }`);
+
     if (keys.has("body")) {
         const collider = entity.components.find((component) => component.type === "collider");
         if (!collider) problems.push(`${where} [body]: needs a shape: add a Collider, { "type": "collider" }`);

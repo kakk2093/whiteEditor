@@ -217,6 +217,10 @@ export interface BehaviorSelf<P = Params, S = unknown> {
     ui: (object?: THREE.Object3D) => UiElement | null;
     // Sets what the Text component of this object (or of the one given) says; a Label in the world, too
     setText: (text: string | number, object?: THREE.Object3D) => void;
+    // A page element over the picture of the game, for interface made with HTML and CSS: add elements to it
+    // (they need "pointer-events: auto" to be clicked), it is emptied with the scene. var(--unit) inside it is
+    // one unit of the interface. null where there is no page to show it on.
+    overlay: HTMLElement | null;
     // What lives on from scene to scene, for as long as the game runs: the score, what was collected.
     // Any behavior of any scene reads and writes the same object: self.globals.coins = 3.
     globals: Record<string, unknown>;
@@ -246,6 +250,10 @@ export interface BehaviorDef {
     exit?: (self: BehaviorSelf, other: THREE.Object3D) => void;
     // The Button of the object was clicked: the mouse (or a finger) went down and up on it
     click?: (self: BehaviorSelf) => void;
+    // The Slider of the object was dragged to another value, or the text of its Input Field was typed in
+    change?: (self: BehaviorSelf, value: number | string) => void;
+    // Enter was pressed in the Input Field of the object
+    submit?: (self: BehaviorSelf, value: string) => void;
 }
 
 // Used by project scripts:
@@ -260,6 +268,8 @@ export function defineBehavior<P extends Record<string, ParamDef> = Record<strin
     enter?: (self: BehaviorSelf<{ [K in keyof P]: ParamType<P[K]> }, S>, other: THREE.Object3D) => void;
     exit?: (self: BehaviorSelf<{ [K in keyof P]: ParamType<P[K]> }, S>, other: THREE.Object3D) => void;
     click?: (self: BehaviorSelf<{ [K in keyof P]: ParamType<P[K]> }, S>) => void;
+    change?: (self: BehaviorSelf<{ [K in keyof P]: ParamType<P[K]> }, S>, value: number | string) => void;
+    submit?: (self: BehaviorSelf<{ [K in keyof P]: ParamType<P[K]> }, S>, value: string) => void;
 }): BehaviorDef {
     return { kind: "behavior", ...def } as BehaviorDef;
 }

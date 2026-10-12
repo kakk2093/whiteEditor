@@ -912,6 +912,11 @@ class SceneStore {
         return this.game?.ui ?? null;
     }
 
+    // The running game, for the viewport to show its overlay (self.overlay); null if nothing runs
+    get runningGame() {
+        return this.game;
+    }
+
     setMuted(muted: boolean) {
         this.muted = muted;
         if (this.game) this.game.sound.volume = muted ? 0 : 1;
