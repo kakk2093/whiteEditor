@@ -398,6 +398,27 @@ export function projectsPlugin(dir = 'projects'): Plugin {
         }
       })
 
+      // POST /__api/editor <- an open editor page tells what it shows (src/editor/core/report.ts)
+      // GET  /__api/editor -> what every open page told last, the latest first: `npm run editor` prints it
+      const pages = new Map<string, { at: number } & Record<string, unknown>>()
+      server.middlewares.use('/__api/editor', async (req, res) => {
+        res.setHeader('Content-Type', 'application/json')
+        if (req.method === 'POST') {
+          const chunks: Buffer[] = []
+          for await (const chunk of req) chunks.push(chunk as Buffer)
+          try {
+            const state = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as Record<string, unknown>
+            if (typeof state.tab === 'string') pages.set(state.tab, { ...state, at: Date.now() })
+          } catch {
+            res.statusCode = 400
+          }
+          return res.end('{}')
+        }
+        // A page that has been silent for a day was closed long ago
+        for (const [tab, page] of pages) if (Date.now() - page.at > 24 * 3600 * 1000) pages.delete(tab)
+        res.end(JSON.stringify([...pages.values()].sort((a, b) => b.at - a.at)))
+      })
+
       // /__game/demo/ -> the built game of the project, served as it is (Vite would treat it as source)
       server.middlewares.use('/__game', async (req, res, next) => {
         const pathname = decodeURIComponent((req.url ?? '/').split('?')[0])

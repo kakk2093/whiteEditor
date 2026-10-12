@@ -83,14 +83,15 @@ export const clicker = defineBehavior({
     name: "clicker",
     label: "Clicker",
     params: {
-        // Name of the object whose Text shows the count
-        label: { type: "string", default: "Score" },
+        // The object whose Text shows the count
+        label: { type: "asset", kind: "object", default: "Score" },
         sound: { type: "asset", kind: "sound", default: "coin.wav" },
     },
     start: () => ({ count: 0 }),
     click: (self) => {
         self.state.count++;
-        const label = self.find({ name: self.params.label });
+        // A param of kind "object" is the object itself, or null if the scene has none of that name
+        const { label } = self.params;
         if (label) self.setText(`Score: ${self.state.count}`, label);
         if (self.params.sound) self.playSound(self.params.sound, { volume: 0.4 });
     },

@@ -64,8 +64,14 @@ async function loadScripts(project: string) {
 export async function openProject(name: string) {
     try {
         sceneStore.closePrefab();
+        // The scene of the project that was open would be built again with what the new one has, and
+        // complain about every prefab and material it does not find there
+        if (sceneStore.project && sceneStore.project !== name) sceneStore.newScene();
         const errors = await loadScripts(name);
         const scenes = await listAssets(name, "scenes");
+        // The store still holds the scenes of the project that was open, and gave them to the new registry:
+        // the scene about to be loaded must be checked against the scenes of this project
+        sceneStore.registry.setScenes(scenes);
         const last = localStorage.getItem(lastSceneKey(name));
         const first = last && scenes.includes(last) ? last : scenes[0];
 

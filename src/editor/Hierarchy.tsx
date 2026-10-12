@@ -280,10 +280,11 @@ export default function Hierarchy() {
                         {spawned.slice(0, 200).map((item, i) => (
                             <div
                                 key={`${item.id}:${i}`}
-                                className="tree-row spawned"
+                                className={`tree-row spawned ${store.inspected === item.object ? "selected" : ""}`}
                                 style={{ paddingLeft: 6 }}
-                                title="Created by a behavior · click to bring the camera to it (in the Scene view)"
-                                onClick={() => store.focusObject(item.object)}
+                                title="Created by a behavior · click to see it in the Inspector · double-click brings the camera to it (in the Scene view)"
+                                onClick={() => store.inspect(item.object)}
+                                onDoubleClick={() => store.focusObject(item.object)}
                             >
                                 <span className="twisty" />
                                 <Icon name="cube" />

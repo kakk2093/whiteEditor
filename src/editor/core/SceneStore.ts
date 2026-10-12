@@ -17,6 +17,7 @@ import {
     expandPristine,
     findComponent,
     findInExpanded,
+    entityNames,
     fitAspect,
     Game,
     generateId,
@@ -32,6 +33,7 @@ import {
 import type {
     ComponentData, EntityData, EntityOverride, EnvironmentData, ParamValue, Params, PrefabData, SceneData
 } from "../../engine";
+import { renameInEntities } from "./references";
 
 type Listener = () => void;
 
@@ -62,6 +64,11 @@ interface Found {
     parent: EntityData | null;
     parentId: string | null;
     siblings: EntityData[];
+}
+
+// How many entities of the tree have this name
+function countNamed(list: EntityData[], name: string): number {
+    return list.reduce((sum, entity) => sum + Number(entity.name === name) + countNamed(entity.children ?? [], name), 0);
 }
 
 function findEntity(list: EntityData[], id: string, parent: EntityData | null = null, parentId: string | null = null): Found | null {
@@ -460,6 +467,8 @@ class SceneStore {
             return;
         }
         this.record();
+        // What the params of kind "object" can name: the objects of what is open
+        this.registry.setObjects(entityNames(this.entities, this.registry));
         this.version++;
         this.listeners.forEach((fn) => fn());
     }
@@ -1397,6 +1406,27 @@ class SceneStore {
         return list;
     }
 
+    // An object of the running game that is looked at in the Inspector instead of a selected entity: one
+    // the behaviors have created, which the data of the scene knows nothing about
+    private inspectedObject: THREE.Object3D | null = null;
+
+    // null once the game is over or the object is gone from it
+    get inspected() {
+        const object = this.inspectedObject;
+        if (!object || !this.game) return null;
+        for (let o: THREE.Object3D | null = object; o; o = o.parent) if (o === this.game.root) return object;
+        return null;
+    }
+
+    inspect(object: THREE.Object3D | null) {
+        this.inspectedObject = object;
+        if (object) {
+            this.selectedId = null;
+            this.selectedAsset = null;
+        }
+        this.notify();
+    }
+
     // Brings the editor camera to any object of what the viewport shows
     focusObject(object: THREE.Object3D) {
         this.focusHandler?.(object);
@@ -1412,6 +1442,7 @@ class SceneStore {
 
     // `add` (Ctrl or Shift held) keeps what is selected and adds this entity, or takes it out if it is in
     select(id: string | null, add = false) {
+        this.inspectedObject = null;
         if (add) {
             if (!id) return;
             this.selectedIds = this.selectedIds.includes(id) ? this.selectedIds.filter((other) => other !== id) : [...this.selectedIds, id];
@@ -1423,6 +1454,7 @@ class SceneStore {
     }
 
     selectAsset(asset: AssetRef | null) {
+        if (asset) this.inspectedObject = null;
         this.selectedAsset = asset;
         this.selectedId = null;
         this.notify();
@@ -1600,6 +1632,11 @@ class SceneStore {
         }
         if (!found || !obj) return;
         const { entity } = found;
+        // What named this object by its name (params of kind "object") names it still, unless another
+        // object has the same name
+        const old = entity.name;
+        const namesakes = entityNames(this.entities, this.registry).includes(old) ? countNamed(this.entities, old) : 0;
+        if (old && old !== name && namesakes === 1) renameInEntities(this.registry, this.entities, "object", old, name);
         if (id.includes("/")) {
             // One a prefab instance adds: its name is a part of its id and must not be a neighbor's
             entity.name = this.uniqueName(name, found.parentId, entity);

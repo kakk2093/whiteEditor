@@ -31,6 +31,11 @@ function checkValue(def: ParamDef, value: unknown, registry: Registry): string |
             return def.options.includes(value as string) ? null : `must be one of: ${def.options.join(", ")}`;
         case "asset":
             if (value === "") return null;
+            if (def.kind === "object") {
+                if (typeof value !== "string") return "must be the name of an object";
+                if (!registry.objectsKnown || registry.assetNames("object").includes(value)) return null;
+                return `there is no object named "${value}" in the scene`;
+            }
             if (registry.assetNames(def.kind).includes(value as string)) return null;
             if (def.kind === "layer") {
                 if (value === DEFAULT_LAYER) return null;
@@ -273,10 +278,31 @@ function containsItself(registry: Registry, entity: EntityData, stack: string[])
     return entity.children.some((child) => containsItself(registry, child, stack));
 }
 
+// The names of the objects of a scene, those the prefab instances bring included
+export function entityNames(entities: Partial<EntityData>[], registry: Registry, seen: string[] = []): string[] {
+    const names = new Set<string>();
+    const visit = (list: Partial<EntityData>[], prefabs: string[]) => {
+        for (const entity of list) {
+            if (entity.name) names.add(entity.name);
+            visit(entity.children ?? [], prefabs);
+            for (const override of Object.values(entity.overrides ?? {})) {
+                if (override.name) names.add(override.name);
+                visit(override.addChildren ?? [], prefabs);
+            }
+            const root = entity.prefab && !prefabs.includes(entity.prefab) ? registry.getPrefab(entity.prefab) : undefined;
+            if (root && entity.prefab) visit(root.children ?? [], [...prefabs, entity.prefab]);
+        }
+    };
+    visit(entities, seen);
+    return [...names].sort();
+}
+
 export function validatePrefab(name: string, data: PrefabData, registry: Registry): string[] {
     const problems: string[] = [];
     if (data.root.prefab) problems.push(`root: the root of a prefab cannot itself be a prefab instance`);
-    // Where its instances will stand is not known here: a prefab of one button is fine
+    // Where its instances will stand is not known here: a prefab of one button is fine, and an object it
+    // names may be one of the scene
+    registry.setObjects(null);
     checkEntity(data.root, "", registry, new Set(), problems, true);
     if (containsItself(registry, data.root, [name])) problems.push(`prefab "${name}" contains itself`);
     return problems;
@@ -343,6 +369,8 @@ export function validateScene(data: SceneData, registry: Registry): string[] {
     const problems: string[] = [];
     checkFields(environmentFields, data.environment ?? {}, "environment", registry, problems);
 
+    // What the params of kind "object" can name
+    registry.setObjects(entityNames(data.entities, registry));
     const ids = new Set<string>();
     for (const entity of data.entities) checkEntity(entity, "", registry, ids, problems);
     return problems;

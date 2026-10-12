@@ -1,5 +1,6 @@
-import { useRef, useState } from "react";
-import type { MouseEvent, ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
+import * as THREE from "three";
+import type { DragEvent, MouseEvent, ReactNode } from "react";
 import {
     ASPECTS, builtinEffects, builtinSurfaces, componentDefs, componentKey, DEFAULT_LAYER, environmentFields, fieldApplies, layersCollide, lookFields, materialFields,
     MAX_COLORS, paramDefaults, resolveLook, setLayersCollide
@@ -10,7 +11,7 @@ import type {
 import {
     addToLook, applyOverrides, createPrefab, deleteLook, deleteMaterial, deletePrefab, deleteScene, deleteTexture, openPrefab, openScene, renameAsset, renameLayer, renameScene, updateLook, updateMaterial, updateSettings
 } from "./core/actions";
-import { instantiateModel, instantiatePrefab } from "./core/dnd";
+import { ENTITY_DRAG_TYPE, instantiateModel, instantiatePrefab } from "./core/dnd";
 import { confirmAt, openContextMenu } from "./contextMenu";
 import { getComponent, sceneStore } from "./core/SceneStore";
 import type { AssetRef, TransformProperty } from "./core/SceneStore";
@@ -205,16 +206,33 @@ function ParamField({ def, value, mixed = false, onChange }: {
                     ))}
                 </select>
             );
-        case "asset":
+        case "asset": {
+            const names = sceneStore.registry.assetNames(def.kind);
+            // An object of the scene can also be dropped here from the Hierarchy
+            const drop = def.kind === "object" ? {
+                title: "An object of the scene, by name · drop one here from the Hierarchy",
+                onDragOver: (e: DragEvent<HTMLSelectElement>) => {
+                    if (e.dataTransfer.types.includes(ENTITY_DRAG_TYPE)) e.preventDefault();
+                },
+                onDrop: (e: DragEvent<HTMLSelectElement>) => {
+                    const name = sceneStore.findEntity(e.dataTransfer.getData(ENTITY_DRAG_TYPE))?.name;
+                    if (!name) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onChange(name);
+                },
+            } : {};
             return (
-                <select className="select" value={mixed ? MIXED_OPTION : value as string} onChange={(e) => onChange(e.target.value)}>
+                <select className="select" value={mixed ? MIXED_OPTION : value as string} onChange={(e) => onChange(e.target.value)} {...drop}>
                     {mixedOption}
                     <option value="">{def.kind === "material" ? "Default (gray)" : def.kind === "layer" ? DEFAULT_LAYER : "(none)"}</option>
-                    {sceneStore.registry.assetNames(def.kind).map((name) => (
+                    {/* A name the scene no longer has stays visible, so that it is seen to be wrong */}
+                    {(def.kind === "object" && value && !names.includes(value as string) ? [...names, value as string] : names).map((name) => (
                         <option key={name} value={name}>{name}</option>
                     ))}
                 </select>
             );
+        }
         case "string":
             return (
                 <input
@@ -1307,16 +1325,131 @@ export function LayersSection() {
     );
 }
 
+// Short text of any value a behavior holds
+function preview(value: unknown): string {
+    if (value === undefined) return "—";
+    if (typeof value === "function") return "function";
+    if (value instanceof THREE.Object3D) return `object "${value.name}"`;
+    try {
+        const text = JSON.stringify(value, (_key, inner) => (inner instanceof THREE.Object3D ? `object "${inner.name}"` : typeof inner === "function" ? "function" : inner));
+        return text.length > 160 ? `${text.slice(0, 160)}…` : text;
+    } catch {
+        return String(value);
+    }
+}
+
+// An object of the running game that the scene data does not know: one a behavior has created (self.spawn).
+// What is shown is the object itself, as it is now; what is changed here changes it, until Play stops.
+function LiveInspector({ object }: { object: THREE.Object3D }) {
+    const [, refresh] = useState(0);
+    // The game moves the object, the Inspector follows
+    useEffect(() => {
+        const timer = window.setInterval(() => refresh((n) => n + 1), 250);
+        return () => window.clearInterval(timer);
+    }, []);
+
+    const game = sceneStore.runningGame;
+    const rows = [
+        { title: "Position", read: (i: number) => object.position.getComponent(i), write: (i: number, value: number) => object.position.setComponent(i, value), step: 0.1 },
+        {
+            title: "Rotation",
+            read: (i: number) => THREE.MathUtils.radToDeg([object.rotation.x, object.rotation.y, object.rotation.z][i]),
+            write: (i: number, value: number) => {
+                const angles = [object.rotation.x, object.rotation.y, object.rotation.z];
+                angles[i] = THREE.MathUtils.degToRad(value);
+                object.rotation.set(angles[0], angles[1], angles[2]);
+            },
+            step: 5,
+        },
+        { title: "Scale", read: (i: number) => object.scale.getComponent(i), write: (i: number, value: number) => object.scale.setComponent(i, value), step: 0.1 },
+    ];
+    const parts = object.children.map((child) => child.userData.component as string | undefined).filter((key) => key && !key.startsWith("script"));
+    const behaviors = game?.runtime.behaviorsOf(object) ?? [];
+    const pairs = (values: unknown) => (values && typeof values === "object" ? Object.keys(values).map((key) => [key, (values as Record<string, unknown>)[key]] as const) : []);
+
+    return (
+        <>
+            <div className="inspector-head">
+                <Icon name="cube" /> <b>{object.name}</b>
+                <span className="live-note" title="A behavior has created this object (self.spawn). It is not in the scene file and is gone when Play stops">created in Play</span>
+                <span style={{ flex: 1 }} />
+                <button className="btn ghost" title="Bring the camera to it (in the Scene view)" onClick={() => sceneStore.focusObject(object)}>
+                    <Icon name="camera" />
+                </button>
+                <button
+                    className="btn ghost danger"
+                    title="Remove it from the running game"
+                    onClick={() => {
+                        game?.runtime.destroy(object);
+                        sceneStore.inspect(null);
+                    }}
+                >
+                    <Icon name="trash" />
+                </button>
+            </div>
+            <div className="field">
+                <label>Active</label>
+                <div className="control">
+                    <input className="checkbox" type="checkbox" checked={object.visible} onChange={(e) => {
+                        object.visible = e.target.checked;
+                        refresh((n) => n + 1);
+                    }} />
+                </div>
+            </div>
+            {object.userData.tag && (
+                <div className="field"><label>Tag</label><div className="control">{String(object.userData.tag)}</div></div>
+            )}
+            <Section title="Transform">
+                {rows.map((row) => (
+                    <div key={row.title} className="field">
+                        <label>{row.title}</label>
+                        <div className="control">
+                            {AXES.map((axis, i) => (
+                                <div key={axis} className={`axis ${axis}`}>
+                                    <span>{axis.toUpperCase()}</span>
+                                    <NumberInput value={Math.round(row.read(i) * 1000) / 1000} step={row.step} onChange={(value) => row.write(i, value)} />
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                ))}
+            </Section>
+            {parts.length > 0 && (
+                <Section title="Components">
+                    <div className="live-text">{parts.join(", ")}</div>
+                </Section>
+            )}
+            {behaviors.map((behavior) => (
+                <Section key={behavior.name} title={`Script · ${behavior.name}${behavior.failed ? " (stopped: it threw)" : ""}`}>
+                    {pairs(behavior.params).map(([key, value]) => (
+                        <div key={`p:${key}`} className="field"><label>{key}</label><div className="control live-text">{preview(value)}</div></div>
+                    ))}
+                    {behavior.state !== undefined && (
+                        pairs(behavior.state).length > 0
+                            ? pairs(behavior.state).map(([key, value]) => (
+                                <div key={`s:${key}`} className="field"><label title="A value of self.state">state.{key}</label><div className="control live-text">{preview(value)}</div></div>
+                            ))
+                            : <div className="field"><label>state</label><div className="control live-text">{preview(behavior.state)}</div></div>
+                    )}
+                </Section>
+            ))}
+        </>
+    );
+}
+
 export default function Inspector() {
     const store = useSceneStore();
     const selected = store.selected;
     const asset = store.selectedAsset;
+    const live = store.inspected;
 
     return (
         <div className="panel right">
             <div className="panel-header">Inspector</div>
             <div className="panel-body">
-                {asset ? (
+                {live ? (
+                    <LiveInspector key={live.uuid} object={live} />
+                ) : asset ? (
                     <AssetInspector key={`${asset.kind}:${asset.name}:${store.restores}`} asset={asset} />
                 ) : store.selectedIds.length > 1 ? (
                     <MultiInspector

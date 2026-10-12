@@ -757,6 +757,14 @@ export class Runtime {
         this.processes = this.processes.filter((process) => process.running);
     }
 
+    // The behaviors that run on an object, with what they hold now: for whoever wants to look at a running
+    // game (the editor shows it for the objects created in Play)
+    behaviorsOf(object: THREE.Object3D) {
+        return this.instances
+            .filter((instance) => instance.self.object === object)
+            .map((instance) => ({ name: instance.def.name, params: instance.self.params, state: instance.self.state, failed: instance.failed }));
+    }
+
     // Something happened to the interface element of the object (a Button clicked, a Slider or an Input Field
     // changed, Enter in an Input Field): its behaviors are told through the hook of that name
     uiEvent(event: UiEvent) {
@@ -798,6 +806,22 @@ export class Runtime {
         if (instance.source !== component.params) {
             instance.source = component.params;
             self.params = { ...paramDefaults(def.params ?? {}), ...(component.params as Params | undefined) };
+            // A param of kind "object" is the name of an object in the data and the object itself for the
+            // behavior: looked up when it is read, so one that was spawned later, or replaced, is found too
+            for (const [key, param] of Object.entries(def.params ?? {})) {
+                if (param.type !== "asset" || param.kind !== "object") continue;
+                const name = self.params[key];
+                let found: THREE.Object3D | null = null;
+                Object.defineProperty(self.params, key, {
+                    enumerable: true,
+                    configurable: true,
+                    get: () => {
+                        if (typeof name !== "string" || !name) return null;
+                        if (!found || found.name !== name || !this.isActive(found)) found = this.findAll({ name })[0] ?? null;
+                        return found;
+                    },
+                });
+            }
         }
 
         try {

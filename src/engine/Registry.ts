@@ -18,7 +18,7 @@ import type { UiElement } from "./ui";
 
 // What a param of type "asset" can refer to
 // "font" is a font file of assets/, named with its extension: "pixel.ttf"
-export type AssetKind = "material" | "look" | "prefab" | "texture" | "layer" | "scene" | "sound" | "font";
+export type AssetKind = "material" | "look" | "prefab" | "texture" | "layer" | "scene" | "sound" | "font" | "object";
 
 export type ParamDef = (
     | { type: "number"; default: number; min?: number; max?: number; step?: number }
@@ -33,6 +33,7 @@ export type ParamDef = (
     // "layer" is a collision layer of the project settings (project.json); "" is the default layer
     // "scene" is a scene of the project, e.g. the one a door leads to (self.loadScene)
     // "sound" is an audio file of assets/, named with its extension: "coin.wav"
+    // "object" is an object of the same scene, by its name: a behavior gets the object itself (or null)
     | { type: "asset"; kind: AssetKind; default: string }
 ) & {
     // The field matters only while other fields of the same object have one of these values, e.g.
@@ -51,7 +52,9 @@ type ParamType<D extends ParamDef> = D extends { type: "number" }
         ? boolean
         : D extends { type: "colors" }
             ? string[]
-            : string;
+            : D extends { type: "asset"; kind: "object" }
+                ? THREE.Object3D | null
+                : string;
 
 export function paramDefaults(defs: Record<string, ParamDef>): Params {
     return Object.fromEntries(Object.entries(defs).map(([key, def]) => [key, def.default]));
@@ -298,6 +301,8 @@ export class Registry {
     private lookData = new Map<string, LookData>();
 
     private sharedLooks = new Map<string, LookData>();
+
+    private objects: string[] | null = null;
 
     // The definitions that came from the scripts of the project "shared"
     private sharedDefs = new Set<object>();
@@ -554,7 +559,19 @@ export class Registry {
         return this.scenes;
     }
 
+    // The names of the objects of the scene at hand, for the params of kind "object": the editor gives those
+    // of the open scene, a check those of the scene it checks. null: not known (a prefab, whose instances
+    // may stand in any scene), any name is taken.
+    setObjects(names: string[] | null) {
+        this.objects = names;
+    }
+
+    get objectsKnown() {
+        return this.objects !== null;
+    }
+
     assetNames(kind: AssetKind) {
+        if (kind === "object") return this.objects ?? [];
         if (kind === "layer") return this.settings.layers;
         if (kind === "sound") return this.soundNames();
         if (kind === "font") return this.fontNames();

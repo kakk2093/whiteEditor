@@ -1293,6 +1293,21 @@ kbd {
     letter-spacing: 0.6px;
 }
 
+/* What the Inspector shows of an object of the running game */
+.live-note {
+    margin-left: 8px;
+    color: var(--muted);
+    font-style: italic;
+    font-size: 11px;
+}
+
+.live-text {
+    color: var(--muted);
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 11px;
+    word-break: break-all;
+}
+
 .tree-row.spawned {
     color: var(--muted);
     font-style: italic;

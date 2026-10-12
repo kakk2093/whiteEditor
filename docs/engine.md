@@ -148,6 +148,15 @@
   открытый проект (`reloadScripts`, `assetChangedOnDisk`). Сейчас в общем: стили `PixelArt`, `PixelArtDark`, `PS1`,
   `Sketch`, `Pico8`, `Glow`, `Toy`; эффекты `scanlines`, `wobble`, `hatch`; поверхности `sway`, `boil`; поведения
   `spin`, `bob`, `lifetime`, `follow`, `walker`; сцена `preview` для просмотра стилей.
+- **Ссылка на объект сцены** (12.10.2026): вид параметра `{ type: "asset", kind: "object" }`. В данных — имя
+  объекта; `Runtime` при заполнении `self.params` ставит на такой ключ геттер, который отдаёт сам объект
+  (`findAll({ name })[0]`, запоминает, пока тот в сцене и активен) или `null`; тип для скриптов —
+  `THREE.Object3D | null`. Имена для проверки и для списка в Inspector — `registry.setObjects(names | null)`
+  (`assetNames("object")`): `validateScene` ставит имена проверяемой сцены (`entityNames`, с тем, что приносят
+  экземпляры префабов), `validatePrefab` — `null` («неизвестно», любое имя годится), редактор — имена открытой
+  сцены в `sceneStore.notify`. Переименование объекта (`sceneStore.rename`) зовёт `renameInEntities(..., "object")`,
+  если имя было у одного объекта. В Inspector на список можно бросить строку Hierarchy. Примеры: `clicker` в
+  `demo`, `coin` в `sample`.
 - **Общее в редакторе** (12.10.2026): `registry.markShared()` (после скриптов общего проекта, до своих) запоминает
   определения из `shared`, `isSharedDef(def)` — пометка «shared» у поведений, эффектов, поверхностей и моделей в
   панели Project; своё с тем же именем — другой объект, пометки нет. Move to Shared в меню своего стиля

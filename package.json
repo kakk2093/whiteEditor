@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "check": "node tools/check.mjs",
     "build:game": "node tools/build.mjs",
-    "render": "node tools/render.mjs"
+    "render": "node tools/render.mjs",
+    "editor": "node tools/editor.mjs"
   },
   "dependencies": {
     "@types/three": "^0.185.0",

@@ -71,8 +71,8 @@ export const coin = defineBehavior({
     name: "coin",
     label: "Coin",
     params: {
-        // Name of an object with Particles that sparkles where a coin was collected
-        sparks: { type: "string", default: "Sparks" },
+        // An object with Particles that sparkles where a coin was collected
+        sparks: { type: "asset", kind: "object", default: "Sparks" },
     },
     update: (self, dt) => {
         self.object.rotation.y += dt * 3;
@@ -80,7 +80,7 @@ export const coin = defineBehavior({
     enter: (self, other) => {
         if (other.userData.tag !== "player") return;
         self.globals.coins = Number(self.globals.coins ?? 0) + 1;
-        const sparks = self.find({ name: self.params.sparks });
+        const { sparks } = self.params;
         if (sparks) {
             sparks.position.copy(self.object.position);
             self.particles(sparks)?.emit(24);

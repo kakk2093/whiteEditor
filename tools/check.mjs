@@ -24,6 +24,8 @@ const jsonNames = (section) => {
 const readJson = (section, name) => JSON.parse(fs.readFileSync(path.join(projectDir, section, `${name}.json`), 'utf-8'))
 
 const problems = []
+// Scenes that could not be played here because something in them needs a browser
+const skipped = new Set()
 
 // Vite loads the engine and the project scripts the same way the editor does (TypeScript, "white-engine" alias)
 const server = await createServer({ root, server: { middlewareMode: true, ws: false, hmr: false }, appType: 'custom', logLevel: 'error' })
@@ -130,10 +132,38 @@ try {
     for (const problem of engine.validatePrefab(name, prefab, registry)) problems.push(`prefabs/${name}.json: ${problem}`)
   }
 
+  // What a browser has and this command has not: a scene (or a behavior) that needs it is not a mistake
+  const needsBrowser = (message) => /\b(document|window|navigator|HTMLElement|Image|AudioContext|localStorage|requestAnimationFrame) is not defined/.test(message)
+
   for (const name of jsonNames('scenes')) {
     try {
       const scene = engine.parseScene(readJson('scenes', name))
-      for (const problem of engine.validateScene(scene, registry)) problems.push(`scenes/${name}.json: ${problem}`)
+      const found = engine.validateScene(scene, registry)
+      for (const problem of found) problems.push(`scenes/${name}.json: ${problem}`)
+      if (found.length > 0 || process.argv.includes('--no-run')) continue
+
+      // The scene is started and played for a second, without a picture: a behavior that throws in start()
+      // or update(), a prefab that cannot be spawned and the like show here, not only in the editor
+      const thrown = []
+      // The runtime also prints what a behavior threw; here it is collected instead
+      const { error, warn, log } = console
+      console.error = console.warn = console.log = () => {}
+      try {
+        const game = new engine.Game(registry, scene)
+        game.sound.enabled = false
+        game.runtime.onError = (message) => thrown.push(message)
+        game.resize(960, 540)
+        game.start()
+        for (let i = 0; i < 60; i++) game.update(1 / 60)
+        game.dispose()
+      } catch (e) {
+        thrown.push(`the scene could not be run: ${e.message}`)
+      }
+      Object.assign(console, { error, warn, log })
+      for (const message of thrown) {
+        if (needsBrowser(message)) skipped.add(name)
+        else problems.push(`scenes/${name}.json, in a run of 1 s: ${message}`)
+      }
     } catch (e) {
       problems.push(`scenes/${name}.json: ${e.message}`)
     }
@@ -189,6 +219,7 @@ try {
 
 if (problems.length === 0) {
   const count = (section) => `${jsonNames(section).length} ${section}`
+  if (skipped.size > 0) console.log(`${project}: not played here, needs a browser (try npm run render): ${[...skipped].join(', ')}`)
   console.log(`${project}: OK (${count('scenes')}, ${count('materials')}, ${count('prefabs')}, ${count('looks')})`)
 } else {
   for (const problem of problems) console.error(problem)
