@@ -194,8 +194,14 @@ export async function updateSettings(settings: ProjectSettings) {
 }
 
 // Gives a collision layer another name: in the settings and in every collider that names it, in the scenes
-// and the prefabs on disk and in the open scene (whose unsaved changes stay unsaved). Not a step of undo.
+// and the prefabs on disk and in the open scene (whose unsaved changes stay unsaved). A step of undo: undone
+// by renaming back.
 export async function renameLayer(from: string, to: string) {
+    const name = to.trim();
+    await renamed(`layer ${from} renamed to ${name}`, () => sceneStore.registry.settings.layers, from, name, (a, b) => renameLayerNow(a, b));
+}
+
+async function renameLayerNow(from: string, to: string) {
     const { project, registry } = sceneStore;
     const name = to.trim();
     if (!name || name === from || !registry.settings.layers.includes(from)) return;
@@ -573,6 +579,31 @@ export function updateMaterial<K extends keyof MaterialData>(name: string, key: 
 // and the fonts a Text can pick. A name the project cannot keep is tidied up; a file with the name of an
 // existing one replaces it. Tells what the last of them is, null if none was taken or it has no place in
 // the panel (a font).
+// While `run` works nothing is recorded for undo: what it changes is a part of one step
+async function quietly<T>(run: () => Promise<T>): Promise<T> {
+    sceneStore.recording = false;
+    try {
+        return await run();
+    } finally {
+        sceneStore.recording = true;
+    }
+}
+
+// A rename as one step of undo, however many files it rewrites: it is undone by renaming back. `names`
+// tells what there is of that kind, to see whether the rename has happened.
+async function renamed(what: string, names: () => string[], from: string, to: string, rename: (from: string, to: string) => Promise<unknown>) {
+    await quietly(() => rename(from, to));
+    if (from === to || !names().includes(to) || names().includes(from)) return;
+    sceneStore.recordAction(what, () => quietly(() => rename(to, from)), () => quietly(() => rename(from, to)));
+}
+
+// The file of assets/ as it is on disk; null if there is none
+async function assetFile(project: string, name: string): Promise<Blob | null> {
+    const response = await fetch(`/projects/${project}/assets/${name}?t=${Date.now()}`).catch(() => null);
+    // A missing file is answered with the page of the editor, not with an error
+    return response?.ok && !(response.headers.get("content-type") ?? "").includes("text/html") ? response.blob() : null;
+}
+
 export async function uploadFiles(files: File[]): Promise<"texture" | "sound" | null> {
     const { project } = sceneStore;
     const images = files.filter((file) => /\.(png|jpe?g|webp)$/i.test(file.name) || SOUND_FILE.test(file.name) || FONT_FILE.test(file.name));
@@ -582,13 +613,25 @@ export async function uploadFiles(files: File[]): Promise<"texture" | "sound" | 
     }
     try {
         const names: string[] = [];
+        // What each file replaced (null: nothing), to put it back on undo
+        const added: { name: string; file: Blob; before: Blob | null }[] = [];
         for (const file of images) {
             const dot = file.name.lastIndexOf(".");
             const stem = file.name.slice(0, dot).replace(/[^\w-]+/g, "_").replace(/^_+|_+$/g, "") || "image";
             const name = `${stem}${file.name.slice(dot).toLowerCase()}`;
+            added.push({ name, file, before: await assetFile(project, name) });
             await uploadImage(project, name, file);
             names.push(name);
         }
+        const put = (which: "file" | "before") => quietly(async () => {
+            for (const each of added) {
+                const blob = each[which];
+                if (blob) await uploadImage(project, each.name, blob);
+                else await deleteImage(project, each.name);
+            }
+            await loadScripts(project);
+        });
+        sceneStore.recordAction(`added ${names.join(", ")}`, () => put("before"), () => put("file"));
         // The same reload as after an edit of scripts: the registry gets the new list of images
         await loadScripts(project);
         const last = names[names.length - 1];
@@ -621,8 +664,23 @@ export function applySound(entityId: string, sound: string) {
 export async function deleteTexture(name: string) {
     const { project } = sceneStore;
     try {
+        // Kept in memory, so that undo can put the file back
+        const file = await assetFile(project, name);
         await deleteImage(project, name);
         await loadScripts(project);
+        if (file) {
+            sceneStore.recordAction(
+                `deleted ${name}`,
+                () => quietly(async () => {
+                    await uploadImage(project, name, file);
+                    await loadScripts(project);
+                }),
+                () => quietly(async () => {
+                    await deleteImage(project, name);
+                    await loadScripts(project);
+                })
+            );
+        }
         sceneStore.selectAsset(null);
         sceneStore.update({ status: `Deleted assets/${name}` });
     } catch (e) {
@@ -771,6 +829,10 @@ function nameIsFree(kind: string, names: string[], from: string, to: string) {
 // Gives a scene file another name. Nothing refers to a scene by name, so only the file changes; for the
 // open scene it is the file as it was last saved, unsaved changes stay unsaved.
 export async function renameScene(from: string, to: string) {
+    await renamed(`scene ${from} renamed to ${to}`, () => sceneStore.scenes, from, to, (a, b) => renameSceneNow(a, b));
+}
+
+async function renameSceneNow(from: string, to: string) {
     const { project } = sceneStore;
     if (to === from || !sceneStore.scenes.includes(from)) return;
     if (!nameIsFree("scene", sceneStore.scenes, from, to) || blockedByPlay()) return;
@@ -791,6 +853,14 @@ export async function renameScene(from: string, to: string) {
 // Gives a material, a look or a prefab another name: the file, and every scene, prefab and look that refers
 // to it. The files are rewritten at once, the open scene included (its unsaved changes stay unsaved).
 export async function renameAsset(kind: "material" | "look" | "prefab", from: string, to: string) {
+    const names = () => {
+        const { registry } = sceneStore;
+        return kind === "material" ? registry.materialNames() : kind === "look" ? registry.lookNames() : registry.prefabNames();
+    };
+    await renamed(`${kind} ${from} renamed to ${to}`, names, from, to, (a, b) => renameAssetNow(kind, a, b));
+}
+
+async function renameAssetNow(kind: "material" | "look" | "prefab", from: string, to: string) {
     const { project, registry } = sceneStore;
     const section = kind === "material" ? "materials" : kind === "look" ? "looks" : "prefabs";
     const names = kind === "material" ? registry.materialNames() : kind === "look" ? registry.lookNames() : registry.prefabNames();

@@ -124,8 +124,9 @@ export interface AssetStep {
     after: unknown | null;
 }
 
-// One step of undo: the scene as it was before a change of it, or a change of an asset
-type Step = { scene: string } | { asset: AssetStep };
+// One step of undo: the scene as it was before a change of it, a change of an asset, or something that
+// touches many files at once and is undone by doing the opposite (a rename, a file added to assets/)
+type Step = { scene: string } | { asset: AssetStep } | { action: { name: string; undo: () => unknown; redo: () => unknown } };
 
 // A deep copy in which every entity gets a new id
 function cloneWithNewIds(entity: EntityData): EntityData {
@@ -152,6 +153,13 @@ export const EDITOR_LAYER = 1;
 // The color of the markers of sounds and of the sound listener
 const SOUND_COLOR = 0x5fe0c8;
 
+// ...of the outline of a collider that belongs to a body of the physics, of zones, of particle sources
+const BODY_COLOR = 0xff9a3c;
+
+const ZONE_COLOR = 0x7aa8ff;
+
+const PARTICLES_COLOR = 0xffb84a;
+
 // Lights, cameras, sounds and the sound listener draw nothing, so the editor gives them a clickable marker;
 // a collider gets its outline
 function createHelper(entity: EntityData): THREE.Object3D | null {
@@ -160,7 +168,13 @@ function createHelper(entity: EntityData): THREE.Object3D | null {
     const collider = getComponent(entity, "collider");
     const sound = getComponent(entity, "sound");
     const listener = getComponent(entity, "listener");
-    if (!light && !camera && !collider && !sound && !listener) return null;
+    const zone = getComponent(entity, "zone");
+    const particles = getComponent(entity, "particles");
+    // Nothing of its own to see or to click: a group that only holds its children, an object with behaviors
+    // only. Not the elements of the interface (they are not in the world) and not what a prefab fills.
+    const drawn = ["mesh", "model", "sprite", "label", "light", "camera", "sound", "listener", "zone", "particles", "canvas", "ui"];
+    const empty = !entity.prefab && !entity.components.some((component) => drawn.includes(component.type));
+    if (!light && !camera && !collider && !sound && !listener && !zone && !particles && !empty) return null;
 
     const helper = new THREE.Group();
     const material = new THREE.MeshBasicMaterial({ color: light ? 0xffd54a : 0x9ecbff, wireframe: true, fog: false });
@@ -177,7 +191,8 @@ function createHelper(entity: EntityData): THREE.Object3D | null {
                 : new THREE.BoxGeometry(f.sizeX as number, f.sizeY as number, f.sizeZ as number);
         const outline = new THREE.LineSegments(
             new THREE.EdgesGeometry(geometry, f.shape === "box" ? 1 : 20),
-            new THREE.LineBasicMaterial({ color: collider.solid === false ? 0xffd54a : 0x66dd88, fog: false })
+            // Orange: a body, which the physics moves
+            new THREE.LineBasicMaterial({ color: collider.solid === false ? 0xffd54a : getComponent(entity, "body") ? BODY_COLOR : 0x66dd88, fog: false })
         );
         geometry.dispose();
         outline.raycast = () => {};
@@ -233,6 +248,28 @@ function createHelper(entity: EntityData): THREE.Object3D | null {
             reach.children.forEach((child) => child.updateMatrixWorld(true));
         };
         helper.add(reach);
+    }
+
+    const marked = light || camera || sound || listener;
+    if (zone) {
+        // The box of the zone, not for clicking (the camera flies inside it), and a small marker that is
+        const f = { ...paramDefaults(componentDefs.zone.fields), ...zone } as Record<string, number>;
+        const box = new THREE.BoxGeometry(f.sizeX, f.sizeY, f.sizeZ);
+        const outline = new THREE.LineSegments(new THREE.EdgesGeometry(box), new THREE.LineBasicMaterial({ color: ZONE_COLOR, fog: false, transparent: true, opacity: 0.7 }));
+        box.dispose();
+        outline.raycast = () => {};
+        helper.add(outline);
+        if (!marked) helper.add(new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.22, 0.22), new THREE.MeshBasicMaterial({ color: ZONE_COLOR, wireframe: true, fog: false })));
+    } else if (particles && !marked) {
+        // A source of particles: a small cone opening the way they fly (up its own Y)
+        const cone = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.24, 6, 1, true), new THREE.MeshBasicMaterial({ color: PARTICLES_COLOR, wireframe: true, fog: false }));
+        cone.rotation.x = Math.PI;
+        cone.position.y = 0.12;
+        helper.add(cone);
+    } else if (empty && !collider) {
+        // Something to click where there is nothing: three short sticks along the axes
+        const tone = new THREE.MeshBasicMaterial({ color: 0x8a94a6, wireframe: true, fog: false });
+        helper.add(new THREE.Mesh(new THREE.OctahedronGeometry(0.09), tone));
     }
 
     // Shows where a directional or spot light points
@@ -510,7 +547,7 @@ class SceneStore {
         for (const stack of [this.undoStack, this.redoStack]) {
             for (const step of stack) {
                 if ("scene" in step) step.scene = inSnapshot(step.scene);
-                else if (step.asset.section === section && step.asset.name === from) step.asset.name = to;
+                else if ("asset" in step && step.asset.section === section && step.asset.name === from) step.asset.name = to;
             }
         }
         applyEnvironment(this.scene, this.environment);
@@ -520,6 +557,7 @@ class SceneStore {
     // An asset was changed, created (before = null) or deleted (after = null): a material, a look, a scene
     // file, a prefab file, the folders or the settings of the project
     recordAsset(section: AssetStep["section"], name: string, before: unknown | null, after: unknown | null) {
+        if (!this.recording) return;
         const key = `${section}/${name}`;
         const time = performance.now();
         const top = this.undoStack[this.undoStack.length - 1];
@@ -533,6 +571,21 @@ class SceneStore {
         this.redoStack = [];
         this.lastChange = time;
         this.lastStep = key;
+    }
+
+    // false while a step of undo is being carried out by the actions: what they change on the way is a
+    // part of that step, not new steps
+    recording = true;
+
+    // Something that is undone by doing the opposite: `undo` and `redo` do the work (see actions.ts)
+    recordAction(name: string, undo: () => unknown, redo: () => unknown) {
+        if (!this.recording) return;
+        this.undoStack.push({ action: { name, undo, redo } });
+        if (this.undoStack.length > UNDO_LIMIT) this.undoStack.shift();
+        this.redoStack = [];
+        this.lastChange = 0;
+        this.lastStep = "";
+        this.notify();
     }
 
     // Forgets the steps: what is shown now is another scene (or prefab)
@@ -565,7 +618,11 @@ class SceneStore {
         const step = from.pop();
         if (!step) return;
         let subject = "";
-        if ("asset" in step) {
+        if ("action" in step) {
+            to.push(step);
+            (what === "Undo" ? step.action.undo : step.action.redo)();
+            subject = `: ${step.action.name}`;
+        } else if ("asset" in step) {
             const { section, name, before, after } = step.asset;
             to.push(step);
             this.assetHandler?.(section, name, what === "Undo" ? before : after);
@@ -1573,7 +1630,8 @@ class SceneStore {
     // What the gizmo holds and the camera focuses on: during Play the object of the running copy
     get selectedViewObject() {
         const id = this.selectedId;
-        if (!id) return null;
+        // An object created in Play that is looked at in the Inspector: the gizmo moves the object itself
+        if (!id) return this.inspected;
         return this.game ? this.game.getObject(id) : this.objects.get(id) ?? null;
     }
 

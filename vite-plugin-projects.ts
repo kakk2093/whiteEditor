@@ -233,7 +233,9 @@ export function projectsPlugin(dir = 'projects'): Plugin {
       // (an undo back to the start) the file goes instead of staying as "{}"
       const writeOrRemove = async (file: string, data: unknown) => {
         markOwn(file)
-        const empty = typeof data === 'object' && data !== null && Object.keys(data).length === 0
+        // Sections with nothing in them say nothing either: { "materials": {} }
+        const nothing = (value: unknown) => typeof value === 'object' && value !== null && Object.keys(value).length === 0
+        const empty = nothing(data) || (typeof data === 'object' && data !== null && Object.values(data).every(nothing))
         if (empty) await fs.rm(file, { force: true })
         else await fs.writeFile(file, formatJson(data))
       }

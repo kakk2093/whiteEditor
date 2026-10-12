@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
-import { anchorPoint, applyEnvironment, aspectRatio, createRenderer, withZone, zoneAt, RenderPipeline, resolveLook, setCameraAspect, UI_HANDLE, UI_HANDLES, UiLayer, updateParticles } from "../engine";
+import { anchorPoint, applyEnvironment, aspectRatio, createRenderer, withZone, zoneAt, RenderPipeline, resolveLook, setCameraAspect, UI_HANDLE, UI_HANDLES, UiLayer, uiOf, updateParticles } from "../engine";
 import type { Input } from "../engine";
 import { dropAsset, getDraggedAsset } from "../editor/core/dnd";
 import { ColliderHandles } from "./colliderHandles";
@@ -193,7 +193,22 @@ export default function Viewport() {
             scale: number;
             // A size handle is dragged: which sides it moves, what the size was, where the anchor is
             side?: { h: number; v: number; width: number; height: number; ax: number; ay: number };
+            // Where the element was, in the units of its canvas, and how high that canvas is
+            box: { left: number; top: number; width: number; height: number; units: number } | null;
+            // The other selected elements, which move along with it, with where each one was
+            others: { id: string; x: number; y: number }[];
+            // What its sides and its middle can line up with: those of its parent and of the other elements
+            linesX: number[];
+            linesY: number[];
+            // It stands in a Layout, which gives it its place: dragging changes its turn among its neighbors
+            layout: "row" | "column" | null;
         } | null = null;
+
+        // The id of an entity object, whether the scene has it or a prefab brings it
+        const idOf = (object: THREE.Object3D | null | undefined): string | undefined => object?.userData.entityId ?? object?.userData.innerId;
+
+        // How near (pixels of the screen) a side has to come to a line to jump onto it
+        const SNAP_REACH = 6;
 
         const uiPlace = (id: string) => sceneStore.findEntity(id)?.components.find((component) => component.type === "ui");
 
@@ -245,6 +260,28 @@ export default function Viewport() {
             const adding = !grabbed && (e.ctrlKey || e.metaKey);
             if (adding || !sceneStore.selectedIds.includes(id)) sceneStore.select(id, adding);
             if (adding) return;
+            const dragged = sceneStore.objectOf(id);
+            const box = dragged ? editorUi.placeOf(dragged) : null;
+            // Everything that moves with the element: the other selected ones, and what is inside any of them
+            const moving = new Set<THREE.Object3D>();
+            const others: { id: string; x: number; y: number }[] = [];
+            for (const selectedId of sceneStore.selectedIds) {
+                const object = sceneStore.objectOf(selectedId);
+                object?.traverse((inner) => moving.add(inner));
+                const other = selectedId !== id && uiPlace(selectedId);
+                if (other) others.push({ id: selectedId, x: (other.x as number | undefined) ?? 0, y: (other.y as number | undefined) ?? 0 });
+            }
+            const linesX: number[] = [];
+            const linesY: number[] = [];
+            if (box) {
+                // The edges and the middle of the screen, and of every element that stays where it is
+                const still = [{ left: 0, top: 0, width: (box.units * rect.width) / rect.height, height: box.units }, ...editorUi.places().filter((p) => !moving.has(p.object) && p.units === box.units)];
+                for (const p of still) {
+                    linesX.push(p.left, p.left + p.width / 2, p.left + p.width);
+                    linesY.push(p.top, p.top + p.height / 2, p.top + p.height);
+                }
+            }
+            const around = dragged?.parent ? uiOf(dragged.parent)?.layout : undefined;
             uiDrag = {
                 id,
                 pointerId: e.pointerId,
@@ -254,6 +291,11 @@ export default function Viewport() {
                 y: (place.y as number | undefined) ?? 0,
                 scale,
                 side: grabbed?.side,
+                box,
+                others,
+                linesX,
+                linesY,
+                layout: around ? (around.direction === "row" ? "row" : "column") : null,
             };
             ctx.controls.enabled = false;
             canvas.setPointerCapture(e.pointerId);
@@ -266,11 +308,64 @@ export default function Viewport() {
             if (Math.hypot(dx, dy) <= CLICK_THRESHOLD) return;
             const drag = uiDrag;
             const { side } = drag;
+            if (!side && drag.layout) {
+                // In a Layout the place is the turn: the element goes before or after the neighbor whose
+                // middle the mouse has passed
+                const object = sceneStore.objectOf(drag.id);
+                const rect = uiRect();
+                const row = drag.layout === "row";
+                const at = ((row ? e.clientX - rect.left : e.clientY - rect.top) / drag.scale);
+                const siblings = (object?.parent?.children ?? []).filter((child) => child.userData.component === undefined && uiOf(child));
+                const index = object ? siblings.indexOf(object) : -1;
+                const middle = (other: THREE.Object3D | undefined) => {
+                    const p = other && editorUi.placeOf(other);
+                    return p ? (row ? p.left + p.width / 2 : p.top + p.height / 2) : null;
+                };
+                const before = middle(siblings[index - 1]);
+                const after = middle(siblings[index + 1]);
+                const beforeId = idOf(siblings[index - 1]);
+                const afterId = idOf(siblings[index + 1]);
+                if (before !== null && beforeId && at < before) sceneStore.moveBeside(drag.id, beforeId, false);
+                else if (after !== null && afterId && at > after) sceneStore.moveBeside(drag.id, afterId, true);
+                return;
+            }
             // Whole units: easier to line things up, and to read in the file
             sceneStore.batch(() => {
                 if (!side) {
-                    sceneStore.setComponentField(drag.id, "ui", "x", Math.round(drag.x + dx / drag.scale));
-                    sceneStore.setComponentField(drag.id, "ui", "y", Math.round(drag.y + dy / drag.scale));
+                    let moveX = dx / drag.scale;
+                    let moveY = dy / drag.scale;
+                    editorUi.guides = [];
+                    // Its sides and its middle jump onto the lines that are near; Alt lets it move freely
+                    if (drag.box && !e.altKey) {
+                        const { box } = drag;
+                        const reach = SNAP_REACH / drag.scale;
+                        const nearest = (lines: number[], points: number[]) => {
+                            let best: { shift: number; line: number } | null = null;
+                            for (const point of points) {
+                                for (const line of lines) {
+                                    if (Math.abs(line - point) <= reach && (!best || Math.abs(line - point) < Math.abs(best.shift))) best = { shift: line - point, line };
+                                }
+                            }
+                            return best;
+                        };
+                        const snapX = nearest(drag.linesX, [box.left + moveX, box.left + box.width / 2 + moveX, box.left + box.width + moveX]);
+                        const snapY = nearest(drag.linesY, [box.top + moveY, box.top + box.height / 2 + moveY, box.top + box.height + moveY]);
+                        if (snapX) {
+                            moveX += snapX.shift;
+                            editorUi.guides.push({ vertical: true, at: snapX.line, units: box.units });
+                        }
+                        if (snapY) {
+                            moveY += snapY.shift;
+                            editorUi.guides.push({ vertical: false, at: snapY.line, units: box.units });
+                        }
+                    }
+                    sceneStore.setComponentField(drag.id, "ui", "x", Math.round(drag.x + moveX));
+                    sceneStore.setComponentField(drag.id, "ui", "y", Math.round(drag.y + moveY));
+                    // The other selected elements go the same way
+                    for (const other of drag.others) {
+                        sceneStore.setComponentField(other.id, "ui", "x", Math.round(other.x + moveX));
+                        sceneStore.setComponentField(other.id, "ui", "y", Math.round(other.y + moveY));
+                    }
                     return;
                 }
                 // The side under the handle follows the mouse and the opposite one stays. The place of an
@@ -280,13 +375,14 @@ export default function Viewport() {
                     const width = Math.max(1, Math.round(side.width + (side.h * dx) / drag.scale));
                     const grown = width - side.width;
                     sceneStore.setComponentField(drag.id, "ui", "width", width);
-                    sceneStore.setComponentField(drag.id, "ui", "x", drag.x + grown * (side.h > 0 ? side.ax : side.ax - 1));
+                    // In a Layout the place is not its own
+                    if (!drag.layout) sceneStore.setComponentField(drag.id, "ui", "x", drag.x + grown * (side.h > 0 ? side.ax : side.ax - 1));
                 }
                 if (side.v !== 0) {
                     const height = Math.max(1, Math.round(side.height + (side.v * dy) / drag.scale));
                     const grown = height - side.height;
                     sceneStore.setComponentField(drag.id, "ui", "height", height);
-                    sceneStore.setComponentField(drag.id, "ui", "y", drag.y + grown * (side.v > 0 ? side.ay : side.ay - 1));
+                    if (!drag.layout) sceneStore.setComponentField(drag.id, "ui", "y", drag.y + grown * (side.v > 0 ? side.ay : side.ay - 1));
                 }
             });
         };
@@ -295,6 +391,7 @@ export default function Viewport() {
             if (!uiDrag) return;
             if (canvas.hasPointerCapture(uiDrag.pointerId)) canvas.releasePointerCapture(uiDrag.pointerId);
             uiDrag = null;
+            editorUi.guides = [];
             if (ctx.controls) ctx.controls.enabled = !sceneStore.gameView;
         };
 

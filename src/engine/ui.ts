@@ -233,6 +233,10 @@ export class UiLayer {
     // The element to draw the size handles on: the editor's main selected one
     handles: THREE.Object3D | null = null;
 
+    // Lines to draw across the screen, in the units of a canvas `units` high: what the element the editor
+    // drags has lined up with
+    guides: { vertical: boolean; at: number; units: number }[] = [];
+
     // The elements in the order they are drawn (the order of the Hierarchy), as of the last layout
     private elements: Placed[] = [];
 
@@ -283,6 +287,11 @@ export class UiLayer {
     placeOf(object: THREE.Object3D) {
         const found = this.elements.find((element) => element.object === object);
         return found ? { left: found.left, top: found.top, width: found.width, height: found.height, units: found.units } : null;
+    }
+
+    // Every element with its place, in the order they are drawn, as of the last layout
+    places() {
+        return this.elements.map((e) => ({ object: e.object, left: e.left, top: e.top, width: e.width, height: e.height, units: e.units }));
     }
 
     // true while the player types into an input field: the keys are letters then, not controls
@@ -525,6 +534,7 @@ export class UiLayer {
                 this.highlight.has(e.object),
                 this.handles === e.object,
             ]),
+            this.guides,
         ]);
     }
 
@@ -689,6 +699,20 @@ export class UiLayer {
                     ctx.strokeRect(hx + 0.5, hy + 0.5, size - 1, size - 1);
                 }
             }
+        }
+        for (const guide of this.guides) {
+            const at = Math.round((guide.at * height) / guide.units) + 0.5;
+            ctx.strokeStyle = "#ff4fd8";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            if (guide.vertical) {
+                ctx.moveTo(at, 0);
+                ctx.lineTo(at, height);
+            } else {
+                ctx.moveTo(0, at);
+                ctx.lineTo(width, at);
+            }
+            ctx.stroke();
         }
         this.texture.needsUpdate = true;
         return this.texture;
