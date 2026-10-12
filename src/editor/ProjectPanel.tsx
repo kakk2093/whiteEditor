@@ -129,7 +129,8 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
         if (key === "scene") return store.scenes.map((name) => ({ kind: "scene", name, label: name }));
         if (key === "prefab") return registry.prefabNames().map((name) => ({ kind: "prefab", name, label: name }));
         if (key === "model") return registry.models().map((m) => ({ kind: "model", name: m.name, label: m.label ?? m.name }));
-        if (key === "look") return registry.lookNames().map((name) => ({ kind: "look", name, label: name }));
+        // A look of the project "shared" is every project's; an edit here makes a copy of it for this project
+        if (key === "look") return registry.lookNames().map((name) => ({ kind: "look", name, label: name, ...(registry.isSharedLook(name) ? { note: "shared" } : {}) }));
         if (key === "texture") return registry.textureNames().map((name) => ({ kind: "texture", name, label: name, image: registry.textureUrl(name) }));
         if (key === "sound") return registry.soundNames().map((name) => ({ kind: "sound", name, label: name }));
         if (key === "script") {

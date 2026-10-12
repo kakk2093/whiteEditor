@@ -25,6 +25,12 @@ export interface ProjectSettings {
     // How fast the bodies of the physics gain speed downwards, meters per second squared. 20 by default, like
     // self.fall(): games feel better heavier than the real 9.8.
     gravity: number;
+    // The bottom of the world, meters: a body of the physics that has fallen below it is removed, instead of
+    // falling for ever. -100 by default.
+    bottom: number;
+    // What walks with self.move() shoves the bodies of the physics out of its way; a body heavier than this
+    // (kilograms) it cannot move: it is a wall for it. 0: it shoves any.
+    pushMass: number;
     // The tags of the project. With a list, a tag that is not in it is a mistake (check tells); an empty
     // list lets any tag be.
     tags: string[];
@@ -36,7 +42,9 @@ export interface ProjectSettings {
 
 export const DEFAULT_GRAVITY = 20;
 
-export const defaultSettings: ProjectSettings = { startScene: "", aspect: "free", gravity: DEFAULT_GRAVITY, tags: [], layers: [], noCollision: [] };
+export const DEFAULT_BOTTOM = -100;
+
+export const defaultSettings: ProjectSettings = { startScene: "", aspect: "free", gravity: DEFAULT_GRAVITY, bottom: DEFAULT_BOTTOM, pushMass: 0, tags: [], layers: [], noCollision: [] };
 
 const names = (value: unknown) => (Array.isArray(value) ? [...new Set(value.filter((name): name is string => typeof name === "string" && name !== ""))] : []);
 
@@ -48,6 +56,8 @@ export function parseSettings(data: unknown): ProjectSettings {
         startScene: typeof raw.startScene === "string" ? raw.startScene : "",
         aspect: typeof raw.aspect === "string" && (ASPECTS as readonly string[]).includes(raw.aspect) ? raw.aspect : "free",
         gravity: typeof raw.gravity === "number" && !Number.isNaN(raw.gravity) ? raw.gravity : DEFAULT_GRAVITY,
+        bottom: typeof raw.bottom === "number" && !Number.isNaN(raw.bottom) ? raw.bottom : DEFAULT_BOTTOM,
+        pushMass: typeof raw.pushMass === "number" && raw.pushMass > 0 ? raw.pushMass : 0,
         tags: names(raw.tags),
         layers: names(raw.layers).filter((name) => name !== DEFAULT_LAYER),
         noCollision: pairs.filter(
@@ -62,6 +72,8 @@ export function serializeSettings(settings: ProjectSettings) {
         ...(settings.startScene ? { startScene: settings.startScene } : {}),
         ...(settings.aspect !== "free" ? { aspect: settings.aspect } : {}),
         ...(settings.gravity !== DEFAULT_GRAVITY ? { gravity: settings.gravity } : {}),
+        ...(settings.bottom !== DEFAULT_BOTTOM ? { bottom: settings.bottom } : {}),
+        ...(settings.pushMass > 0 ? { pushMass: settings.pushMass } : {}),
         ...(settings.tags.length > 0 ? { tags: settings.tags } : {}),
         ...(settings.layers.length > 0 ? { layers: settings.layers } : {}),
         ...(settings.noCollision.length > 0 ? { noCollision: settings.noCollision } : {}),
@@ -109,7 +121,7 @@ export function validateSettings(data: unknown, scenes?: string[]): string[] {
     const problems: string[] = [];
     if (typeof data !== "object" || data === null || Array.isArray(data)) return ["must be an object: { \"layers\": [...], \"noCollision\": [...] }"];
     const raw = data as Record<string, unknown>;
-    const known = ["startScene", "aspect", "gravity", "tags", "layers", "noCollision"];
+    const known = ["startScene", "aspect", "gravity", "bottom", "pushMass", "tags", "layers", "noCollision"];
     for (const key of Object.keys(raw)) {
         if (!known.includes(key)) problems.push(`unknown field "${key}" (known: ${known.join(", ")})`);
     }
@@ -125,6 +137,12 @@ export function validateSettings(data: unknown, scenes?: string[]): string[] {
     }
     if (raw.gravity !== undefined && (typeof raw.gravity !== "number" || Number.isNaN(raw.gravity))) {
         problems.push("gravity: must be a number, e.g. 20");
+    }
+    if (raw.bottom !== undefined && (typeof raw.bottom !== "number" || Number.isNaN(raw.bottom))) {
+        problems.push("bottom: must be a number, e.g. -100");
+    }
+    if (raw.pushMass !== undefined && (typeof raw.pushMass !== "number" || !(raw.pushMass >= 0))) {
+        problems.push("pushMass: must be a number from 0, e.g. 5");
     }
     const tags = raw.tags ?? [];
     if (!Array.isArray(tags) || tags.some((name) => typeof name !== "string" || name === "")) {

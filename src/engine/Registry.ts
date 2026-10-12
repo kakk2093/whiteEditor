@@ -278,6 +278,10 @@ export function isBehaviorDef(value: unknown): value is BehaviorDef {
     return typeof value === "object" && value !== null && (value as BehaviorDef).kind === "behavior";
 }
 
+// The project whose looks and scripts (effects, surfaces, behaviors, models) every other project has as
+// well: what many games need is kept there once. Whatever a project defines under the same name wins.
+export const SHARED_PROJECT = "shared";
+
 // Everything a scene can refer to by name: code models, behaviors, effects and surfaces from scripts,
 // material, prefab and look assets
 export class Registry {
@@ -292,6 +296,8 @@ export class Registry {
     private surfaceDefs = new Map<string, SurfaceDef>(builtinSurfaces.map((def) => [def.name, def]));
 
     private lookData = new Map<string, LookData>();
+
+    private sharedLooks = new Map<string, LookData>();
 
     // project.json: the collision layers, the tags, the start scene, the shape of the picture
     settings: ProjectSettings = defaultSettings;
@@ -394,16 +400,28 @@ export class Registry {
         return this;
     }
 
+    // A look of the project "shared": every project has it, until it has a look of its own with that name
+    setSharedLook(name: string, data: LookData) {
+        this.sharedLooks.set(name, data);
+        return this;
+    }
+
+    // true if the look comes from the project "shared" and this project has not put its own in its place
+    isSharedLook(name: string) {
+        return this.sharedLooks.has(name) && !this.lookData.has(name);
+    }
+
+    // Removes the look of the project itself; a shared one with that name shows again
     removeLook(name: string) {
         this.lookData.delete(name);
     }
 
     getLookData(name: string) {
-        return this.lookData.get(name);
+        return this.lookData.get(name) ?? this.sharedLooks.get(name);
     }
 
     lookNames() {
-        return [...this.lookData.keys()].sort();
+        return [...new Set([...this.lookData.keys(), ...this.sharedLooks.keys()])].sort();
     }
 
     // The names of the assets a field of this kind can refer to

@@ -36,6 +36,8 @@ interface Body {
     layer: string;
     // The entity has a Body: the physics moves it, and it gives way to what walks into it
     dynamic: boolean;
+    // Kilograms of that Body; 0 without one
+    mass: number;
     // Either a box along the axes of the world...
     box?: THREE.Box3;
     // ...or an upright capsule: everything within `radius` of the vertical line from `bottom` up to `top`.
@@ -342,12 +344,14 @@ export class Runtime {
         const f = marker.userData.collider as { shape: string; sizeX: number; sizeY: number; sizeZ: number; radius: number; height: number; solid: boolean };
         const { shape, solid } = f;
         const layer = layerOf((f as { layer?: unknown }).layer);
-        const dynamic = object.children.some((child) => child.userData.body);
+        const weight = object.children.find((child) => child.userData.body)?.userData.body as { mass?: number } | undefined;
+        const dynamic = weight !== undefined;
+        const mass = weight?.mass ?? 0;
         if (shape === "sphere" || shape === "capsule") {
             const scale = new THREE.Vector3().setFromMatrixScale(marker.matrixWorld);
             const center = new THREE.Vector3().setFromMatrixPosition(marker.matrixWorld);
             if (shape === "sphere") {
-                return { object, solid, layer, dynamic, capsule: { bottom: center, top: center, radius: f.radius * Math.max(scale.x, scale.y, scale.z) } };
+                return { object, solid, layer, dynamic, mass, capsule: { bottom: center, top: center, radius: f.radius * Math.max(scale.x, scale.y, scale.z) } };
             }
             // The line of the capsule ends where its round ends begin
             const radius = f.radius * Math.max(scale.x, scale.z);
@@ -357,11 +361,12 @@ export class Runtime {
                 solid,
                 layer,
                 dynamic,
+                mass,
                 capsule: { bottom: center.clone().setY(center.y - half), top: center.clone().setY(center.y + half), radius },
             };
         }
         const half = new THREE.Vector3(f.sizeX, f.sizeY, f.sizeZ).multiplyScalar(0.5);
-        return { object, solid, layer, dynamic, box: new THREE.Box3(half.clone().negate(), half).applyMatrix4(marker.matrixWorld) };
+        return { object, solid, layer, dynamic, mass, box: new THREE.Box3(half.clone().negate(), half).applyMatrix4(marker.matrixWorld) };
     }
 
     // Every collider of the active entities
@@ -472,8 +477,11 @@ export class Runtime {
         );
         // What it is stuck in already does not hold it: otherwise it could never get out
         const stuck = new Set(others.filter((other) => overlaps(mine, other)));
+        // A body too heavy to shove (settings.pushMass) is a wall
+        const limit = this.registry.settings.pushMass;
+        const yields = (other: Body) => other.dynamic && !(limit > 0 && other.mass > limit);
         // `firm`: the bodies of the physics count too (see move())
-        return (moved: Body, firm = true) => others.some((other) => !stuck.has(other) && (firm || !other.dynamic) && overlaps(moved, other));
+        return (moved: Body, firm = true) => others.some((other) => !stuck.has(other) && (firm || !yields(other)) && overlaps(moved, other));
     }
 
     // What a behavior calls as self.fall(): gravity, one frame of it
@@ -851,7 +859,8 @@ export class Runtime {
         // The behaviors and the tweens have moved the platforms: what stands on them goes along
         for (const object of [...this.supports.keys()]) this.ride(object);
         // After the behaviors: what they have moved pushes the bodies in this same frame
-        this.physics.step(this.root, dt, (object) => this.isActive(object));
+        // A body that has fallen out of the world is gone
+        for (const object of this.physics.step(this.root, dt, (object) => this.isActive(object))) this.destroy(object);
         this.collide();
         this.sweep();
         this.sounds();

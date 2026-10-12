@@ -138,10 +138,24 @@ if (!browser) fail('No Chrome or Edge found. Set WHITE_BROWSER to the path of a 
 // ---------- the page ----------
 
 const ENTRY = 'virtual:white-render'
-const scriptsDir = path.join(projectDir, 'scripts')
-const scripts = fs.existsSync(scriptsDir)
-  ? fs.readdirSync(scriptsDir, { recursive: true }).filter((f) => /\.(ts|js)$/.test(f) && !f.endsWith('.d.ts')).sort()
-  : []
+// The scripts and the looks of the project "shared" are every project's; its own replace them by name
+const SHARED = 'shared'
+const sharedDir = path.join(path.dirname(projectDir), SHARED)
+const shared = project !== SHARED && fs.existsSync(sharedDir)
+const scriptsIn = (dir, owner) => {
+  const scriptsDir = path.join(dir, 'scripts')
+  const files = fs.existsSync(scriptsDir)
+    ? fs.readdirSync(scriptsDir, { recursive: true }).filter((f) => /\.(ts|js)$/.test(f) && !f.endsWith('.d.ts')).sort()
+    : []
+  return files.map((file) => ({ file, url: `/projects/${owner}/scripts/${file.split(path.sep).join('/')}` }))
+}
+const scripts = [...(shared ? scriptsIn(sharedDir, SHARED) : []), ...scriptsIn(projectDir, project)]
+const sharedLooks = {}
+if (shared && fs.existsSync(path.join(sharedDir, 'looks'))) {
+  for (const file of fs.readdirSync(path.join(sharedDir, 'looks')).filter((f) => f.endsWith('.json'))) {
+    sharedLooks[file.slice(0, -5)] = JSON.parse(fs.readFileSync(path.join(sharedDir, 'looks', file), 'utf-8'))
+  }
+}
 
 const assetsDir = path.join(projectDir, 'assets')
 const images = fs.existsSync(assetsDir)
@@ -175,10 +189,10 @@ const entryCode = () => [
   // What the scripts print while the scene runs
   `const logs = []`,
   `for (const level of ["log", "warn", "error"]) { const real = console[level]; console[level] = (...args) => { logs.push(level + ": " + args.map((a) => (a instanceof Error ? a.message : typeof a === "object" ? JSON.stringify(a) : String(a))).join(" ")); real(...args) } }`,
-  ...scripts.map((file) => {
-    const url = `/projects/${project}/scripts/${file.split(path.sep).join('/')}`
-    return `try { registry.registerExports(await import(${JSON.stringify(url)})) } catch (e) { problems.push(${JSON.stringify(`scripts/${file}: `)} + e.message) }`
-  }),
+  ...scripts.map(({ file, url }) =>
+    `try { registry.registerExports(await import(${JSON.stringify(url)})) } catch (e) { problems.push(${JSON.stringify(`scripts/${file}: `)} + e.message) }`
+  ),
+  `for (const [name, data] of Object.entries(${JSON.stringify(sharedLooks)})) registry.setSharedLook(name, data)`,
   `registry.setTextures(${JSON.stringify(`/projects/${project}/assets/`)}, ${JSON.stringify(images)})`,
   `registry.setSounds(${JSON.stringify(`/projects/${project}/assets/`)}, ${JSON.stringify(sounds)})`,
   `registry.setFonts(${JSON.stringify(`/projects/${project}/assets/`)}, ${JSON.stringify(fonts)})`,
@@ -189,7 +203,9 @@ const entryCode = () => [
   `for (const [name, data] of Object.entries(${JSON.stringify(readSection('looks'))})) registry.setLook(name, data)`,
   // A single picture cannot wait for a late image or font, so they are loaded first
   `await registry.preloadTextures()`,
-  `const still = renderStill(registry, parseScene(${JSON.stringify(readJson('scenes', scene))}), ${JSON.stringify(options)})`,
+  // Every scene of the project, so that self.loadScene() works during the run
+  `const scenes = Object.fromEntries(Object.entries(${JSON.stringify(readSection('scenes'))}).map(([name, data]) => { try { return [name, parseScene(data)] } catch { return [name, null] } }).filter(([, data]) => data))`,
+  `const still = renderStill(registry, parseScene(${JSON.stringify(readJson('scenes', scene))}), { ...${JSON.stringify(options)}, scenes })`,
   `send({ ...still, logs: logs.slice(0, 200), problems: [...problems, ...still.problems] })`,
 ].join('\n')
 
@@ -275,6 +291,7 @@ try {
     console.log(`${project}: scene "${scene}" -> ${path.relative(process.cwd(), out)}`)
     console.log(`  ${result.width}x${result.height}, ${cameras[result.camera]}, ${((Date.now() - started) / 1000).toFixed(1)} s`)
     if (options.inputs || options.time) console.log(`  played ${options.time ?? 0} s${options.inputs ? ` with ${options.inputs.length} input events` : ''}`)
+    if (result.scene) console.log(`  the run went on to scene "${result.scene}": the picture and the state are of that scene`)
     for (const line of result.logs ?? []) console.log(`  ${line}`)
     if (result.state) {
       for (const e of result.state.entities) {

@@ -1,5 +1,5 @@
 import {
-    applyToPrefab, FONT_FILE, parsePrefab, parseScene, renameLayerIn, resolveLook, SOUND_FILE, validateLook, validateMaterial, validatePrefab, validateScene
+    applyToPrefab, FONT_FILE, parsePrefab, parseScene, renameLayerIn, resolveLook, SHARED_PROJECT, SOUND_FILE, validateLook, validateMaterial, validatePrefab, validateScene
 } from "../../engine";
 import type { LookData, MaterialData, ProjectSettings, SceneData } from "../../engine";
 import { renameInEntities, renameInScene } from "./references";
@@ -255,9 +255,11 @@ export async function validateProject() {
 
 // Scripts edited in VS Code: reload them and rebuild the scene objects, keeping the scene data
 export async function reloadScripts(project: string) {
-    if (project !== sceneStore.project) return;
+    // The scripts of the project "shared" are the scripts of every project
+    if (project !== sceneStore.project && project !== SHARED_PROJECT) return;
+    if (!sceneStore.project) return;
     try {
-        const errors = await loadScripts(project);
+        const errors = await loadScripts(sceneStore.project);
         sceneStore.update({ status: errors.length > 0 ? errors.join("; ") : "Scripts reloaded" });
     } catch (e) {
         report(e);
@@ -462,6 +464,8 @@ export async function deletePrefab(name: string) {
 
 // A file was edited outside the editor (VS Code, an AI agent): show the new state without losing editor work
 export async function assetChangedOnDisk(project: string, section: AssetSection, name: string) {
+    // A look of the project "shared" changed: every project sees it, so the open one is loaded again
+    if (project === SHARED_PROJECT && section === "looks" && sceneStore.project && sceneStore.project !== SHARED_PROJECT) return reloadScripts(SHARED_PROJECT);
     if (project !== sceneStore.project) return;
     try {
         if (section === "scenes") {
@@ -785,6 +789,10 @@ export async function renameAsset(kind: "material" | "look" | "prefab", from: st
     const section = kind === "material" ? "materials" : kind === "look" ? "looks" : "prefabs";
     const names = kind === "material" ? registry.materialNames() : kind === "look" ? registry.lookNames() : registry.prefabNames();
     if (to === from || !names.includes(from)) return;
+    if (kind === "look" && registry.isSharedLook(from)) {
+        sceneStore.update({ status: `${from} is a look of the project "${SHARED_PROJECT}": open that project to rename it` });
+        return;
+    }
     if (!nameIsFree(kind, names, from, to)) return;
     if (sceneStore.editingPrefab) {
         sceneStore.update({ status: "Go back to the scene to rename an asset" });
@@ -885,6 +893,10 @@ export function updateLook(name: string, data: LookData) {
 
 export async function deleteLook(name: string) {
     const { project, registry } = sceneStore;
+    if (registry.isSharedLook(name)) {
+        sceneStore.update({ status: `${name} is a look of the project "${SHARED_PROJECT}": open that project to delete it` });
+        return;
+    }
     try {
         clearTimeout(pendingWrites.get(`looks/${name}`));
         pendingWrites.delete(`looks/${name}`);

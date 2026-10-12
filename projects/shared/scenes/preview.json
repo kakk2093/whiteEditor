@@ -1,0 +1,23 @@
+{
+  "version": 3,
+  "environment": { "sky": true, "ambientIntensity": 0.7, "look": "PixelArt" },
+  "entities": [
+    { "name": "Camera", "position": [0, 2.4, 7], "rotation": [-14, 0, 0], "components": [{ "type": "camera" }] },
+    {
+      "name": "Sun",
+      "position": [3, 6, 4],
+      "rotation": [-50, 30, 0],
+      "components": [{ "type": "light", "kind": "directional", "castShadow": true }]
+    },
+    { "name": "Floor", "position": [0, -0.5, 0], "scale": [14, 1, 14], "components": [{ "type": "mesh", "material": "Ground" }, { "type": "collider" }] },
+    {
+      "name": "Cube",
+      "position": [-2.2, 0.75, 0],
+      "scale": [1.5, 1.5, 1.5],
+      "components": [{ "type": "mesh", "material": "Warm" }, { "type": "script", "script": "spin", "params": { "speed": 40 } }]
+    },
+    { "name": "Ball", "position": [0, 0.9, 0], "scale": [1.8, 1.8, 1.8], "components": [{ "type": "mesh", "shape": "sphere", "material": "Cool" }] },
+    { "name": "Pillar", "position": [2.2, 1.2, -0.5], "scale": [0.9, 2.4, 0.9], "components": [{ "type": "mesh", "shape": "cylinder", "material": "Warm" }] },
+    { "name": "Lamp", "position": [1.2, 0.4, 1.6], "scale": [0.8, 0.8, 0.8], "components": [{ "type": "mesh", "shape": "sphere", "material": "Lamp" }, { "type": "script", "script": "bob" }] }
+  ]
+}

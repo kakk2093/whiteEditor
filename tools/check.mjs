@@ -31,16 +31,31 @@ try {
   const engine = await server.ssrLoadModule('/src/engine/index.ts')
   const registry = new engine.Registry()
 
-  const scriptsDir = path.join(projectDir, 'scripts')
-  const scripts = fs.existsSync(scriptsDir)
-    ? fs.readdirSync(scriptsDir, { recursive: true }).filter((f) => /\.(ts|js)$/.test(f) && !f.endsWith('.d.ts'))
-    : []
-  for (const file of scripts) {
-    const url = `/projects/${project}/scripts/${file.split(path.sep).join('/')}`
+  // The scripts and the looks of the project "shared" are every project's; its own replace them by name
+  const sharedDir = path.join(root, 'projects', engine.SHARED_PROJECT)
+  const shared = project !== engine.SHARED_PROJECT && fs.existsSync(sharedDir)
+  const scriptsIn = (dir) => {
+    const scriptsDir = path.join(dir, 'scripts')
+    return fs.existsSync(scriptsDir)
+      ? fs.readdirSync(scriptsDir, { recursive: true }).filter((f) => /\.(ts|js)$/.test(f) && !f.endsWith('.d.ts'))
+      : []
+  }
+  for (const [owner, file] of [...(shared ? scriptsIn(sharedDir).map((f) => [engine.SHARED_PROJECT, f]) : []), ...scriptsIn(projectDir).map((f) => [project, f])]) {
+    const url = `/projects/${owner}/scripts/${file.split(path.sep).join('/')}`
     try {
       registry.registerExports(await server.ssrLoadModule(url))
     } catch (e) {
-      problems.push(`scripts/${file}: ${e.message}`)
+      problems.push(`${owner === project ? '' : `projects/${owner}/`}scripts/${file}: ${e.message}`)
+    }
+  }
+  if (shared) {
+    const looksDir = path.join(sharedDir, 'looks')
+    for (const file of fs.existsSync(looksDir) ? fs.readdirSync(looksDir).filter((f) => f.endsWith('.json')) : []) {
+      try {
+        registry.setSharedLook(file.slice(0, -5), JSON.parse(fs.readFileSync(path.join(looksDir, file), 'utf-8')))
+      } catch (e) {
+        problems.push(`projects/${engine.SHARED_PROJECT}/looks/${file}: ${e.message}`)
+      }
     }
   }
 

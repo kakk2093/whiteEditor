@@ -1,4 +1,4 @@
-import { parsePrefab, parseSettings, Registry, serializeSettings } from "../../engine";
+import { parsePrefab, parseSettings, Registry, serializeSettings, SHARED_PROJECT } from "../../engine";
 import type { LookData, ProjectSettings } from "../../engine";
 
 // Talks to the dev-server API from vite-plugin-projects.ts
@@ -76,7 +76,14 @@ export function buildGame(project: string, scene: string): Promise<{ scene: stri
 export async function loadRegistry(project: string) {
     const registry = new Registry();
     const errors: string[] = [];
-    const urls: string[] = await request(`${project}/scripts`);
+    // What the project "shared" gives every project comes first: the project's own things replace it by name
+    const shared = project !== SHARED_PROJECT && (await listProjects()).includes(SHARED_PROJECT);
+    const urls: string[] = [...(shared ? await request(`${SHARED_PROJECT}/scripts`) : []), ...(await request(`${project}/scripts`))];
+    if (shared) {
+        for (const name of await listAssets(SHARED_PROJECT, "looks")) {
+            registry.setSharedLook(name, (await readAsset(SHARED_PROJECT, "looks", name)) as LookData);
+        }
+    }
 
     for (const url of urls) {
         try {

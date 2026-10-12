@@ -57,6 +57,9 @@ export interface StillOptions {
     look?: string;
     // What the player does while the scene runs (within `time`): keys, the mouse, clicks
     inputs?: PlayEvent[];
+    // The other scenes of the project by name: with them self.loadScene() works during the run, and the
+    // picture and the state are of the scene the run has ended in
+    scenes?: Record<string, SceneData>;
     // true: the result tells where every entity is after the run and what the texts say
     state?: boolean;
 }
@@ -73,6 +76,8 @@ export interface Still {
     problems: string[];
     // With `state` in the options: the entities after the run, and what the behaviors keep in self.globals
     state?: { entities: EntityState[]; globals: Record<string, unknown> };
+    // The scene the run ended in, if the behaviors went to another one
+    scene?: string;
 }
 
 // One picture of a scene, drawn exactly as the game draws it: the same Game, look and pipeline as runGame().
@@ -91,10 +96,19 @@ export function renderStill(registry: Registry, data: SceneData, options: StillO
         problems.push(`Shader error: ${log.trim()}`);
     };
 
-    const game = new Game(registry, data);
-    // A picture makes no sound
-    game.sound.enabled = false;
-    game.runtime.onError = (message) => problems.push(message);
+    // What the behaviors keep from scene to scene, as in a running game
+    const globals: Record<string, unknown> = {};
+    const open = (scene: SceneData) => {
+        const opened = new Game(registry, scene, globals);
+        // A picture makes no sound
+        opened.sound.enabled = false;
+        opened.runtime.onError = (message) => problems.push(message);
+        opened.resize(width, height);
+        return opened;
+    };
+    let game = open(data);
+    // The scene the run has come to, if a behavior has asked for another one (self.loadScene)
+    let entered: string | undefined;
     const pipeline = new RenderPipeline(renderer);
 
     // The player of a scripted run: what is due by the time `t` is fed to the input of the game
@@ -132,6 +146,19 @@ export function renderStill(registry: Registry, data: SceneData, options: StillO
     for (let t = dt; t <= time + 1e-6; t += dt) {
         act(t - dt);
         game.update(dt);
+        // A behavior has asked for another scene: the run goes on there, as the game would
+        const next = game.requestedScene;
+        if (next === null) continue;
+        game.runtime.requestedScene = null;
+        const scene = options.scenes?.[next];
+        if (!scene) {
+            problems.push(`loadScene: the scene "${next}" was not given to this run`);
+            continue;
+        }
+        game.dispose();
+        game = open(scene);
+        game.start();
+        entered = next;
     }
     // What falls on the very end of the run (a key let go then) is not too late
     act(time);
@@ -202,7 +229,7 @@ export function renderStill(registry: Registry, data: SceneData, options: StillO
     game.dispose();
     pipeline.dispose();
     renderer.dispose();
-    return { png, width, height, camera: kind, problems, state };
+    return { png, width, height, camera: kind, problems, state, ...(entered ? { scene: entered } : {}) };
 }
 
 // Shows a line of text over the game: a script error, or why there is nothing to see

@@ -166,7 +166,9 @@ export class Physics {
     }
 
     // One frame of physics for the entity objects under `root`. `active` tells whether an entity takes part.
-    step(root: THREE.Object3D, dt: number, active: (object: THREE.Object3D) => boolean) {
+    // Returns the bodies that have fallen below the bottom of the world (settings.bottom): whoever runs the
+    // scene removes them.
+    step(root: THREE.Object3D, dt: number, active: (object: THREE.Object3D) => boolean): THREE.Object3D[] {
         root.updateMatrixWorld();
         this.world.gravity.set(0, -this.registry.settings.gravity, 0);
 
@@ -199,7 +201,8 @@ export class Physics {
             this.tracked.delete(object);
         }
         // Nothing for the physics to move: the scene is as it was without it
-        if (dynamic === 0 || dt <= 0) return;
+        if (dynamic === 0 || dt <= 0) return [];
+        const fallen: THREE.Object3D[] = [];
 
         for (const entry of this.tracked.values()) {
             const { body, object } = entry;
@@ -241,6 +244,7 @@ export class Physics {
             }
             entry.position.set(body.position.x, body.position.y, body.position.z);
             entry.quaternion.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w);
+            if (entry.position.y < this.registry.settings.bottom) fallen.push(object);
             // The place of the body is in the world, the place of the object is in its parent
             object.position.copy(entry.position);
             object.quaternion.copy(entry.quaternion);
@@ -250,5 +254,6 @@ export class Physics {
             }
             object.updateMatrixWorld(true);
         }
+        return fallen;
     }
 }

@@ -62,6 +62,9 @@ canvas { display: block; }
 </html>
 `
 
+// The project every other one takes looks and scripts from (SHARED_PROJECT of the engine)
+const SHARED = 'shared'
+
 // `root` is the editor folder (where src/engine and node_modules are), `projectDir` the project inside it.
 // The game gets every scene of the project, so that a behavior can go from one to another (self.loadScene).
 // `scene` is the one it starts with: by default the start scene of project.json, else "main", else the first.
@@ -77,20 +80,25 @@ export async function buildGame(root: string, projectDir: string, scene?: string
   // Imported by a path from the root, the way the editor and the check command load them
   const fromRoot = (file: string) => JSON.stringify(`/${path.relative(root, file).split(path.sep).join('/')}`)
 
-  const scriptsDir = path.join(projectDir, 'scripts')
-  const scripts = (await fs.readdir(scriptsDir, { recursive: true }).catch(() => [] as string[]))
-    .filter((f) => /\.(ts|js)$/.test(f) && !f.endsWith('.d.ts'))
-    .sort()
+  // The scripts and the looks of the project "shared" are every project's; its own replace them by name
+  const sharedDir = path.join(path.dirname(projectDir), SHARED)
+  const shared = project !== SHARED && (await fs.stat(sharedDir).then((s) => s.isDirectory(), () => false))
+  const scriptsIn = async (dir: string) =>
+    (await fs.readdir(path.join(dir, 'scripts'), { recursive: true }).catch(() => [] as string[]))
+      .filter((f) => /\.(ts|js)$/.test(f) && !f.endsWith('.d.ts'))
+      .sort()
+      .map((f) => path.join(dir, 'scripts', f))
+  const scripts = [...(shared ? await scriptsIn(sharedDir) : []), ...(await scriptsIn(projectDir))]
 
-  const section = async (name: string) => {
-    const dir = path.join(projectDir, name)
+  const section = async (name: string, from = projectDir) => {
+    const dir = path.join(from, name)
     const entries = await Promise.all((await jsonNames(dir)).map(async (n) => [n, await readJson(dir, n)] as const))
     return JSON.stringify(Object.fromEntries(entries))
   }
 
   const code = [
     `import { Registry, parsePrefab, parseScene, parseSettings, runGame } from ${fromRoot(path.join(root, 'src/engine/index.ts'))}`,
-    ...scripts.map((file, i) => `import * as script${i} from ${fromRoot(path.join(scriptsDir, file))}`),
+    ...scripts.map((file, i) => `import * as script${i} from ${fromRoot(file)}`),
     `const registry = new Registry()`,
     ...scripts.map((_, i) => `registry.registerExports(script${i})`),
     // assets/ is copied next to index.html
@@ -101,6 +109,7 @@ export async function buildGame(root: string, projectDir: string, scene?: string
     `registry.setSettings(parseSettings(${JSON.stringify(settings)}))`,
     `for (const [name, data] of Object.entries(${await section('materials')})) registry.setMaterial(name, data)`,
     `for (const [name, data] of Object.entries(${await section('prefabs')})) registry.setPrefab(name, parsePrefab(data).root)`,
+    ...(shared ? [`for (const [name, data] of Object.entries(${await section('looks', sharedDir)})) registry.setSharedLook(name, data)`] : []),
     `for (const [name, data] of Object.entries(${await section('looks')})) registry.setLook(name, data)`,
     `const scenes = {}`,
     `for (const [name, data] of Object.entries(${await section('scenes')})) scenes[name] = parseScene(data)`,
