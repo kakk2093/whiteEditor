@@ -237,8 +237,52 @@ vec4 effect(vec2 uv, vec4 color) {
 }`,
 });
 
+// Shade where surfaces meet: in the corners of a room, under a box that stands on the floor, between two
+// things close to each other. What a scene of plain shapes lacks most to look solid. Counted from the picture:
+// around every point, how much of its surroundings (within `radius` meters) rises above its surface.
+const ao = defineEffect({
+    name: "ao",
+    label: "Ambient Occlusion",
+    inputs: ["depth", "normal"],
+    params: {
+        // How far a surface shades another one, meters
+        radius: { type: "number", default: 0.5, min: 0.05, max: 5, step: 0.05 },
+        strength: { type: "number", default: 1, min: 0, max: 3, step: 0.1 },
+        // The color of the shade
+        tint: { type: "color", default: "#000000" },
+    },
+    shader: `
+vec4 effect(vec2 uv, vec4 color) {
+    float depth = depthAt(uv);
+    // The sky is not a surface
+    if (depth > cameraFar * 0.98) return color;
+    vec3 here = positionAt(uv);
+    vec3 normal = normalize(normalAt(uv));
+    // The radius as a part of the screen at this distance
+    vec2 reach = vec2(radius) / (viewScale * 2.0 * (cameraOrtho ? 1.0 : depth));
+    // Another turn of the spiral of samples at every pixel: fine grain instead of ghost outlines around things
+    float spin = fract(52.9829189 * fract(dot(floor(uv * resolution), vec2(0.06711056, 0.00583715)))) * 6.2831853;
+    float shade = 0.0;
+    for (int i = 0; i < 24; i++) {
+        float part = (float(i) + 0.5) / 24.0;
+        float angle = spin + float(i) * 2.3999632;
+        // The middle of the pixel the sample falls into: the depth is known per pixel, and a place counted from
+        // a point beside the middle would be off, which on a floor seen at a low angle shows as grain
+        vec2 at = (floor((uv + vec2(cos(angle), sin(angle)) * sqrt(part) * reach) * resolution) + 0.5) / resolution;
+        vec3 towards = positionAt(at) - here;
+        float far = dot(towards, towards);
+        // How much the neighbor rises above this surface, less the further away it is
+        float rise = max(0.0, dot(normal, towards) / sqrt(far + 0.0001) - 0.1);
+        shade += rise / (1.0 + far / (radius * radius) * 2.0);
+    }
+    // The faint far end of the shade is cut off: that is where the grain would show most
+    float amount = clamp((shade / 24.0 * 6.0 - 0.06) * strength, 0.0, 1.0);
+    return vec4(mix(color.rgb, color.rgb * tint, amount), color.a);
+}`,
+});
+
 // Known to every project; a project effect with the same name replaces the built-in one
-export const builtinEffects: EffectDef[] = [outline, palette, grade, vignette, glow];
+export const builtinEffects: EffectDef[] = [outline, palette, grade, vignette, glow, ao];
 
 // An entry named again in an extending look keeps its place in the list and gets the new params
 function mergeEntries<E extends EffectEntry | SurfaceEntry>(base: E[], own: E[], key: "effect" | "surface"): E[] {

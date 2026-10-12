@@ -60,6 +60,7 @@ function createLight(f: Params): THREE.Light {
     if (f.kind === "point") {
         const light = new THREE.PointLight(color, intensity, range);
         light.castShadow = f.castShadow as boolean;
+        light.shadow.radius = f.shadowSoftness as number;
         return light;
     }
 
@@ -70,6 +71,9 @@ function createLight(f: Params): THREE.Light {
     light.add(light.target);
     light.castShadow = f.castShadow as boolean;
     light.shadow.mapSize.set(1024, 1024);
+    light.shadow.radius = f.shadowSoftness as number;
+    // A wide blur takes more samples to stay smooth
+    light.shadow.blurSamples = (f.shadowSoftness as number) > 2 ? 16 : 8;
 
     if (light instanceof THREE.DirectionalLight) {
         const size = f.shadowSize as number;
@@ -121,6 +125,8 @@ export const componentDefs: Record<string, ComponentDef> = {
             angle: { type: "number", default: 30, min: 1, max: 89, step: 1, when: { kind: ["spot"] } },
             // directional: half-size of the area that gets shadows
             shadowSize: { type: "number", default: 10, min: 1, step: 1, when: { kind: ["directional"], castShadow: [true] } },
+            // How blurred the edge of the shadows is: 0 hard, 1 as three.js draws them, more is softer
+            shadowSoftness: { type: "number", default: 1, min: 0, max: 10, step: 0.5, when: { castShadow: [true] } },
         },
         create: createLight,
     },

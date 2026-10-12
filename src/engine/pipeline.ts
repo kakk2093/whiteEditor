@@ -27,6 +27,7 @@ uniform float time;
 uniform float cameraNear;
 uniform float cameraFar;
 uniform bool cameraOrtho;
+uniform vec2 viewScale;
 uniform vec2 scroll;
 varying vec2 vUv;
 
@@ -38,6 +39,13 @@ float depthAt(vec2 uv) {
     return (cameraNear * cameraFar) / (cameraFar - d * (cameraFar - cameraNear));
 }
 vec3 normalAt(vec2 uv) { return texture2D(tNormal, uv).xyz * 2.0 - 1.0; }
+// Where the surface seen at a point of the screen is, in meters from the camera: x to the right, y up, z
+// towards the viewer (what is in front of the camera has a negative z). The same space normalAt() is in.
+vec3 positionAt(vec2 uv) {
+    float d = depthAt(uv);
+    vec2 side = (uv * 2.0 - 1.0) * viewScale;
+    return vec3(cameraOrtho ? side : side * d, -d);
+}
 vec3 toSRGB(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
 vec3 toLinear(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c)); }
 `;
@@ -131,6 +139,9 @@ export class RenderPipeline {
     private signature = "";
 
     private needsNormal = false;
+
+    // An effect reads the depth of the scene
+    private needsDepth = false;
 
     // The scene as the camera sees it, with its depth
     private sceneTarget = createTarget(true);
@@ -231,6 +242,7 @@ export class RenderPipeline {
                     cameraNear: { value: 0.1 },
                     cameraFar: { value: 1000 },
                     cameraOrtho: { value: false },
+                    viewScale: { value: new THREE.Vector2(1, 1) },
                     scroll: { value: new THREE.Vector2() },
                 };
                 for (const [name, d] of Object.entries(params)) {
@@ -258,6 +270,7 @@ export class RenderPipeline {
             }
         });
         this.needsNormal = used.some(({ def }) => def.inputs?.includes("normal"));
+        this.needsDepth = used.some(({ def }) => def.inputs?.includes("depth"));
     }
 
     private drawQuad(material: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget | null) {
@@ -432,8 +445,9 @@ export class RenderPipeline {
             return;
         }
 
-        // A picture of full size keeps the smooth edges it has when drawn straight onto the canvas
-        const samples = (look?.pixelSize ?? 1) <= 1 ? 4 : 0;
+        // A picture of full size keeps the smooth edges it has when drawn straight onto the canvas. Not when an
+        // effect reads the depth: the depth of a smoothed picture does not reach its texture.
+        const samples = (look?.pixelSize ?? 1) <= 1 && !this.needsDepth ? 4 : 0;
         if (this.sceneTarget.samples !== samples) {
             this.sceneTarget.samples = samples;
             this.sceneTarget.dispose();
@@ -484,6 +498,13 @@ export class RenderPipeline {
             u.cameraNear.value = perspective.near;
             u.cameraFar.value = perspective.far;
             u.cameraOrtho.value = (camera as THREE.OrthographicCamera).isOrthographicCamera === true;
+            // Half of what the camera sees, across and up: in meters (orthographic) or per meter of distance
+            const ortho = camera as THREE.OrthographicCamera;
+            if (ortho.isOrthographicCamera) (u.viewScale.value as THREE.Vector2).set((ortho.right - ortho.left) / 2 / ortho.zoom, (ortho.top - ortho.bottom) / 2 / ortho.zoom);
+            else {
+                const up = Math.tan(THREE.MathUtils.degToRad(perspective.fov) / 2) / (perspective.zoom || 1);
+                (u.viewScale.value as THREE.Vector2).set(up * (perspective.aspect || width / height), up);
+            }
             (u.scroll.value as THREE.Vector2).copy(snap?.scroll ?? new THREE.Vector2());
             const target = this.targets[i % 2];
             this.drawQuad(pass.material, target);

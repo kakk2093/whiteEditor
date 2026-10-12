@@ -1,8 +1,8 @@
 import { useState } from "react";
 import type { DragEvent, MouseEvent, ReactNode } from "react";
-import { builtinEffects, builtinSurfaces, defaultMaterialData } from "../engine";
+import { builtinEffects, builtinSurfaces, defaultMaterialData, SHARED_PROJECT } from "../engine";
 import {
-    addToLook, createFolder, createLook, createMaterial, createPrefab, deleteFolder, deleteLook, deleteMaterial, deletePrefab,
+    addToLook, createFolder, createLook, createMaterial, createPrefab, deleteFolder, deleteLook, shareLook, deleteMaterial, deletePrefab,
     applySound, copyText, deleteScene, deleteTexture, duplicateAsset, moveAssetToFolder, newScene, openPrefab, openScene, renameAsset, renameFolder,
     renameScene, showInExplorer, uploadFiles
 } from "./core/actions";
@@ -125,22 +125,25 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
     const [folded, setFolded] = useState<Set<string>>(new Set());
     const { registry } = store;
 
+    // What comes from the scripts of the project "shared" says so
+    const from = (def: object) => (registry.isSharedDef(def) ? " · shared" : "");
+
     const itemsOf = (key: TabKey): Item[] => {
         if (key === "scene") return store.scenes.map((name) => ({ kind: "scene", name, label: name }));
         if (key === "prefab") return registry.prefabNames().map((name) => ({ kind: "prefab", name, label: name }));
-        if (key === "model") return registry.models().map((m) => ({ kind: "model", name: m.name, label: m.label ?? m.name }));
+        if (key === "model") return registry.models().map((m) => ({ kind: "model", name: m.name, label: m.label ?? m.name, ...(registry.isSharedDef(m) ? { note: "shared" } : {}) }));
         // A look of the project "shared" is every project's; an edit here makes a copy of it for this project
         if (key === "look") return registry.lookNames().map((name) => ({ kind: "look", name, label: name, ...(registry.isSharedLook(name) ? { note: "shared" } : {}) }));
         if (key === "texture") return registry.textureNames().map((name) => ({ kind: "texture", name, label: name, image: registry.textureUrl(name) }));
         if (key === "sound") return registry.soundNames().map((name) => ({ kind: "sound", name, label: name }));
         if (key === "script") {
             return [
-                ...registry.behaviors().map((d): Item => ({ kind: "behavior", name: d.name, label: d.label ?? d.name, note: "behavior" })),
+                ...registry.behaviors().map((d): Item => ({ kind: "behavior", name: d.name, label: d.label ?? d.name, note: `behavior${from(d)}` })),
                 ...registry.effects().map((d): Item => ({
-                    kind: "effect", name: d.name, label: d.label ?? d.name, note: builtinEffects.includes(d) ? "effect · built-in" : "effect"
+                    kind: "effect", name: d.name, label: d.label ?? d.name, note: builtinEffects.includes(d) ? "effect · built-in" : `effect${from(d)}`
                 })),
                 ...registry.surfaces().map((d): Item => ({
-                    kind: "surface", name: d.name, label: d.label ?? d.name, note: builtinSurfaces.includes(d) ? "surface · built-in" : "surface"
+                    kind: "surface", name: d.name, label: d.label ?? d.name, note: builtinSurfaces.includes(d) ? "surface · built-in" : `surface${from(d)}`
                 })),
             ];
         }
@@ -265,6 +268,10 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
         } else if (kind === "look") {
             if (name !== store.environment.look) menu.push({ label: "Use in This Scene", icon: "look", run: () => store.setEnvironment("look", name) });
             menu.push({ label: "Duplicate", icon: "copy", run: () => duplicateAsset("look", name) });
+            // Its own look: can be given to every project
+            if (store.project !== SHARED_PROJECT && !registry.isSharedLook(name)) {
+                menu.push({ label: "Move to Shared", icon: "folder", run: () => shareLook(name) });
+            }
             menu.push({ label: "Delete", icon: "trash", danger: true, run: () => deleteLook(name) });
         } else if (kind === "texture") {
             menu.push({ label: "Delete…", icon: "trash", danger: true, run: sure(() => deleteTexture(name)) });

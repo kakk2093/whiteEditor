@@ -299,6 +299,9 @@ export class Registry {
 
     private sharedLooks = new Map<string, LookData>();
 
+    // The definitions that came from the scripts of the project "shared"
+    private sharedDefs = new Set<object>();
+
     // project.json: the collision layers, the tags, the start scene, the shape of the picture
     settings: ProjectSettings = defaultSettings;
 
@@ -562,6 +565,18 @@ export class Registry {
     }
 
     // Registers every defineModel(), defineBehavior(), defineEffect() and defineSurface() exported from a script module
+    // Everything the scripts have defined so far is counted as coming from the project "shared": called once
+    // its scripts are registered and before those of the project itself
+    markShared() {
+        this.sharedDefs = new Set<object>([...this.modelDefs.values(), ...this.behaviorDefs.values(), ...this.effectDefs.values(), ...this.surfaceDefs.values()]);
+        for (const def of [...builtinEffects, ...builtinSurfaces]) this.sharedDefs.delete(def);
+    }
+
+    // true for a model, behavior, effect or surface of the project "shared" that this project has not replaced
+    isSharedDef(def: object) {
+        return this.sharedDefs.has(def);
+    }
+
     registerExports(module: object) {
         for (const value of Object.values(module)) {
             if (isModelDef(value)) this.registerModel(value);

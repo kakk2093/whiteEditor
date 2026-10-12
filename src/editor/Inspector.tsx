@@ -1133,6 +1133,24 @@ export function GameSection() {
                     </select>
                 </div>
             </div>
+            <div className="field">
+                <label title="How fast the bodies of the physics gain speed downwards, meters per second squared">Gravity</label>
+                <div className="control">
+                    <NumberInput value={settings.gravity} step={1} onChange={(gravity) => updateSettings({ ...settings, gravity })} />
+                </div>
+            </div>
+            <div className="field">
+                <label title="The bottom of the world, meters: a body of the physics that falls below it is removed">World bottom</label>
+                <div className="control">
+                    <NumberInput value={settings.bottom} step={10} onChange={(bottom) => updateSettings({ ...settings, bottom })} />
+                </div>
+            </div>
+            <div className="field">
+                <label title="What walks with self.move() cannot shove a body heavier than this, kilograms: it is a wall for it. 0: it shoves any">Push limit</label>
+                <div className="control">
+                    <NumberInput value={settings.pushMass} step={0.5} min={0} onChange={(pushMass) => updateSettings({ ...settings, pushMass })} />
+                </div>
+            </div>
         </Section>
     );
 }

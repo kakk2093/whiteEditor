@@ -85,7 +85,10 @@ export async function loadRegistry(project: string) {
         }
     }
 
+    const own: string[] = await request(`${project}/scripts`);
     for (const url of urls) {
+        // From here on the scripts are the project's own
+        if (shared && url === own[0]) registry.markShared();
         try {
             // The timestamp makes the browser fetch the module again after an edit
             const module = await import(/* @vite-ignore */ `${url}?t=${Date.now()}`);
@@ -95,6 +98,9 @@ export async function loadRegistry(project: string) {
             errors.push(`${url.split("/").pop()}: ${e instanceof Error ? e.message : String(e)}`);
         }
     }
+
+    // A project without scripts of its own: all of them were the shared ones
+    if (shared && own.length === 0) registry.markShared();
 
     // The time in the address gets an image that was edited past the cache of the browser
     registry.setTextures(`/projects/${project}/assets/`, await request(`${project}/assets`), `?t=${Date.now()}`);

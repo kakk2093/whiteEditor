@@ -891,6 +891,30 @@ export function updateLook(name: string, data: LookData) {
     }, 300));
 }
 
+// A look of the open project becomes a look of the project "shared": every project has it from then on.
+// Not a step of undo.
+export async function shareLook(name: string) {
+    const { project, registry } = sceneStore;
+    const data = registry.getLookData(name);
+    if (!data || project === SHARED_PROJECT || registry.isSharedLook(name)) return;
+    try {
+        if ((await listAssets(SHARED_PROJECT, "looks")).includes(name)) {
+            sceneStore.update({ status: `The project "${SHARED_PROJECT}" already has a look named ${name}: rename this one first` });
+            return;
+        }
+        clearTimeout(pendingWrites.get(`looks/${name}`));
+        pendingWrites.delete(`looks/${name}`);
+        await writeAsset(SHARED_PROJECT, "looks", name, data);
+        await deleteAsset(project, "looks", name);
+        registry.setSharedLook(name, data);
+        registry.removeLook(name);
+        sceneStore.setRegistry(registry);
+        sceneStore.update({ status: `${name} moved to the project "${SHARED_PROJECT}": every project has it now` });
+    } catch (e) {
+        report(e);
+    }
+}
+
 export async function deleteLook(name: string) {
     const { project, registry } = sceneStore;
     if (registry.isSharedLook(name)) {

@@ -1,0 +1,8 @@
+{
+  "toneMapping": "aces",
+  "exposure": 1.1,
+  "effects": [
+    { "effect": "ao", "radius": 0.5, "strength": 1.2 },
+    { "effect": "vignette", "strength": 0.25 }
+  ]
+}

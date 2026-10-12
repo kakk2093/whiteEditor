@@ -148,6 +148,11 @@
   открытый проект (`reloadScripts`, `assetChangedOnDisk`). Сейчас в общем: стили `PixelArt`, `PixelArtDark`, `PS1`,
   `Sketch`, `Pico8`, `Glow`, `Toy`; эффекты `scanlines`, `wobble`, `hatch`; поверхности `sway`, `boil`; поведения
   `spin`, `bob`, `lifetime`, `follow`, `walker`; сцена `preview` для просмотра стилей.
+- **Общее в редакторе** (12.10.2026): `registry.markShared()` (после скриптов общего проекта, до своих) запоминает
+  определения из `shared`, `isSharedDef(def)` — пометка «shared» у поведений, эффектов, поверхностей и моделей в
+  панели Project; своё с тем же именем — другой объект, пометки нет. Move to Shared в меню своего стиля
+  (`shareLook`): файл пишется в `projects/shared/looks`, из проекта удаляется; при занятом имени — отказ. В
+  undo не входит. Поля Gravity, World bottom и Push limit — в Settings → Project → Game.
 - **Дно мира и предел толчка** (12.10.2026, нашла игра `sample`). `project.json`: `bottom` (−100) — `Physics.step`
   возвращает тела ниже него, `Runtime.update` их убирает (`destroy`); `pushMass` (0 — нет предела) — в
   `Runtime.obstacles` тело тяжелее предела перестаёт «уступать» и держит `self.move` как стена (`Body.mass`).

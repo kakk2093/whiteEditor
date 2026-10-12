@@ -7,7 +7,7 @@
       "name": "Sun",
       "position": [3, 6, 4],
       "rotation": [-50, 30, 0],
-      "components": [{ "type": "light", "kind": "directional", "castShadow": true }]
+      "components": [{ "type": "light", "kind": "directional", "castShadow": true, "shadowSoftness": 3 }]
     },
     { "name": "Floor", "position": [0, -0.5, 0], "scale": [14, 1, 14], "components": [{ "type": "mesh", "material": "Ground" }, { "type": "collider" }] },
     {
