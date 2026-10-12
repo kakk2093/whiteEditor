@@ -198,6 +198,9 @@ export class Runtime {
     // The Sound components that were noticed, by their marker objects, with what each of them plays now
     private sources = new Map<THREE.Object3D, SoundHandle | null>();
 
+    // What every object that falls (self.fall) stood on after its last frame, and where that was then
+    private supports = new Map<THREE.Object3D, { object: THREE.Object3D; place: THREE.Vector3 }>();
+
     // The camera the scene is seen through, for screenRay(); whoever runs the scene keeps it up to date
     camera: THREE.Camera | null = null;
 
@@ -481,7 +484,48 @@ export class Runtime {
         // Stopped by the ground, or by a ceiling on the way up
         if (!free) speed = 0;
         this.speeds.set(object, speed);
+        // What it stands on, and where that is: when it moves, the object goes with it (see ride())
+        const support = standing ? this.under(object) : null;
+        if (support) this.supports.set(object, { object: support, place: support.getWorldPosition(new THREE.Vector3()) });
+        else this.supports.delete(object);
         return standing;
+    }
+
+    // The solid collider right under the object that the physics does not move: a floor, a platform
+    private under(object: THREE.Object3D) {
+        const mine = this.bodyOf(object);
+        if (!mine?.solid) return null;
+        const inside = new Set<THREE.Object3D>();
+        object.traverse((obj) => inside.add(obj));
+        const others = this.bodies().filter(
+            (body) => body.solid && !body.dynamic && !inside.has(body.object) && this.registry.layersCollide(mine.layer, body.layer) && !overlaps(mine, body)
+        );
+        object.position.y -= GROUND_REACH;
+        object.updateWorldMatrix(true, true);
+        const lowered = this.bodyOf(object)!;
+        const found = others.find((other) => overlaps(lowered, other));
+        object.position.y += GROUND_REACH;
+        object.updateWorldMatrix(true, true);
+        return found?.object ?? null;
+    }
+
+    // An object that stood on something a frame ago goes where that has gone since: a lift takes it up
+    // (instead of rising through it), a platform carries it sideways until a wall is in the way
+    private ride(object: THREE.Object3D) {
+        const support = this.supports.get(object);
+        if (!support) return;
+        if (!support.object.parent || !this.isActive(support.object)) {
+            this.supports.delete(object);
+            return;
+        }
+        const moved = support.object.getWorldPosition(new THREE.Vector3()).sub(support.place);
+        if (moved.lengthSq() === 0) return;
+        support.place.add(moved);
+        // Further than a platform moves in a frame: it was put elsewhere, and its rider was not
+        if (moved.length() > 1) return;
+        // Up with it whatever is above; down and sideways only as far as nothing else is in the way
+        if (moved.y > 0) object.position.y += moved.y;
+        this.move(object, moved.x, Math.min(0, moved.y), moved.z);
     }
 
     // What a behavior calls as self.grounded(): is there a solid collider right under the object
@@ -804,6 +848,8 @@ export class Runtime {
             this.step(instance, dt);
         }
         this.advance(dt);
+        // The behaviors and the tweens have moved the platforms: what stands on them goes along
+        for (const object of [...this.supports.keys()]) this.ride(object);
         // After the behaviors: what they have moved pushes the bodies in this same frame
         this.physics.step(this.root, dt, (object) => this.isActive(object));
         this.collide();
@@ -819,6 +865,7 @@ export class Runtime {
         this.doomed.clear();
         this.processes = [];
         this.contacts.clear();
+        this.supports.clear();
         this.sources.forEach((playing) => playing?.stop());
         this.sources.clear();
     }

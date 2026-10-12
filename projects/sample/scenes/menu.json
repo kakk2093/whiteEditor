@@ -1,0 +1,191 @@
+{
+  "version": 3,
+  "environment": {
+    "sky": true,
+    "skyTop": "#3f7fd6",
+    "skyHorizon": "#bfe3ff",
+    "skyGround": "#6c7a66",
+    "ambientIntensity": 0.75,
+    "look": "Toy"
+  },
+  "entities": [
+    {
+      "name": "Camera",
+      "position": [
+        0,
+        1.6,
+        6
+      ],
+      "rotation": [
+        -8,
+        0,
+        0
+      ],
+      "components": [
+        {
+          "type": "camera",
+          "fov": 45
+        }
+      ]
+    },
+    {
+      "name": "Sun",
+      "position": [
+        4,
+        8,
+        5
+      ],
+      "rotation": [
+        -55,
+        25,
+        0
+      ],
+      "components": [
+        {
+          "type": "light",
+          "kind": "directional",
+          "castShadow": true,
+          "intensity": 1.6
+        }
+      ]
+    },
+    {
+      "name": "Ground",
+      "position": [
+        0,
+        -0.5,
+        0
+      ],
+      "scale": [
+        14,
+        1,
+        14
+      ],
+      "components": [
+        {
+          "type": "mesh",
+          "material": "Grass"
+        }
+      ]
+    },
+    {
+      "name": "Big Coin",
+      "position": [
+        0,
+        1.2,
+        0
+      ],
+      "components": [
+        {
+          "type": "script",
+          "script": "turn",
+          "params": {
+            "speed": 60
+          }
+        }
+      ],
+      "children": [
+        {
+          "name": "Disc",
+          "rotation": [
+            90,
+            0,
+            0
+          ],
+          "scale": [
+            1.6,
+            0.25,
+            1.6
+          ],
+          "components": [
+            {
+              "type": "mesh",
+              "shape": "cylinder",
+              "material": "Coin"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Menu",
+      "components": [
+        {
+          "type": "canvas"
+        }
+      ],
+      "children": [
+        {
+          "name": "Title",
+          "components": [
+            {
+              "type": "ui",
+              "anchor": "top",
+              "y": 50,
+              "width": 700,
+              "height": 80
+            },
+            {
+              "type": "text",
+              "text": "COIN RUN",
+              "size": 64,
+              "outline": 4,
+              "outlineColor": "#1a2233"
+            }
+          ]
+        },
+        {
+          "name": "Play",
+          "components": [
+            {
+              "type": "ui",
+              "anchor": "bottom",
+              "y": -90,
+              "width": 220,
+              "height": 56
+            },
+            {
+              "type": "image",
+              "color": "#2d6cdf"
+            },
+            {
+              "type": "text",
+              "text": "Play",
+              "size": 24
+            },
+            {
+              "type": "button"
+            },
+            {
+              "type": "script",
+              "script": "goto",
+              "params": {
+                "scene": "level"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Hint",
+          "components": [
+            {
+              "type": "ui",
+              "anchor": "bottom",
+              "y": -40,
+              "width": 700,
+              "height": 30
+            },
+            {
+              "type": "text",
+              "text": "W A S D to walk, Space to jump",
+              "size": 18,
+              "color": "#e8f0ff",
+              "outline": 2,
+              "outlineColor": "#1a2233"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

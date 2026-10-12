@@ -1,0 +1,178 @@
+{
+  "version": 3,
+  "environment": {
+    "sky": true,
+    "skyTop": "#3f7fd6",
+    "skyHorizon": "#bfe3ff",
+    "skyGround": "#6c7a66",
+    "ambientIntensity": 0.75,
+    "look": "Toy"
+  },
+  "entities": [
+    {
+      "name": "Camera",
+      "position": [
+        0,
+        1.6,
+        6
+      ],
+      "rotation": [
+        -8,
+        0,
+        0
+      ],
+      "components": [
+        {
+          "type": "camera",
+          "fov": 45
+        }
+      ]
+    },
+    {
+      "name": "Sun",
+      "position": [
+        4,
+        8,
+        5
+      ],
+      "rotation": [
+        -55,
+        25,
+        0
+      ],
+      "components": [
+        {
+          "type": "light",
+          "kind": "directional",
+          "castShadow": true,
+          "intensity": 1.6
+        }
+      ]
+    },
+    {
+      "name": "Ground",
+      "position": [
+        0,
+        -0.5,
+        0
+      ],
+      "scale": [
+        14,
+        1,
+        14
+      ],
+      "components": [
+        {
+          "type": "mesh",
+          "material": "Grass"
+        }
+      ]
+    },
+    {
+      "name": "Gate",
+      "position": [
+        0,
+        1,
+        0
+      ],
+      "scale": [
+        0.3,
+        2,
+        1.4
+      ],
+      "components": [
+        {
+          "type": "mesh",
+          "material": "Portal"
+        },
+        {
+          "type": "script",
+          "script": "turn"
+        }
+      ]
+    },
+    {
+      "name": "Screen",
+      "components": [
+        {
+          "type": "canvas"
+        }
+      ],
+      "children": [
+        {
+          "name": "Title",
+          "components": [
+            {
+              "type": "ui",
+              "anchor": "top",
+              "y": 50,
+              "width": 700,
+              "height": 80
+            },
+            {
+              "type": "text",
+              "text": "LEVEL DONE",
+              "size": 56,
+              "outline": 4,
+              "outlineColor": "#1a2233"
+            }
+          ]
+        },
+        {
+          "name": "Result",
+          "components": [
+            {
+              "type": "ui",
+              "anchor": "top",
+              "y": 140,
+              "width": 700,
+              "height": 70
+            },
+            {
+              "type": "text",
+              "text": "",
+              "size": 24,
+              "outline": 2,
+              "outlineColor": "#1a2233"
+            },
+            {
+              "type": "script",
+              "script": "result"
+            }
+          ]
+        },
+        {
+          "name": "Again",
+          "components": [
+            {
+              "type": "ui",
+              "anchor": "bottom",
+              "y": -70,
+              "width": 220,
+              "height": 56
+            },
+            {
+              "type": "image",
+              "color": "#2d6cdf"
+            },
+            {
+              "type": "text",
+              "text": "Again",
+              "size": 24
+            },
+            {
+              "type": "button"
+            },
+            {
+              "type": "script",
+              "script": "goto",
+              "params": {
+                "scene": "menu"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

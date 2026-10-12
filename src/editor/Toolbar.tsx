@@ -175,8 +175,31 @@ export default function Toolbar() {
             </div>
             <span className="sep" />
 
-            {/* Another project is opened from the File menu: the bar keeps its middle for Play */}
-            {project && <span className="project-name" title="The open project · File → Open … switches to another">{project}</span>}
+            {/* The open project; a click lists the others (the same items as in the File menu) */}
+            {project && <span className="label">Project</span>}
+            {project && (
+                <button
+                    className={`menubar-item project-name ${openMenu === "menubar:project" ? "open" : ""}`}
+                    title="The open project · click to open another one"
+                    onClick={(e) => {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const at = { clientX: rect.left, clientY: rect.bottom + 2, preventDefault: () => {}, stopPropagation: () => {} };
+                        const others = projects.filter((name) => name !== project);
+                        openContextMenu(at, [
+                            {
+                                title: "Open Project",
+                                items: [
+                                    ...others.map((name) => ({ label: name, icon: "folder" as const, run: () => void openProject(name) })),
+                                    ...(others.length === 0 ? [{ label: "No other projects", disabled: true, run: () => {} }] : []),
+                                    { label: "New Project…", icon: "plus" as const, run: () => setDialog("project") }
+                                ]
+                            }
+                        ], "menubar:project");
+                    }}
+                >
+                    {project} ▾
+                </button>
+            )}
 
             {project && !editingPrefab && (
                 <>

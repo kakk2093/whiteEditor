@@ -1,0 +1,12 @@
+{
+  "startScene": "menu",
+  "aspect": "16:9",
+  "tags": [
+    "player"
+  ],
+  "layers": [
+    "Player",
+    "Coin"
+  ],
+  "noCollision": []
+}

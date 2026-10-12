@@ -71,28 +71,30 @@ void main() {
     gl_FragColor = texture2D(tUi, vUv);
 }`;
 
-// The glow of the materials: the light of the glowing surfaces (tGlow: they alone, the rest black) spread
-// around them and added to the picture. Four rings of eight samples, the near ones counting for more.
+// The glow of the materials: the light of the glowing surfaces (tGlow: they alone, the rest black) is blurred,
+// along x and then along y, in a picture of half the size, and added to the picture of the scene.
+// One pass of the blur: nine samples along `step` (a part of the picture per sample), weighted as a bell.
+const GLOW_BLUR = `
+uniform sampler2D tGlow;
+uniform vec2 step;
+varying vec2 vUv;
+void main() {
+    vec3 sum = texture2D(tGlow, vUv).rgb * 0.2270270;
+    sum += (texture2D(tGlow, vUv + step).rgb + texture2D(tGlow, vUv - step).rgb) * 0.1945946;
+    sum += (texture2D(tGlow, vUv + step * 2.0).rgb + texture2D(tGlow, vUv - step * 2.0).rgb) * 0.1216216;
+    sum += (texture2D(tGlow, vUv + step * 3.0).rgb + texture2D(tGlow, vUv - step * 3.0).rgb) * 0.0540541;
+    sum += (texture2D(tGlow, vUv + step * 4.0).rgb + texture2D(tGlow, vUv - step * 4.0).rgb) * 0.0162162;
+    gl_FragColor = vec4(sum, 1.0);
+}`;
+
 const GLOW = `
 uniform sampler2D tColor;
 uniform sampler2D tGlow;
-uniform vec2 resolution;
-uniform float radius;
+uniform float strength;
 varying vec2 vUv;
 void main() {
-    vec3 sum = vec3(0.0);
-    float total = 0.0;
-    for (int ring = 1; ring <= 4; ring++) {
-        float reach = radius * float(ring) / 4.0;
-        float weight = 1.25 - float(ring) / 4.0;
-        for (int i = 0; i < 8; i++) {
-            float angle = 6.2831853 * (float(i) + 0.5 * float(ring)) / 8.0;
-            sum += texture2D(tGlow, vUv + vec2(cos(angle), sin(angle)) * reach / resolution).rgb * weight;
-            total += weight;
-        }
-    }
     vec4 color = texture2D(tColor, vUv);
-    gl_FragColor = vec4(color.rgb + sum / total, color.a);
+    gl_FragColor = vec4(color.rgb + texture2D(tGlow, vUv).rgb * strength, color.a);
 }`;
 
 // How far the glow of a material spreads, as a part of the height of the picture
@@ -105,12 +107,13 @@ interface Pass {
     material: THREE.ShaderMaterial;
 }
 
-function createTarget(depth: boolean) {
+// `smooth`: read between its pixels (what a blur wants), not pixel by pixel
+function createTarget(depth: boolean, smooth = false) {
     // Half floats: the picture stays linear between the effects, and bytes would band in the dark
     const target = new THREE.WebGLRenderTarget(1, 1, {
         type: THREE.HalfFloatType,
-        minFilter: THREE.NearestFilter,
-        magFilter: THREE.NearestFilter,
+        minFilter: smooth ? THREE.LinearFilter : THREE.NearestFilter,
+        magFilter: smooth ? THREE.LinearFilter : THREE.NearestFilter,
         depthBuffer: depth,
     });
     if (depth) target.depthTexture = new THREE.DepthTexture(1, 1);
@@ -149,10 +152,21 @@ export class RenderPipeline {
 
     private glowMaterials = new Map<THREE.Material, THREE.MeshBasicMaterial>();
 
+    // The blur of the glow goes from one to the other and back, at half the size of the picture
+    private blurTargets = [createTarget(false, true), createTarget(false, true)];
+
+    private blurPass = new THREE.ShaderMaterial({
+        vertexShader: VERTEX,
+        fragmentShader: GLOW_BLUR,
+        uniforms: { tGlow: { value: null }, step: { value: new THREE.Vector2() } },
+        depthTest: false,
+        depthWrite: false,
+    });
+
     private glowPass = new THREE.ShaderMaterial({
         vertexShader: VERTEX,
         fragmentShader: GLOW,
-        uniforms: { tColor: { value: null }, tGlow: { value: null }, resolution: { value: new THREE.Vector2(1, 1) }, radius: { value: 1 } },
+        uniforms: { tColor: { value: null }, tGlow: { value: null }, strength: { value: 1 } },
         depthTest: false,
         depthWrite: false,
     });
@@ -351,11 +365,32 @@ export class RenderPipeline {
         for (const [mesh, material] of swapped) mesh.material = material;
         hidden.forEach((object) => (object.visible = true));
 
+        // The blur: twice along x and along y, the second time wider, so the light fades out softly
+        const [first, second] = this.blurTargets;
+        for (const target of this.blurTargets) {
+            const w = Math.max(1, Math.round(width / 2));
+            const h = Math.max(1, Math.round(height / 2));
+            if (target.width !== w || target.height !== h) target.setSize(w, h);
+        }
+        // How far apart the nine samples are, as a part of the height of the picture
+        const reach = GLOW_RADIUS / 4;
+        const blur = this.blurPass.uniforms;
+        let from: THREE.WebGLRenderTarget = this.glowTarget;
+        for (const wide of [0.5, 1]) {
+            blur.tGlow.value = from.texture;
+            (blur.step.value as THREE.Vector2).set((reach * wide * height) / width, 0);
+            this.drawQuad(this.blurPass, first);
+            blur.tGlow.value = first.texture;
+            (blur.step.value as THREE.Vector2).set(0, reach * wide);
+            this.drawQuad(this.blurPass, second);
+            from = second;
+        }
+
         const u = this.glowPass.uniforms;
         u.tColor.value = source.texture;
-        u.tGlow.value = this.glowTarget.texture;
-        u.resolution.value.set(width, height);
-        u.radius.value = Math.max(1, height * GLOW_RADIUS);
+        u.tGlow.value = second.texture;
+        // The blur spreads the light thin: this brings the halo back to about what a material asks for
+        u.strength.value = 1.6;
         this.drawQuad(this.glowPass, this.litTarget);
         return this.litTarget;
     }
@@ -470,7 +505,8 @@ export class RenderPipeline {
         this.glowMaterials.forEach((material) => material.dispose());
         this.glowMaterials.clear();
         this.glowPass.dispose();
-        [this.sceneTarget, this.normalTarget, this.glowTarget, this.litTarget, ...this.targets].forEach((target) => {
+        this.blurPass.dispose();
+        [this.sceneTarget, this.normalTarget, this.glowTarget, this.litTarget, ...this.blurTargets, ...this.targets].forEach((target) => {
             target.depthTexture?.dispose();
             target.dispose();
         });
