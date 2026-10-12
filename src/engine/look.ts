@@ -281,8 +281,59 @@ vec4 effect(vec2 uv, vec4 color) {
 }`,
 });
 
+// Smooth edges for a picture of full size: where the brightness jumps (the edge of a thing, a line), the
+// pixels are blended along the edge, so the "stairs" go. What FXAA does. For looks whose effects read the
+// depth: their picture cannot be smoothed while it is drawn. Put it last, or before a vignette.
+const smooth = defineEffect({
+    name: "smooth",
+    label: "Smooth Edges",
+    params: {
+        // How big a jump of brightness counts as an edge; lower smooths more, and softens fine detail
+        threshold: { type: "number", default: 0.1, min: 0.02, max: 0.5, step: 0.01 },
+    },
+    shader: `
+// The picture between its pixels
+vec3 smoothTap(vec2 uv) {
+    vec2 p = uv * resolution - 0.5;
+    vec2 f = fract(p);
+    vec2 px = 1.0 / resolution;
+    vec2 base = (floor(p) + 0.5) * px;
+    vec3 a = texel(base).rgb;
+    vec3 b = texel(base + vec2(px.x, 0.0)).rgb;
+    vec3 c = texel(base + vec2(0.0, px.y)).rgb;
+    vec3 d = texel(base + px).rgb;
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+// Brightness as the eye takes it, of a color that may be brighter than white
+float smoothLuma(vec3 c) {
+    c = max(c, 0.0);
+    return dot(sqrt(c / (1.0 + c)), vec3(0.299, 0.587, 0.114));
+}
+vec4 effect(vec2 uv, vec4 color) {
+    vec2 px = 1.0 / resolution;
+    float nw = smoothLuma(smoothTap(uv + vec2(-0.5, -0.5) * px));
+    float ne = smoothLuma(smoothTap(uv + vec2(0.5, -0.5) * px));
+    float sw = smoothLuma(smoothTap(uv + vec2(-0.5, 0.5) * px));
+    float se = smoothLuma(smoothTap(uv + vec2(0.5, 0.5) * px));
+    float here = smoothLuma(color.rgb);
+    float low = min(here, min(min(nw, ne), min(sw, se)));
+    float high = max(here, max(max(nw, ne), max(sw, se)));
+    if (high - low < max(0.02, high * threshold)) return color;
+
+    // Along the edge: across the way the brightness changes
+    vec2 along = vec2(-((nw + ne) - (sw + se)), (nw + sw) - (ne + se));
+    float least = max((nw + ne + sw + se) * 0.03125, 0.0078125);
+    along = clamp(along / (min(abs(along.x), abs(along.y)) + least), -8.0, 8.0) * px;
+    vec3 near = 0.5 * (smoothTap(uv - along / 6.0) + smoothTap(uv + along / 6.0));
+    vec3 wide = near * 0.5 + 0.25 * (smoothTap(uv - along * 0.5) + smoothTap(uv + along * 0.5));
+    float taken = smoothLuma(wide);
+    // The wide blend has reached past the edge into something else: the near one is kept
+    return vec4(taken < low || taken > high ? near : wide, color.a);
+}`,
+});
+
 // Known to every project; a project effect with the same name replaces the built-in one
-export const builtinEffects: EffectDef[] = [outline, palette, grade, vignette, glow, ao];
+export const builtinEffects: EffectDef[] = [outline, palette, grade, vignette, glow, ao, smooth];
 
 // An entry named again in an extending look keeps its place in the list and gets the new params
 function mergeEntries<E extends EffectEntry | SurfaceEntry>(base: E[], own: E[], key: "effect" | "surface"): E[] {
