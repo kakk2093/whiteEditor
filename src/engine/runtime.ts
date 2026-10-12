@@ -5,6 +5,7 @@ import { Input } from "./input";
 import { createEntityObject, createPrefabInstance } from "./loadScene";
 import { paramDefaults } from "./Registry";
 import { particlesOf, updateParticles } from "./particles";
+import { animationOf, updateModelFiles } from "./gltf";
 import { Physics } from "./physics";
 import type { BehaviorDef, BehaviorSelf, Ease, FindQuery, RayHit, RayOptions, Registry, Running, SoundSource, TweenOptions, VectorLike } from "./Registry";
 import { layerOf } from "./settings";
@@ -284,6 +285,7 @@ export class Runtime {
                     setLabelText(object, String(text));
                 },
                 particles: (object = obj) => particlesOf(object),
+                animation: (object = obj) => animationOf(object),
                 setEnvironment: (change) => this.onEnvironment(change),
                 get environment() {
                     return runtime.environment;
@@ -889,6 +891,7 @@ export class Runtime {
         this.sweep();
         this.sounds();
         updateParticles(this.root, dt, (object) => this.isActive(object));
+        updateModelFiles(this.root, dt, (object) => this.isActive(object));
     }
 
     // The scene stops: every behavior gets its destroy()

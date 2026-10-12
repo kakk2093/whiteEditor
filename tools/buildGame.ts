@@ -35,6 +35,12 @@ const listSounds = async (dir: string) =>
     .filter((f) => /\.(mp3|ogg|wav)$/i.test(f))
     .sort()
 
+const listModels = async (dir: string) =>
+  (await fs.readdir(dir, { recursive: true }).catch(() => [] as string[]))
+    .map((f) => f.split(path.sep).join('/'))
+    .filter((f) => /\.(glb|gltf)$/i.test(f))
+    .sort()
+
 const listFonts = async (dir: string) =>
   (await fs.readdir(dir, { recursive: true }).catch(() => [] as string[]))
     .map((f) => f.split(path.sep).join('/'))
@@ -105,6 +111,7 @@ export async function buildGame(root: string, projectDir: string, scene?: string
     `registry.setTextures('./assets/', ${JSON.stringify(await listImages(path.join(projectDir, 'assets')))})`,
     `registry.setFonts('./assets/', ${JSON.stringify(await listFonts(path.join(projectDir, 'assets')))})`,
     `registry.setSounds('./assets/', ${JSON.stringify(await listSounds(path.join(projectDir, 'assets')))})`,
+    `registry.setModelFiles('./assets/', ${JSON.stringify(await listModels(path.join(projectDir, 'assets')))})`,
     // project.json: the collision layers
     `registry.setSettings(parseSettings(${JSON.stringify(settings)}))`,
     `for (const [name, data] of Object.entries(${await section('materials')})) registry.setMaterial(name, data)`,

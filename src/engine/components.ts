@@ -7,6 +7,8 @@ import { createLabel, createSprite } from "./sprites";
 import type { LabelFields, SpriteFields } from "./sprites";
 import type { ComponentData, EntityData, Params } from "./types";
 import { UI_ANCHORS } from "./ui";
+import { createModelFile } from "./gltf";
+import type { ModelFileFields } from "./gltf";
 
 // What a component can take from the project's scripts/: a code model, a behavior
 export interface SourceDef {
@@ -461,6 +463,21 @@ export const componentDefs: Record<string, ComponentDef> = {
         },
         create: (f) => marker("uiScroll", f),
     },
+    // A model made elsewhere and kept as a file of assets/ (glTF: .glb or .gltf), with its own materials
+    // and, if it has them, animations
+    gltf: {
+        label: "glTF Model",
+        fields: {
+            file: { type: "asset", kind: "gltf", default: "" },
+            castShadow: { type: "boolean", default: true },
+            receiveShadow: { type: "boolean", default: true },
+            // The name of the clip that plays from the start of the game; "" for none
+            animation: { type: "string", default: "" },
+            loop: { type: "boolean", default: true },
+            speed: { type: "number", default: 1, min: 0, step: 0.1 },
+        },
+        create: (f, registry) => createModelFile(f as unknown as ModelFileFields, f.file ? registry.loadModelFile(f.file as string) : null),
+    },
     // A model built by a project script (defineModel)
     model: {
         label: "Model",
@@ -509,7 +526,8 @@ export function disposeObject(obj: THREE.Object3D) {
     obj.traverse((child) => {
         const mesh = child as THREE.Mesh;
         if (!mesh.geometry) return;
-        mesh.geometry.dispose();
+        // The geometries of a model file are shared by every entity that shows the file
+        if (!mesh.geometry.userData.shared) mesh.geometry.dispose();
         const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
         // Material assets are shared between meshes and owned by the registry
         materials.forEach((m) => {

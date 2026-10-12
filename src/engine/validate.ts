@@ -42,6 +42,7 @@ function checkValue(def: ParamDef, value: unknown, registry: Registry): string |
                 return `there is no layer "${value}" in project.json (layers: ${[DEFAULT_LAYER, ...registry.settings.layers].join(", ")})`;
             }
             if (def.kind === "font") return `there is no font "${value}" in assets/ (fonts: ${registry.fontNames().join(", ") || "none"})`;
+            if (def.kind === "gltf") return `there is no model "${value}" in assets/ (models: ${registry.modelFileNames().join(", ") || "none"})`;
             if (def.kind === "sound") return `there is no sound "${value}" in assets/ (sounds: ${registry.soundNames().join(", ") || "none"})`;
             return def.kind === "texture"
                 ? `there is no image "${value}" in assets/ (images: ${registry.textureNames().join(", ") || "none"})`

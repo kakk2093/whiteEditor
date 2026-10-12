@@ -1,5 +1,5 @@
 import {
-    applyToPrefab, FONT_FILE, parsePrefab, parseScene, renameLayerIn, resolveLook, SHARED_PROJECT, SOUND_FILE, validateLook, validateMaterial, validatePrefab, validateScene
+    applyToPrefab, FONT_FILE, MODEL_FILE, parsePrefab, parseScene, renameLayerIn, resolveLook, SHARED_PROJECT, SOUND_FILE, validateLook, validateMaterial, validatePrefab, validateScene
 } from "../../engine";
 import type { LookData, MaterialData, ProjectSettings, SceneData } from "../../engine";
 import { renameInEntities, renameInScene } from "./references";
@@ -604,11 +604,11 @@ async function assetFile(project: string, name: string): Promise<Blob | null> {
     return response?.ok && !(response.headers.get("content-type") ?? "").includes("text/html") ? response.blob() : null;
 }
 
-export async function uploadFiles(files: File[]): Promise<"texture" | "sound" | null> {
+export async function uploadFiles(files: File[]): Promise<"texture" | "sound" | "model" | null> {
     const { project } = sceneStore;
-    const images = files.filter((file) => /\.(png|jpe?g|webp)$/i.test(file.name) || SOUND_FILE.test(file.name) || FONT_FILE.test(file.name));
+    const images = files.filter((file) => /\.(png|jpe?g|webp|bin)$/i.test(file.name) || SOUND_FILE.test(file.name) || FONT_FILE.test(file.name) || MODEL_FILE.test(file.name));
     if (images.length === 0) {
-        sceneStore.update({ status: "Only images (.png, .jpg, .webp), sounds (.mp3, .ogg, .wav) and fonts (.ttf, .otf, .woff, .woff2) can be added" });
+        sceneStore.update({ status: "Only images (.png, .jpg, .webp), sounds (.mp3, .ogg, .wav), fonts (.ttf, .otf, .woff, .woff2) and models (.glb, .gltf with its .bin) can be added" });
         return null;
     }
     try {
@@ -638,6 +638,13 @@ export async function uploadFiles(files: File[]): Promise<"texture" | "sound" | 
         sceneStore.update({ status: `Added to assets/: ${names.join(", ")}` });
         // A font is picked in the Font field of a Text; the panel has no place for it
         if (FONT_FILE.test(last)) return null;
+        // A model file shows in the Models view
+        const model = [...names].reverse().find((name) => MODEL_FILE.test(name));
+        if (model) {
+            sceneStore.selectAsset({ kind: "model", name: model });
+            return "model";
+        }
+        if (/\.bin$/i.test(last)) return null;
         const kind = SOUND_FILE.test(last) ? "sound" : "texture";
         sceneStore.selectAsset({ kind, name: last });
         return kind;

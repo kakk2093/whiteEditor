@@ -33,7 +33,8 @@ varying vec2 vUv;
 
 vec4 texel(vec2 uv) { return texture2D(tColor, uv); }
 float depthAt(vec2 uv) {
-    float d = texture2D(tDepth, uv).x;
+    // Without the slope of the texture: an effect may read the depth in a loop, where the slope is not known
+    float d = texture2DLodEXT(tDepth, uv, 0.0).x;
     // An orthographic camera keeps depth as it is, a perspective one squeezes the far part
     if (cameraOrtho) return cameraNear + d * (cameraFar - cameraNear);
     return (cameraNear * cameraFar) / (cameraFar - d * (cameraFar - cameraNear));

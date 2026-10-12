@@ -84,6 +84,7 @@ npx eslint .
 | `src/engine/runGame.ts` | `runGame(container, registry, scene)` — вся игра вне редактора: рендерер, `Game`, ввод, цикл кадров; `createRenderer()` — общий с вьюпортом; `renderStill(registry, scene, options)` — один кадр сцены как PNG |
 | `src/engine/game.ts` | `Game`: запущенная сцена — объекты, окружение, камера сцены, `Runtime`; `start()` / `update(dt)` / `resize()` / `dispose()`. Через него идут и Play в редакторе, и собранная игра |
 | `src/engine/particles.ts` | Частицы: компонент `particles`, `updateParticles(root, dt)`, `emitParticles`, `particlesOf` |
+| `src/engine/gltf.ts` | Модели из файлов `assets/` (glTF): загрузка, компонент `gltf`, анимации (`updateModelFiles`, `animationOf`) |
 | `src/engine/sprites.ts` | Плоское в мире: `sprite` (картинка) и `label` (текст), оба — плоскость с неосвещённым материалом |
 | `src/engine/environment.ts` | Окружение сцены: фон, небо градиентом, свет, туман; зоны (`zoneAt`, `withZone`, `blendEnvironment`) |
 | `src/engine/physics.ts` | `Physics`: настоящая физика на cannon-es — тела с компонентом `body`; вся библиотека используется только здесь |
@@ -183,6 +184,9 @@ npx eslint .
 7. ~~Значки во вьюпорте, правка интерфейса (привязка, группа, раскладка), undo переименований и файлов~~ —
    сделано (`docs/editor.md`, `docs/ui.md`). Из списка «что нужно редактору» остались по слову автора:
    отдельное окно Game рядом со Scene, вложенные префабы (проверка), импорт glTF.
+
+8. ~~Импорт glTF~~ — сделан: компонент `gltf`, анимации (`self.animation`), файлы в панели Project
+   (`docs/engine.md`, «Модели из файлов»).
 
 Отложено автором, без его слова не трогать: **звук** (музыка между сценами работает «не совсем правильно», что
 именно — он не сказал; формат `sound` / `listener` / `music` не окончательный) и **упаковка для телефона**.

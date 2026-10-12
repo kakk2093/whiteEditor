@@ -2,6 +2,8 @@ import * as THREE from "three";
 import type { EnvironmentData } from "./environment";
 import type { Input } from "./input";
 import { builtinEffects, isEffectDef } from "./look";
+import { loadModelFile } from "./gltf";
+import type { AnimationHandle } from "./gltf";
 import type { EffectDef, LookData } from "./look";
 import { applyMaterialData, createSharedMaterial } from "./materials";
 import type { MaterialData } from "./materials";
@@ -18,7 +20,7 @@ import type { UiElement } from "./ui";
 
 // What a param of type "asset" can refer to
 // "font" is a font file of assets/, named with its extension: "pixel.ttf"
-export type AssetKind = "material" | "look" | "prefab" | "texture" | "layer" | "scene" | "sound" | "font" | "object";
+export type AssetKind = "material" | "look" | "prefab" | "texture" | "layer" | "scene" | "sound" | "font" | "object" | "gltf";
 
 export type ParamDef = (
     | { type: "number"; default: number; min?: number; max?: number; step?: number }
@@ -33,6 +35,7 @@ export type ParamDef = (
     // "layer" is a collision layer of the project settings (project.json); "" is the default layer
     // "scene" is a scene of the project, e.g. the one a door leads to (self.loadScene)
     // "sound" is an audio file of assets/, named with its extension: "coin.wav"
+    // "gltf" is a model file of assets/, named with its extension: "robot.glb"
     // "object" is an object of the same scene, by its name: a behavior gets the object itself (or null)
     | { type: "asset"; kind: AssetKind; default: string }
 ) & {
@@ -208,6 +211,9 @@ export interface BehaviorSelf<P = Params, S = unknown> {
     // What is not named stays. A zone the camera is in still has its say over what it changes.
     environment: EnvironmentData | null;
     setEnvironment: (change: Partial<EnvironmentData>) => void;
+    // The animations of the model file (the "gltf" component) of this object, or of the one given:
+    // self.animation()?.play("Run", { fade: 0.2 }). null if the object has no such component.
+    animation: (object?: THREE.Object3D) => AnimationHandle | null;
     // The Particles component of this object, or of the one given: emit(20) throws out a burst,
     // `playing` switches its steady stream. null if the object has no Particles component.
     particles: (object?: THREE.Object3D) => ParticleHandle | null;
@@ -340,6 +346,12 @@ export class Registry {
     // The audio files of assets/, and where they are loaded from
     private soundFiles: string[] = [];
 
+    private modelFiles: string[] = [];
+
+    private modelBase = "";
+
+    private modelQuery = "";
+
     private soundBase = "";
 
     private soundQuery = "";
@@ -470,6 +482,28 @@ export class Registry {
         return this.soundBase + name.split("/").map(encodeURIComponent).join("/") + this.soundQuery;
     }
 
+    // `files` are the model files of assets/ ("robot.glb"); the rest is as in setTextures()
+    setModelFiles(base: string, files: string[], query = "") {
+        this.modelBase = base;
+        this.modelFiles = [...files].sort();
+        this.modelQuery = query;
+        return this;
+    }
+
+    modelFileNames() {
+        return this.modelFiles;
+    }
+
+    modelFileUrl(name: string) {
+        return this.modelBase + name.split("/").map(encodeURIComponent).join("/") + this.modelQuery;
+    }
+
+    // The model of a file: at once if it is loaded, a promise of it if it is on the way, null for a file
+    // the project does not have (and outside of a browser)
+    loadModelFile(name: string) {
+        return this.modelFiles.includes(name) ? loadModelFile(this.modelFileUrl(name)) : null;
+    }
+
     // `files` are the font files of assets/ ("pixel.ttf"); the rest is as in setTextures()
     setFonts(base: string, files: string[], query = "") {
         this.fontBase = base;
@@ -537,6 +571,7 @@ export class Registry {
         await Promise.allSettled([
             ...this.textureFiles.map((name) => this.loadImage(name)),
             ...this.fontFiles.map((name) => loadFont(this.fontUrl(name))?.done),
+            ...this.modelFiles.map((name) => this.loadModelFile(name)),
         ]);
     }
 
@@ -574,6 +609,7 @@ export class Registry {
         if (kind === "object") return this.objects ?? [];
         if (kind === "layer") return this.settings.layers;
         if (kind === "sound") return this.soundNames();
+        if (kind === "gltf") return this.modelFileNames();
         if (kind === "font") return this.fontNames();
         if (kind === "scene") return this.scenes;
         if (kind === "texture") return this.textureNames();

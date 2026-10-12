@@ -148,6 +148,20 @@
   открытый проект (`reloadScripts`, `assetChangedOnDisk`). Сейчас в общем: стили `PixelArt`, `PixelArtDark`, `PS1`,
   `Sketch`, `Pico8`, `Glow`, `Toy`; эффекты `scanlines`, `wobble`, `hatch`; поверхности `sway`, `boil`; поведения
   `spin`, `bob`, `lifetime`, `follow`, `walker`; сцена `preview` для просмотра стилей.
+- **Модели из файлов, glTF** (12.10.2026, по слову автора «Импорт glTF»; `src/engine/gltf.ts`). Файл `.glb` /
+  `.gltf` в `assets/`, компонент `gltf` (`file`, `castShadow`, `receiveShadow`, `animation`, `loop`, `speed`),
+  вид параметра `kind: "gltf"`, список — `registry.setModelFiles(base, files)` (сервер: `assets?kind=gltf`).
+  `loadModelFile(url)` читает файл `GLTFLoader`'ом один раз на адрес (готовый — сразу, иначе `Promise`; вне
+  браузера `null`) и помечает его геометрии и материалы `userData.shared`: каждый объект сцены получает копию
+  узлов (`SkeletonUtils.clone`), а геометрии и материалы общие — `disposeObject` теперь не трогает геометрию с
+  этой пометкой. `createModelFile` возвращает пустую группу и наполняет её, когда файл пришёл; состояние —
+  `userData.gltf` (клипы, `AnimationMixer`, `play` / `stop`). `updateModelFiles(root, dt, active)` двигает
+  анимации — зовёт `Runtime.update`, поэтому при правке сцены модель стоит в исходной позе.
+  `self.animation(object?)` — `animationOf`. `preloadTextures` грузит и модели (для `render`). В редакторе: файлы
+  в виде Models панели Project рядом с моделями из кода (`note: "file"`; имя с расширением отличает их —
+  `instantiateModel` по нему создаёт объект с `gltf`), загрузка перетаскиванием `.glb` (`uploadFiles`), удаление
+  через `deleteTexture`. Демо: `projects/shared/assets/robot.glb` (сделан кодом через `GLTFExporter`, клипы
+  `Wave` и `Walk`) и сцена `shared/model`.
 - **Ссылка на объект сцены** (12.10.2026): вид параметра `{ type: "asset", kind: "object" }`. В данных — имя
   объекта; `Runtime` при заполнении `self.params` ставит на такой ключ геттер, который отдаёт сам объект
   (`findAll({ name })[0]`, запоминает, пока тот в сцене и активен) или `null`; тип для скриптов —

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { DragEvent, MouseEvent, ReactNode } from "react";
-import { builtinEffects, builtinSurfaces, defaultMaterialData, SHARED_PROJECT } from "../engine";
+import { builtinEffects, builtinSurfaces, defaultMaterialData, MODEL_FILE, SHARED_PROJECT } from "../engine";
 import {
     addToLook, createFolder, createLook, createMaterial, createPrefab, deleteFolder, deleteLook, shareLook, deleteMaterial, deletePrefab,
     applySound, copyText, deleteScene, deleteTexture, duplicateAsset, moveAssetToFolder, newScene, openPrefab, openScene, renameAsset, renameFolder,
@@ -30,7 +30,7 @@ const TABS: { key: TabKey; title: string; icon: IconName; hint: string }[] = [
     { key: "texture", title: "Textures", icon: "image", hint: "Images of assets/ · drop image files here to add · drag onto an object to give it a material with the texture" },
     { key: "sound", title: "Sounds", icon: "sound", hint: "Audio files of assets/ · drop audio files here to add · double-click to listen · drag onto an object to give it a Sound component" },
     { key: "prefab", title: "Prefabs", icon: "prefab", hint: "Drag into the scene · double-click to edit · drop an object here to make a prefab" },
-    { key: "model", title: "Models", icon: "script", hint: "Models built by code in scripts/ · drag or double-click to add to the scene" },
+    { key: "model", title: "Models", icon: "script", hint: "Model files of assets/ (glTF: .glb, .gltf) and models built by code in scripts/ · drop model files here to add · drag or double-click to add to the scene" },
     { key: "look", title: "Looks", icon: "look", hint: "Render styles · click to edit · double-click or drag into the scene to use" },
     { key: "script", title: "Scripts", icon: "script", hint: "Behaviors, effects and surfaces · click to see params · drag a behavior onto an object" }
 ];
@@ -84,7 +84,7 @@ const DIRS: Record<TabKey, string> = {
 // the scripts folder; null for what is built into the engine.
 function fileOf(item: Item): string | null {
     if (item.kind === "scene" || item.kind === "material" || item.kind === "prefab" || item.kind === "look") return `${DIRS[item.kind]}/${item.name}.json`;
-    if (item.kind === "texture" || item.kind === "sound") return `assets/${item.name}`;
+    if (item.kind === "texture" || item.kind === "sound" || (item.kind === "model" && MODEL_FILE.test(item.name))) return `assets/${item.name}`;
     return item.note?.includes("built-in") ? null : "scripts";
 }
 
@@ -131,7 +131,13 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
     const itemsOf = (key: TabKey): Item[] => {
         if (key === "scene") return store.scenes.map((name) => ({ kind: "scene", name, label: name }));
         if (key === "prefab") return registry.prefabNames().map((name) => ({ kind: "prefab", name, label: name }));
-        if (key === "model") return registry.models().map((m) => ({ kind: "model", name: m.name, label: m.label ?? m.name, ...(registry.isSharedDef(m) ? { note: "shared" } : {}) }));
+        if (key === "model") {
+            return [
+                // The model files of assets/ (glTF), named with their extension, and the models built by code
+                ...registry.modelFileNames().map((name): Item => ({ kind: "model", name, label: name, note: "file" })),
+                ...registry.models().map((m): Item => ({ kind: "model", name: m.name, label: m.label ?? m.name, note: registry.isSharedDef(m) ? "code · shared" : "code" })),
+            ];
+        }
         // A look of the project "shared" is every project's; an edit here makes a copy of it for this project
         if (key === "look") return registry.lookNames().map((name) => ({ kind: "look", name, label: name, ...(registry.isSharedLook(name) ? { note: "shared" } : {}) }));
         if (key === "texture") return registry.textureNames().map((name) => ({ kind: "texture", name, label: name, image: registry.textureUrl(name) }));
@@ -265,6 +271,7 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
             menu.push({ label: "Delete…", icon: "trash", danger: true, run: sure(() => deletePrefab(name)) });
         } else if (kind === "model") {
             menu.push({ label: "Add to Scene", icon: "plus", run: () => instantiateModel(name) });
+            if (MODEL_FILE.test(name)) menu.push({ label: "Delete…", icon: "trash", danger: true, run: sure(() => deleteTexture(name)) });
         } else if (kind === "look") {
             if (name !== store.environment.look) menu.push({ label: "Use in This Scene", icon: "look", run: () => store.setEnvironment("look", name) });
             menu.push({ label: "Duplicate", icon: "copy", run: () => duplicateAsset("look", name) });
@@ -568,7 +575,7 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
                     )}
                     {all.length === 0 && tabKey === "model" && (
                         <div className="empty">
-                            No code models. Export <b>defineModel(...)</b> from a file in the project's scripts/ folder.
+                            No models. Drop a <b>.glb</b> file here, or export <b>defineModel(...)</b> from a file in the project's scripts/ folder.
                         </div>
                     )}
                 </div>

@@ -1,5 +1,5 @@
 import type { DragEvent } from "react";
-import { createPrefabInstance } from "../../engine";
+import { createPrefabInstance, MODEL_FILE } from "../../engine";
 import { applySound, applyTexture } from "./actions";
 import { getComponent, sceneStore } from "./SceneStore";
 import type { AssetRef } from "./SceneStore";
@@ -21,6 +21,12 @@ export function getDraggedAsset(e: DragEvent): AssetRef | null {
 
 // Puts a code model into the scene as a new entity
 export function instantiateModel(name: string, parentId: string | null = null) {
+    // A model file of assets/ (glTF) is named with its extension; a model built by code is not
+    if (MODEL_FILE.test(name)) {
+        const made = sceneStore.addEntity(name.replace(/^.*\//, "").replace(MODEL_FILE, ""), [{ type: "gltf", file: name }], parentId);
+        sceneStore.select(made.id);
+        return made;
+    }
     const label = sceneStore.registry.getModel(name)?.label ?? name;
     const entity = sceneStore.addEntity(label, [{ type: "model", model: name, params: {} }], parentId);
     sceneStore.select(entity.id);

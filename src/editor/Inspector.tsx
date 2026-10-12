@@ -3,7 +3,7 @@ import * as THREE from "three";
 import type { DragEvent, MouseEvent, ReactNode } from "react";
 import {
     ASPECTS, builtinEffects, builtinSurfaces, componentDefs, componentKey, DEFAULT_LAYER, environmentFields, fieldApplies, layersCollide, lookFields, materialFields,
-    MAX_COLORS, paramDefaults, resolveLook, setLayersCollide
+    MAX_COLORS, MODEL_FILE, paramDefaults, resolveLook, setLayersCollide
 } from "../engine";
 import type {
     ComponentData, EntityData, EnvironmentData, LookData, MaterialData, ParamDef, ParamValue, Params
@@ -1079,6 +1079,25 @@ function AssetInspector({ asset }: { asset: AssetRef }) {
                     </button>
                 </div>
                 <div className="note">A prefab is a reusable object. Editing it changes every instance placed in the scenes.</div>
+            </>
+        );
+    }
+
+    if (asset.kind === "model" && MODEL_FILE.test(asset.name)) {
+        return (
+            <>
+                <div className="inspector-head">
+                    <Icon name="cube" /> <b style={{ flex: 1 }}>{asset.name}</b>
+                </div>
+                <div className="note">
+                    A model file of assets/. In a scene it is the glTF Model component of an object; its animations are
+                    played by name (the Animation field, or self.animation() in a behavior).
+                </div>
+                <div className="note">
+                    <button className="btn primary" onClick={() => instantiateModel(asset.name)}>
+                        <Icon name="plus" /> Add to scene
+                    </button>
+                </div>
             </>
         );
     }

@@ -14,6 +14,7 @@ export * from "./input";
 export * from "./sound";
 export * from "./particles";
 export * from "./sprites";
+export * from "./gltf";
 export * from "./physics";
 export * from "./ui";
 export * from "./runtime";

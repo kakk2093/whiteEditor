@@ -106,6 +106,8 @@ export async function loadRegistry(project: string) {
     registry.setTextures(`/projects/${project}/assets/`, await request(`${project}/assets`), `?t=${Date.now()}`);
     registry.setFonts(`/projects/${project}/assets/`, await request(`${project}/assets?kind=font`), `?t=${Date.now()}`);
     registry.setSounds(`/projects/${project}/assets/`, await request(`${project}/assets?kind=sound`), `?t=${Date.now()}`);
+    // No time in the address: a .gltf names its other files next to itself, and they are asked for without one
+    registry.setModelFiles(`/projects/${project}/assets/`, await request(`${project}/assets?kind=gltf`));
     try {
         registry.setSettings(parseSettings(await request(`${project}/settings`)));
     } catch (e) {

@@ -166,6 +166,10 @@ const sounds = fs.existsSync(assetsDir)
   ? fs.readdirSync(assetsDir, { recursive: true }).map((f) => f.split(path.sep).join('/')).filter((f) => /\.(mp3|ogg|wav)$/i.test(f)).sort()
   : []
 
+const models = fs.existsSync(assetsDir)
+  ? fs.readdirSync(assetsDir, { recursive: true }).map((f) => f.split(path.sep).join('/')).filter((f) => /\.(glb|gltf)$/i.test(f)).sort()
+  : []
+
 const fonts = fs.existsSync(assetsDir)
   ? fs.readdirSync(assetsDir, { recursive: true }).map((f) => f.split(path.sep).join('/')).filter((f) => /\.(ttf|otf|woff2?)$/i.test(f)).sort()
   : []
@@ -196,6 +200,7 @@ const entryCode = () => [
   `registry.setTextures(${JSON.stringify(`/projects/${project}/assets/`)}, ${JSON.stringify(images)})`,
   `registry.setSounds(${JSON.stringify(`/projects/${project}/assets/`)}, ${JSON.stringify(sounds)})`,
   `registry.setFonts(${JSON.stringify(`/projects/${project}/assets/`)}, ${JSON.stringify(fonts)})`,
+  `registry.setModelFiles(${JSON.stringify(`/projects/${project}/assets/`)}, ${JSON.stringify(models)})`,
   `registry.setSettings(parseSettings(${JSON.stringify(settings)}))`,
   `registry.setScenes(${JSON.stringify(sceneNames)})`,
   `for (const [name, data] of Object.entries(${JSON.stringify(readSection('materials'))})) registry.setMaterial(name, data)`,

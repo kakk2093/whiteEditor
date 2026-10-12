@@ -172,7 +172,7 @@ function createHelper(entity: EntityData): THREE.Object3D | null {
     const particles = getComponent(entity, "particles");
     // Nothing of its own to see or to click: a group that only holds its children, an object with behaviors
     // only. Not the elements of the interface (they are not in the world) and not what a prefab fills.
-    const drawn = ["mesh", "model", "sprite", "label", "light", "camera", "sound", "listener", "zone", "particles", "canvas", "ui"];
+    const drawn = ["mesh", "model", "gltf", "sprite", "label", "light", "camera", "sound", "listener", "zone", "particles", "canvas", "ui"];
     const empty = !entity.prefab && !entity.components.some((component) => drawn.includes(component.type));
     if (!light && !camera && !collider && !sound && !listener && !zone && !particles && !empty) return null;
 
@@ -1733,7 +1733,7 @@ class SceneStore {
                 : entity.components.some((c) => (kind === "material" && c.type === "mesh" && c.material === name)
                     || (kind === "sound" && c.type === "sound" && c.sound === name)
                     || (kind === "behavior" && c.type === "script" && c.script === name)
-                    || (kind === "model" && c.type === "model" && c.model === name));
+                    || (kind === "model" && ((c.type === "model" && c.model === name) || (c.type === "gltf" && c.file === name))));
             if (uses) users.push(entity);
             ownLists(entity).forEach(visit);
         });

@@ -23,7 +23,7 @@ import { buildGame } from './tools/buildGame'
 const NAME = /^[\w-]+$/
 
 // A file an editor may put into assets/: an image (a texture), an audio file (a sound) or a font
-const IMAGE_NAME = /^[\w-]+\.(png|jpe?g|webp|mp3|ogg|wav|ttf|otf|woff2?)$/i
+const IMAGE_NAME = /^[\w-]+\.(png|jpe?g|webp|mp3|ogg|wav|ttf|otf|woff2?|glb|gltf|bin)$/i
 
 // Folders whose files are JSON assets addressed by name
 const JSON_SECTIONS = ['scenes', 'materials', 'prefabs', 'looks']
@@ -137,6 +137,12 @@ async function listNames(dir: string, ext: string) {
 export async function listImages(assetsDir: string) {
   const files = await fs.readdir(assetsDir, { recursive: true }).catch(() => [] as string[])
   return files.map(toPosix).filter((f) => /\.(png|jpe?g|webp)$/i.test(f)).sort()
+}
+
+// The model files of assets/ (glTF), which "gltf" components name
+export async function listModels(assetsDir: string) {
+  const files = await fs.readdir(assetsDir, { recursive: true }).catch(() => [] as string[])
+  return files.map(toPosix).filter((f) => /\.(glb|gltf)$/i.test(f)).sort()
 }
 
 // The audio files of assets/, which Sound components and self.playSound() name
@@ -282,6 +288,7 @@ export function projectsPlugin(dir = 'projects'): Plugin {
         // GET /__api/projects/demo/assets?kind=sound -> its audio files: ["coin.wav"]
         if (section === 'assets' && !item) {
           if (query.get('kind') === 'font') return listFonts(path.join(projectDir, 'assets'))
+          if (query.get('kind') === 'gltf') return listModels(path.join(projectDir, 'assets'))
           return query.get('kind') === 'sound' ? listSounds(path.join(projectDir, 'assets')) : listImages(path.join(projectDir, 'assets'))
         }
 
@@ -373,7 +380,7 @@ export function projectsPlugin(dir = 'projects'): Plugin {
           // is the file itself) or removed. The watcher then tells the editors that the project changed.
           if (segments.length === 3 && segments[1] === 'assets' && req.method !== 'GET') {
             const [project, , file] = segments
-            if (!NAME.test(project) || !IMAGE_NAME.test(file)) throw new HttpError(400, 'A file name can have only Latin letters, digits, _ and -, and is an image (.png, .jpg, .webp), a sound (.mp3, .ogg, .wav) or a font (.ttf, .otf, .woff, .woff2)')
+            if (!NAME.test(project) || !IMAGE_NAME.test(file)) throw new HttpError(400, 'A file name can have only Latin letters, digits, _ and -, and is an image (.png, .jpg, .webp), a sound (.mp3, .ogg, .wav), a font (.ttf, .otf, .woff, .woff2) or a model (.glb, .gltf, .bin)')
             const assetsDir = path.join(root, project, 'assets')
             if (!(await fs.stat(path.join(root, project)).then((s) => s.isDirectory(), () => false))) throw new HttpError(404, `Project "${project}" not found`)
             if (req.method === 'DELETE') {

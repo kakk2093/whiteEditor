@@ -7,6 +7,6 @@ export function entityIcon(entity: EntityData): IconName {
     if (entity.prefab) return "prefab";
     if (getComponent(entity, "light")) return "light";
     if (getComponent(entity, "camera")) return "camera";
-    if (getComponent(entity, "mesh") || getComponent(entity, "model")) return "cube";
+    if (getComponent(entity, "mesh") || getComponent(entity, "model") || getComponent(entity, "gltf")) return "cube";
     return "empty";
 }
