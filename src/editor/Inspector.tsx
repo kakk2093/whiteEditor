@@ -9,7 +9,7 @@ import type {
     ComponentData, EntityData, EnvironmentData, LookData, MaterialData, ParamDef, ParamValue, Params
 } from "../engine";
 import {
-    addToLook, applyOverrides, createPrefab, deleteLook, deleteMaterial, deletePrefab, deleteScene, deleteTexture, openPrefab, openScene, renameAsset, renameLayer, renameScene, updateLook, updateMaterial, updateSettings
+    addToLook, setSceneSky, applyOverrides, createPrefab, deleteLook, deleteMaterial, deletePrefab, deleteScene, deleteTexture, openPrefab, openScene, renameAsset, renameLayer, renameScene, updateLook, updateMaterial, updateSettings
 } from "./core/actions";
 import { ENTITY_DRAG_TYPE, instantiateModel, instantiatePrefab } from "./core/dnd";
 import { confirmAt, openContextMenu } from "./contextMenu";
@@ -259,6 +259,23 @@ function mixedKeys(defs: Record<string, ParamDef>, list: Params[]) {
     const defaults = paramDefaults(defs);
     const text = (values: Params, key: string) => JSON.stringify(values[key] ?? defaults[key]);
     return new Set(Object.keys(defs).filter((key) => list.some((values) => text(values, key) !== text(list[0], key))));
+}
+
+// The params of the sky made by code the scene names ("skyShader" of its environment), under its other fields
+export function SkyParams() {
+    const store = useSceneStore();
+    const { environment } = store;
+    const def = environment.sky && environment.skyShader && !environment.skyImage ? store.registry.getSky(environment.skyShader) : undefined;
+    if (!def?.params || Object.keys(def.params).length === 0) return null;
+    return (
+        <Section title={`Sky: ${def.label ?? def.name}`}>
+            <Fields
+                defs={def.params}
+                values={environment.skyParams ?? {}}
+                onChange={(key, value) => store.setEnvironment("skyParams", { ...environment.skyParams, [key]: value })}
+            />
+        </Section>
+    );
 }
 
 const MIXED_TITLE = "the selected objects have different values; a value given here goes to all of them";
@@ -906,10 +923,10 @@ function AssetName({ kind, name }: { kind: "material" | "look" | "prefab" | "sce
 
 // A behavior, an effect or a surface: what the scripts of the project (or the engine) define. Nothing to
 // edit here: it shows the params, where it is used, and puts it to use.
-function ScriptInspector({ kind, name }: { kind: "behavior" | "effect" | "surface"; name: string }) {
+function ScriptInspector({ kind, name }: { kind: "behavior" | "effect" | "surface" | "sky"; name: string }) {
     const store = useSceneStore();
     const { registry } = store;
-    const def = kind === "behavior" ? registry.getBehavior(name) : kind === "effect" ? registry.getEffect(name) : registry.getSurface(name);
+    const def = kind === "behavior" ? registry.getBehavior(name) : kind === "effect" ? registry.getEffect(name) : kind === "sky" ? registry.getSky(name) : registry.getSurface(name);
     const builtin = (kind === "effect" && builtinEffects.some((d) => d === def)) || (kind === "surface" && builtinSurfaces.some((d) => d === def));
     const params = Object.entries(def?.params ?? {});
 
@@ -921,6 +938,9 @@ function ScriptInspector({ kind, name }: { kind: "behavior" | "effect" | "surfac
             visit(entity.children);
         });
         visit(store.entities);
+    } else if (kind === "sky") {
+        const { environment } = store;
+        if (environment.sky && !environment.skyImage && environment.skyShader === name) users.push(store.sceneName);
     } else {
         const list = kind === "effect" ? "effects" : "surfaces";
         for (const look of registry.lookNames()) {
@@ -943,6 +963,10 @@ function ScriptInspector({ kind, name }: { kind: "behavior" | "effect" | "surfac
                     >
                         <Icon name="plus" /> Add to selected object
                     </button>
+                ) : kind === "sky" ? (
+                    <button className="btn primary" disabled={!!store.editingPrefab} onClick={() => setSceneSky(name)}>
+                        <Icon name="plus" /> Use as the sky of the scene
+                    </button>
                 ) : (
                     <button className="btn primary" onClick={() => addToLook(kind === "effect" ? "effects" : "surfaces", name)}>
                         <Icon name="plus" /> Add to the look of the scene
@@ -953,6 +977,7 @@ function ScriptInspector({ kind, name }: { kind: "behavior" | "effect" | "surfac
                 {kind === "behavior" && "A behavior: code that moves an object while the game runs. "}
                 {kind === "effect" && "A screen effect: changes the finished picture. "}
                 {kind === "surface" && "A surface: changes how every object is drawn. "}
+                {kind === "sky" && "A sky made by code: a scene names it in its settings (Sky Shader) and sets its params there. "}
                 {builtin
                     ? <>Built into the engine as <b>{name}</b>.</>
                     : <>Defined as <b>{name}</b> in the project's scripts/ folder; edit it in VS Code, the editor reloads it on save.</>}
@@ -972,7 +997,7 @@ function ScriptInspector({ kind, name }: { kind: "behavior" | "effect" | "surfac
                 {params.length === 0 && <div className="muted">No params.</div>}
             </Section>
 
-            <Section title={kind === "behavior" ? "On objects of this scene" : "Used by looks"}>
+            <Section title={kind === "behavior" ? "On objects of this scene" : kind === "sky" ? "The sky of the open scene" : "Used by looks"}>
                 <div className="muted">{users.length > 0 ? users.join(", ") : "Nothing uses it."}</div>
             </Section>
         </>
@@ -1034,7 +1059,7 @@ function AssetInspector({ asset }: { asset: AssetRef }) {
             </>
         );
     }
-    if (asset.kind === "behavior" || asset.kind === "effect" || asset.kind === "surface") {
+    if (asset.kind === "behavior" || asset.kind === "effect" || asset.kind === "surface" || asset.kind === "sky") {
         return <ScriptInspector kind={asset.kind} name={asset.name} />;
     }
 
@@ -1492,6 +1517,7 @@ export default function Inspector() {
                                 onChange={(key, value) => store.setEnvironment(key as keyof EnvironmentData, value as never)}
                             />
                         </Section>
+                        <SkyParams />
                         <div className="note">
                             Layers, editor options and the list of keys:
                             <button className="btn" onClick={() => store.openSettings("project")}>

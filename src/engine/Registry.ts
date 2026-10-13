@@ -5,6 +5,8 @@ import { builtinEffects, isEffectDef } from "./look";
 import { loadModelFile } from "./gltf";
 import type { AnimationHandle } from "./gltf";
 import type { EffectDef, LookData } from "./look";
+import { isSkyDef } from "./sky";
+import type { SkyDef } from "./sky";
 import { applyMaterialData, createSharedMaterial } from "./materials";
 import type { MaterialData } from "./materials";
 import type { ParticleHandle } from "./particles";
@@ -20,7 +22,8 @@ import type { UiElement } from "./ui";
 
 // What a param of type "asset" can refer to
 // "font" is a font file of assets/, named with its extension: "pixel.ttf"
-export type AssetKind = "material" | "look" | "prefab" | "texture" | "layer" | "scene" | "sound" | "font" | "object" | "gltf";
+// "sky" is a sky made by code: a defineSky() of scripts/
+export type AssetKind = "material" | "look" | "prefab" | "texture" | "layer" | "scene" | "sound" | "font" | "object" | "gltf" | "sky";
 
 export type ParamDef = (
     | { type: "number"; default: number; min?: number; max?: number; step?: number }
@@ -389,6 +392,22 @@ export class Registry {
         return [...this.behaviorDefs.values()];
     }
 
+    // Skies made by code, from the project scripts
+    private skyDefs = new Map<string, SkyDef>();
+
+    registerSky(def: SkyDef) {
+        this.skyDefs.set(def.name, def);
+        return this;
+    }
+
+    getSky(name: string) {
+        return this.skyDefs.get(name);
+    }
+
+    skies() {
+        return [...this.skyDefs.values()];
+    }
+
     registerEffect(def: EffectDef) {
         this.effectDefs.set(def.name, def);
         return this;
@@ -534,9 +553,6 @@ export class Registry {
         return this.textureFiles.includes(name) ? this.loadImage(name) : null;
     }
 
-    // The same as a function to hand over (applyEnvironment)
-    imageSource = (name: string) => this.loadTexture(name);
-
     // Resolves when the font is loaded (or has failed); null for a file the project does not have
     fontReady(name: string) {
         return this.fontFiles.includes(name) ? loadFont(this.fontUrl(name))?.done ?? null : null;
@@ -613,6 +629,7 @@ export class Registry {
         if (kind === "layer") return this.settings.layers;
         if (kind === "sound") return this.soundNames();
         if (kind === "gltf") return this.modelFileNames();
+        if (kind === "sky") return [...this.skyDefs.keys()];
         if (kind === "font") return this.fontNames();
         if (kind === "scene") return this.scenes;
         if (kind === "texture") return this.textureNames();
@@ -624,7 +641,7 @@ export class Registry {
     // Everything the scripts have defined so far is counted as coming from the project "shared": called once
     // its scripts are registered and before those of the project itself
     markShared() {
-        this.sharedDefs = new Set<object>([...this.modelDefs.values(), ...this.behaviorDefs.values(), ...this.effectDefs.values(), ...this.surfaceDefs.values()]);
+        this.sharedDefs = new Set<object>([...this.modelDefs.values(), ...this.behaviorDefs.values(), ...this.effectDefs.values(), ...this.surfaceDefs.values(), ...this.skyDefs.values()]);
         for (const def of [...builtinEffects, ...builtinSurfaces]) this.sharedDefs.delete(def);
     }
 
@@ -639,6 +656,7 @@ export class Registry {
             if (isBehaviorDef(value)) this.registerBehavior(value);
             if (isEffectDef(value)) this.registerEffect(value);
             if (isSurfaceDef(value)) this.registerSurface(value);
+            if (isSkyDef(value)) this.registerSky(value);
         }
         return this;
     }

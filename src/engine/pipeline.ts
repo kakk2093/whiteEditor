@@ -3,6 +3,7 @@ import type { EffectDef, EffectEntry, ResolvedLook } from "./look";
 import { paramDefaults } from "./Registry";
 import type { Registry } from "./Registry";
 import { uniformDeclaration, uniformNames, uniformValues } from "./shaderParams";
+import { SkyBaker } from "./sky";
 import { Surfaces } from "./surface";
 import type { UiLayer } from "./ui";
 
@@ -215,6 +216,9 @@ export class RenderPipeline {
         depthWrite: false,
     });
 
+    // A sky made by code ("skyShader" of the environment) is drawn into its picture before the scene
+    private sky: SkyBaker;
+
     private outputMaterial = new THREE.ShaderMaterial({
         vertexShader: VERTEX,
         fragmentShader: OUTPUT,
@@ -243,6 +247,7 @@ export class RenderPipeline {
     constructor(renderer: THREE.WebGLRenderer) {
         this.renderer = renderer;
         this.surfaces = new Surfaces(renderer);
+        this.sky = new SkyBaker(renderer);
         this.quad.frustumCulled = false;
     }
 
@@ -481,6 +486,7 @@ export class RenderPipeline {
     render(scene: THREE.Scene, camera: THREE.Camera, dt = 0, ui?: UiLayer | null) {
         const { renderer, look } = this;
         this.time += dt;
+        this.sky.update(scene);
 
         const size = renderer.getDrawingBufferSize(new THREE.Vector2());
         const width = Math.max(1, Math.round(size.x / Math.max(1, look?.pixelSize ?? 1)));
@@ -581,6 +587,7 @@ export class RenderPipeline {
         this.glowMaterials.clear();
         this.glowPass.dispose();
         this.glowSumPass.dispose();
+        this.sky.dispose();
         this.blurPass.dispose();
         [this.sceneTarget, this.normalTarget, this.glowTarget, this.litTarget, this.glowSumTarget, ...this.blurTargets, ...this.targets].forEach((target) => {
             target.depthTexture?.dispose();

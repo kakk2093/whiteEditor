@@ -109,7 +109,7 @@ export class Game {
         this.registry = registry;
         this.environment = { ...defaultEnvironment, ...data.environment };
         this.shown = this.environment;
-        applyEnvironment(this.scene, this.environment, registry.imageSource);
+        applyEnvironment(this.scene, this.environment, registry);
         this.root = loadScene(registry, data);
         this.scene.add(this.root);
         this.root.traverse((obj) => {
@@ -188,7 +188,7 @@ export class Game {
         const key = JSON.stringify(this.shown);
         if (key === this.shownKey) return;
         this.shownKey = key;
-        applyEnvironment(this.scene, this.shown, this.registry.imageSource);
+        applyEnvironment(this.scene, this.shown, this.registry);
     }
 
     // The sounds are heard by the entity with a Sound Listener, by the camera if there is none

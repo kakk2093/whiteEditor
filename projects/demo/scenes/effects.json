@@ -1,64 +1,225 @@
 {
   "version": 3,
-  "environment": { "sky": true, "skyLight": 1, "ambientIntensity": 0.7 },
+  "environment": {
+    "background": "#222222",
+    "sky": true,
+    "skyTop": "#2f6fc4",
+    "skyHorizon": "#bfd9ee",
+    "skyGround": "#6b6156",
+    "skyImage": "",
+    "skyShader": "stars",
+    "skyRotation": 0,
+    "skyLight": 1,
+    "ambientColor": "#ffffff",
+    "ambientIntensity": 0.7,
+    "fog": false,
+    "fogColor": "#222222",
+    "fogNear": 5,
+    "fogFar": 50,
+    "look": "",
+    "skyParams": {}
+  },
   "entities": [
-    { "name": "Camera", "position": [0, 2.4, 8], "rotation": [-12, 0, 0], "components": [{ "type": "camera" }] },
     {
+      "id": "0623ca0f",
+      "name": "Camera",
+      "position": [0, 2.4, 8],
+      "rotation": [-12, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "camera"
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "6eef1203",
       "name": "Sun",
       "position": [3, 6, 4],
       "rotation": [-50, 30, 0],
-      "components": [{ "type": "light", "kind": "directional", "castShadow": true }]
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "light",
+          "kind": "directional",
+          "castShadow": true
+        }
+      ],
+      "children": []
     },
-    { "name": "Floor", "scale": [14, 1, 14], "components": [{ "type": "mesh", "shape": "plane", "material": "Tiles" }] },
     {
+      "id": "4204bd78",
+      "name": "Floor",
+      "position": [0, 0, 0],
+      "rotation": [0, 0, 0],
+      "scale": [14, 1, 14],
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "plane",
+          "material": "Tiles"
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "db96a5d3",
       "name": "Lamp",
       "position": [-3, 0.6, 0],
-      "components": [{ "type": "mesh", "shape": "sphere", "material": "Glowing" }]
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "sphere",
+          "material": "Glowing"
+        }
+      ],
+      "children": []
     },
     {
+      "id": "58323a2b",
       "name": "Mirror Ball",
       "position": [-1, 0.7, 3],
+      "rotation": [0, 0, 0],
       "scale": [1.4, 1.4, 1.4],
-      "components": [{ "type": "mesh", "shape": "sphere", "material": "Mirror" }]
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "sphere",
+          "material": "Mirror"
+        }
+      ],
+      "children": []
     },
     {
+      "id": "57d99873",
       "name": "Fire",
       "position": [0, 0.1, 0],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
       "components": [
-        { "type": "particles", "rate": 60, "lifetime": 1.2, "speed": 1.6, "spread": 18, "radius": 0.15, "gravity": -1.5, "size": 0.22, "sizeEnd": 0.04, "additive": true, "shape": "soft" }
-      ]
+        {
+          "type": "particles",
+          "rate": 60,
+          "lifetime": 1.2,
+          "speed": 1.6,
+          "spread": 18,
+          "radius": 0.15,
+          "gravity": -1.5,
+          "size": 0.22,
+          "sizeEnd": 0.04,
+          "additive": true,
+          "shape": "soft"
+        }
+      ],
+      "children": []
     },
     {
+      "id": "ae27617b",
       "name": "Fountain",
       "position": [3, 0.1, 0],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
       "components": [
-        { "type": "particles", "playing": false, "max": 300, "lifetime": 1.4, "speed": 5, "spread": 30, "gravity": 9, "size": 0.12, "sizeEnd": 0.12, "color": "#7fd4ff", "colorEnd": "#ffffff" },
-        { "type": "label", "text": "x0", "size": 0.35 },
-        { "type": "script", "script": "burst", "params": { "seconds": 0.5 } }
-      ]
+        {
+          "type": "particles",
+          "playing": false,
+          "max": 300,
+          "lifetime": 1.4,
+          "speed": 5,
+          "spread": 30,
+          "gravity": 9,
+          "size": 0.12,
+          "sizeEnd": 0.12,
+          "color": "#7fd4ff",
+          "colorEnd": "#ffffff"
+        },
+        {
+          "type": "label",
+          "text": "x0",
+          "size": 0.35
+        },
+        {
+          "type": "script",
+          "script": "burst",
+          "params": {
+            "seconds": 0.5
+          }
+        }
+      ],
+      "children": []
     },
     {
+      "id": "37275938",
       "name": "Tree",
       "position": [-1.5, 0.75, -2],
-      "components": [{ "type": "sprite", "texture": "tiles.png", "color": "#7ad36b", "width": 1.5, "height": 1.5 }]
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "sprite",
+          "texture": "tiles.png",
+          "color": "#7ad36b",
+          "width": 1.5,
+          "height": 1.5
+        }
+      ],
+      "children": []
     },
     {
+      "id": "a591f3ff",
       "name": "Sign",
       "position": [1.5, 1.6, -2],
-      "components": [{ "type": "label", "text": "Text in the world\nstays readable", "size": 0.3 }]
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "label",
+          "text": "Text in the world\nstays readable",
+          "size": 0.3
+        }
+      ],
+      "children": []
     },
     {
+      "id": "1f53a1e2",
       "name": "Heart",
       "position": [1.5, 0.5, -2],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
       "components": [
-        { "type": "mesh", "material": "Bricks" },
-        { "type": "script", "script": "pulse" }
-      ]
+        {
+          "type": "mesh",
+          "material": "Bricks"
+        },
+        {
+          "type": "script",
+          "script": "pulse"
+        }
+      ],
+      "children": []
     },
     {
+      "id": "6f219b7f",
       "name": "Cave",
       "position": [-20, 2, 0],
-      "components": [{ "type": "zone", "sizeX": 6, "sizeY": 4, "sizeZ": 6, "fogColor": "#101820", "background": "#101820", "fogFar": 12, "ambientIntensity": 0.3 }]
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "zone",
+          "sizeX": 6,
+          "sizeY": 4,
+          "sizeZ": 6,
+          "fogColor": "#101820",
+          "background": "#101820",
+          "fogFar": 12,
+          "ambientIntensity": 0.3
+        }
+      ],
+      "children": []
     }
   ]
 }

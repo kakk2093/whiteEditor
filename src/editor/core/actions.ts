@@ -742,6 +742,18 @@ export async function duplicateAsset(kind: "material" | "look", name: string) {
     }
 }
 
+// Makes a sky made by code (defineSky) the sky of the open scene; one step for undo
+export function setSceneSky(name: string) {
+    if (sceneStore.editingPrefab) return;
+    sceneStore.batch(() => {
+        sceneStore.setEnvironment("sky", true);
+        // An image, if the scene names one, would be shown instead
+        sceneStore.setEnvironment("skyImage", "");
+        sceneStore.setEnvironment("skyShader", name);
+    });
+    sceneStore.update({ status: `The sky of the scene is now "${name}"` });
+}
+
 // Adds an effect or a surface to the look of the open scene
 export function addToLook(list: "effects" | "surfaces", name: string) {
     const { registry } = sceneStore;

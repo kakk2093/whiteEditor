@@ -93,6 +93,24 @@
   `assets/` (2:1, equirect) вместо трёх цветов: третий аргумент `applyEnvironment` — `images`
   (`registry.imageSource`); пока картинка в пути, небо из цветов, по приходу окружение применяется ещё раз
   (если сцена не получила другое — сверка по `scene.userData.environment`).
+  **Небо кодом и поворот** (13.10.2026, `sky.ts`) — вместо скайбокса из шести картинок. `defineSky({ name,
+  params, shader })` из `scripts/`: GLSL с `vec3 sky(vec3 dir)`; параметры — uniform'ы через `shaderParams.ts`,
+  ещё `skyTop` / `skyHorizon` / `skyGround` (цвета сцены); времени нет, небо неподвижно. Сцена называет небо полем `skyShader`
+  (вид ассета `"sky"` — имена из `Registry.skies()`), параметры лежат в `skyParams` (в `environmentFields`
+  его нет: `validateScene` проверяет его по параметрам названного неба, Inspector показывает отдельным
+  разделом `SkyParams`). Рисует не `applyEnvironment` (у него нет рендерера): он кладёт в
+  `scene.userData.skyShader` определение, параметры и цвета, а `SkyBaker` в `RenderPipeline.render` перед
+  каждой картинкой рисует небо на шесть граней кубической текстуры (`CubeCamera` вокруг коробки с шейдером
+  неба, грань 1024, полуплавающая — солнце может быть ярче белого; не одной широкой картинкой: из такой
+  three.js один раз делает куб для фона и дальше показывает эту копию, что бы в картинку ни рисовали — так
+  небо не менялось до перезагрузки страницы) и ставит её в `scene.background` и, при `skyLight`, в `scene.environment`. Перерисовка — когда
+  изменились параметры, цвета или код, тогда же заново строится свет (`texture.pmremVersion++`). Там, где конвейера нет (`check` в Node), остаётся небо из
+  трёх цветов. Третий аргумент `applyEnvironment` — теперь `registry` (картинка неба и определение неба).
+  Зона может только убрать небо: её поле `sky: false` (`withZone` ставит `env.sky = false`, фоном становится
+  `background` зоны). В редакторе небо — ещё и ассет вида `"sky"` во вкладке Scripts; сделать его небом сцены —
+  `setSceneSky` в `actions.ts` (включает `sky`, убирает `skyImage`, ставит `skyShader`).
+  `skyRotation` (градусы) — `scene.backgroundRotation` и `environmentRotation`: действует на цвета, панораму
+  и небо кодом одинаково. Примеры — `sun` и `stars` в `projects/shared/scripts/skies.ts`.
   **Зоны** — компонент `zone` (коробка + свои фон, свет, туман, `look`, `blend`), метка `userData.zone`.
   `Game.update` → `look(dt)`: `zoneAt(root, место камеры)` → `withZone(окружение, зона)` →
   `blendEnvironment` (цвета и числа переходят за `blend`, вкл / выкл тумана и стиль — сразу) →

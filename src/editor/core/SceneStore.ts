@@ -45,9 +45,9 @@ export type GizmoMode = "translate" | "rotate" | "scale";
 export type SettingsPage = "project" | "scene" | "editor" | "controls";
 
 export interface AssetRef {
-    // The last three are not files: what the scripts of the project (and the engine) define
+    // The last four are not files: what the scripts of the project (and the engine) define
     // "texture" is an image file of assets/, named with its extension; "sound" an audio file of it
-    kind: "material" | "model" | "scene" | "prefab" | "look" | "texture" | "sound" | "behavior" | "effect" | "surface";
+    kind: "material" | "model" | "scene" | "prefab" | "look" | "texture" | "sound" | "behavior" | "effect" | "surface" | "sky";
     name: string;
 }
 
@@ -471,7 +471,7 @@ class SceneStore {
         this.scene = new THREE.Scene();
         this.scene.add(this.root);
         this.prefabLight.position.set(3, 6, 4);
-        applyEnvironment(this.scene, this.environment, this.registry.imageSource);
+        applyEnvironment(this.scene, this.environment, this.registry);
     }
 
     subscribe = (fn: Listener) => {
@@ -553,7 +553,7 @@ class SceneStore {
                 else if ("asset" in step && step.asset.section === section && step.asset.name === from) step.asset.name = to;
             }
         }
-        applyEnvironment(this.scene, this.environment, this.registry.imageSource);
+        applyEnvironment(this.scene, this.environment, this.registry);
         this.notify();
     }
 
@@ -649,7 +649,7 @@ class SceneStore {
     private restore(data: SceneData) {
         this.entities = data.entities;
         this.environment = { ...defaultEnvironment, ...data.environment };
-        applyEnvironment(this.scene, this.environment, this.registry.imageSource);
+        applyEnvironment(this.scene, this.environment, this.registry);
         this.rebuild();
         this.pruneSelection();
         // A field being typed in must forget its text
@@ -1860,7 +1860,7 @@ class SceneStore {
 
     setEnvironment<K extends keyof EnvironmentData>(key: K, value: EnvironmentData[K]) {
         this.environment[key] = value;
-        applyEnvironment(this.scene, this.environment, this.registry.imageSource);
+        applyEnvironment(this.scene, this.environment, this.registry);
         this.game?.setEnvironment(this.environment);
         this.notify();
     }
@@ -1898,6 +1898,8 @@ class SceneStore {
     setRegistry(registry: Registry) {
         this.registry = registry;
         registry.setScenes(this.scenes);
+        // The sky and its picture come from the registry
+        applyEnvironment(this.scene, this.environment, this.registry);
         this.rebuild();
         // A script, material or prefab changed during Play: run the scene again with it
         this.restartGame();
@@ -1928,7 +1930,7 @@ class SceneStore {
         this.selectedAsset = null;
         this.entities = entities;
         this.environment = environment;
-        applyEnvironment(this.scene, this.environment, this.registry.imageSource);
+        applyEnvironment(this.scene, this.environment, this.registry);
         this.rebuild();
     }
 

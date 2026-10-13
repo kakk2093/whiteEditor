@@ -4,6 +4,7 @@ export * from "./components";
 export * from "./materials";
 export * from "./environment";
 export * from "./look";
+export * from "./sky";
 export * from "./surface";
 export * from "./shaderParams";
 export * from "./pipeline";

@@ -193,6 +193,9 @@ export const componentDefs: Record<string, ComponentDef> = {
             sizeZ: { type: "number", default: 4, min: 0.01, step: 0.5 },
             // Seconds the colors and the numbers take to change when the camera comes in or goes out
             blend: { type: "number", default: 0.5, min: 0, step: 0.1 },
+            // The sky of the scene is seen from inside; off, there is the plain background below instead
+            // (a cave, under water). A scene without a sky has that background either way.
+            sky: { type: "boolean", default: true },
             background: { type: "color", default: "#0b4a5c" },
             ambientColor: { type: "color", default: "#ffffff" },
             ambientIntensity: { type: "number", default: 1, min: 0, step: 0.1 },

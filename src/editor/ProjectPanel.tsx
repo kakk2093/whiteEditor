@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { DragEvent, MouseEvent, ReactNode } from "react";
 import { builtinEffects, builtinSurfaces, defaultMaterialData, MODEL_FILE, SHARED_PROJECT } from "../engine";
 import {
-    addToLook, createFolder, createLook, createMaterial, createPrefab, deleteFolder, deleteLook, shareLook, deleteMaterial, deletePrefab,
+    addToLook, setSceneSky, createFolder, createLook, createMaterial, createPrefab, deleteFolder, deleteLook, shareLook, deleteMaterial, deletePrefab,
     applySound, copyText, deleteScene, deleteTexture, duplicateAsset, moveAssetToFolder, newScene, openPrefab, openScene, renameAsset, renameFolder,
     renameScene, showInExplorer, uploadFiles
 } from "./core/actions";
@@ -40,6 +40,7 @@ const ICONS: Record<Kind, IconName> = {
     material: "material",
     prefab: "prefab",
     model: "script",
+    sky: "look",
     look: "look",
     texture: "image",
     sound: "sound",
@@ -151,6 +152,7 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
                 ...registry.surfaces().map((d): Item => ({
                     kind: "surface", name: d.name, label: d.label ?? d.name, note: builtinSurfaces.includes(d) ? "surface · built-in" : `surface${from(d)}`
                 })),
+                ...registry.skies().map((d): Item => ({ kind: "sky", name: d.name, label: d.label ?? d.name, note: `sky${from(d)}` })),
             ];
         }
         return registry.materialNames().map((name) => {
@@ -246,6 +248,7 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
         if (item.kind === "behavior") addBehavior(item.name);
         if (item.kind === "effect") addToLook("effects", item.name);
         if (item.kind === "surface") addToLook("surfaces", item.name);
+        if (item.kind === "sky") setSceneSky(item.name);
     };
 
     const itemMenu = (e: MouseEvent, item: Item) => {
@@ -291,6 +294,8 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
             menu.push({ label: "Delete…", icon: "trash", danger: true, run: sure(() => deleteTexture(name)) });
         } else if (kind === "behavior") {
             menu.push({ label: "Add to Selected Object", icon: "plus", run: () => addBehavior(name) });
+        } else if (kind === "sky") {
+            menu.push({ label: "Use as the Sky of the Scene", icon: "plus", run: () => setSceneSky(name) });
         } else {
             menu.push({ label: "Add to the Look of the Scene", icon: "plus", run: () => addToLook(kind === "effect" ? "effects" : "surfaces", name) });
         }
@@ -368,13 +373,14 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
         const { kind } = item;
         const selected = store.selectedAsset?.kind === kind && store.selectedAsset.name === item.name;
         const current = (kind === "scene" && item.name === store.sceneName)
-            || (kind === "look" && item.name === store.environment.look);
+            || (kind === "look" && item.name === store.environment.look)
+            || (kind === "sky" && store.environment.sky && !store.environment.skyImage && item.name === store.environment.skyShader);
         return (
             <div
                 key={`${kind}:${item.name}`}
                 className={`tile ${selected ? "selected" : ""} ${current ? "current" : ""}`}
-                title={current ? `${item.label} (${kind === "look" ? "used by the scene" : "open"})` : item.label}
-                draggable={kind !== "scene" && kind !== "effect" && kind !== "surface"}
+                title={current ? `${item.label} (${kind === "look" || kind === "sky" ? "used by the scene" : "open"})` : item.label}
+                draggable={kind !== "scene" && kind !== "effect" && kind !== "surface" && kind !== "sky"}
                 onDragStart={(e) => setDraggedAsset(e, { kind, name: item.name })}
                 onClick={() => store.selectAsset({ kind, name: item.name })}
                 onDoubleClick={() => activate(item)}

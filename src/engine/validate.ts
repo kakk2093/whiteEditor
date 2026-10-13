@@ -368,7 +368,19 @@ export function validateLook(name: string, data: LookData, registry: Registry): 
 // Human-readable problems of a parsed scene; an empty list means the scene is fine
 export function validateScene(data: SceneData, registry: Registry): string[] {
     const problems: string[] = [];
-    checkFields(environmentFields, data.environment ?? {}, "environment", registry, problems);
+    const { skyParams, ...environment } = (data.environment ?? {}) as Record<string, unknown>;
+    checkFields(environmentFields, environment, "environment", registry, problems);
+    // The params of the sky made by code the scene names
+    if (skyParams !== undefined) {
+        const sky = typeof environment.skyShader === "string" ? registry.getSky(environment.skyShader) : undefined;
+        if (typeof skyParams !== "object" || skyParams === null || Array.isArray(skyParams)) {
+            problems.push('environment.skyParams: must be an object of the params of the sky, e.g. { "sunSize": 2 }');
+        } else if (sky) {
+            checkFields(sky.params ?? {}, skyParams as Record<string, unknown>, "environment.skyParams", registry, problems);
+        } else if (Object.keys(skyParams).length > 0) {
+            problems.push('environment.skyParams: there is no sky to give them to ("skyShader" names none)');
+        }
+    }
 
     // What the params of kind "object" can name
     registry.setObjects(entityNames(data.entities, registry));

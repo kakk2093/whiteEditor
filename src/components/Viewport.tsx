@@ -719,7 +719,7 @@ export default function Viewport() {
                 const key = zone ? JSON.stringify(zone) : "";
                 if (key !== shownZone) {
                     shownZone = key;
-                    applyEnvironment(sceneStore.scene, withZone(sceneStore.environment, zone), sceneStore.registry.imageSource);
+                    applyEnvironment(sceneStore.scene, withZone(sceneStore.environment, zone), sceneStore.registry);
                     applyLook();
                 }
             }

@@ -1,6 +1,7 @@
 import * as THREE from "three";
-import type { ImageSource } from "./materials";
-import type { ParamDef } from "./Registry";
+import type { ParamDef, Registry } from "./Registry";
+import type { SkyState } from "./sky";
+import type { Params } from "./types";
 
 // Scene-wide rendering settings (Unity keeps these in the Lighting window)
 export interface EnvironmentData {
@@ -13,6 +14,13 @@ export interface EnvironmentData {
     // An image from assets/ wrapped around the scene instead of the three colors: a panorama, twice as wide
     // as it is high (equirectangular); "" for none
     skyImage: string;
+    // A sky made by code instead of the three colors: the name of a defineSky() of scripts/; "" for none.
+    // An image, if one is named too, wins.
+    skyShader: string;
+    // The params of that sky
+    skyParams: Params;
+    // Turns the sky around the vertical axis, degrees: where its sun or the middle of its image stands
+    skyRotation: number;
     // How much the sky (the plain background, without one) lights the surfaces and is mirrored in the smooth
     // and the metal ones: the environment map of the scene. 0: none
     skyLight: number;
@@ -26,13 +34,16 @@ export interface EnvironmentData {
     look: string;
 }
 
-export const environmentFields: Record<keyof EnvironmentData, ParamDef> = {
+// "skyParams" is not here: its fields are the params of the sky the scene names
+export const environmentFields: Record<Exclude<keyof EnvironmentData, "skyParams">, ParamDef> = {
     background: { type: "color", default: "#222222", when: { sky: [false] } },
     sky: { type: "boolean", default: false },
     skyTop: { type: "color", default: "#2f6fc4", when: { sky: [true] } },
     skyHorizon: { type: "color", default: "#bfd9ee", when: { sky: [true] } },
     skyGround: { type: "color", default: "#6b6156", when: { sky: [true] } },
     skyImage: { type: "asset", kind: "texture", default: "", when: { sky: [true] } },
+    skyShader: { type: "asset", kind: "sky", default: "", when: { sky: [true] } },
+    skyRotation: { type: "number", default: 0, step: 5, when: { sky: [true] } },
     skyLight: { type: "number", default: 0, min: 0, step: 0.1 },
     ambientColor: { type: "color", default: "#ffffff" },
     ambientIntensity: { type: "number", default: 1, min: 0, step: 0.1 },
@@ -43,9 +54,10 @@ export const environmentFields: Record<keyof EnvironmentData, ParamDef> = {
     look: { type: "asset", kind: "look", default: "" },
 };
 
-export const defaultEnvironment = Object.fromEntries(
-    Object.entries(environmentFields).map(([key, def]) => [key, def.default])
-) as unknown as EnvironmentData;
+export const defaultEnvironment = {
+    ...Object.fromEntries(Object.entries(environmentFields).map(([key, def]) => [key, def.default])),
+    skyParams: {},
+} as unknown as EnvironmentData;
 
 const AMBIENT_NAME = "__ambient";
 
@@ -84,18 +96,19 @@ function wrapAround(texture: THREE.Texture) {
     return texture;
 }
 
-// The editor viewport and the game both call this, so they look the same. `images` loads the picture of
-// the sky ("skyImage"); without it, and until the picture has arrived, the sky is its three colors.
-export function applyEnvironment(scene: THREE.Scene, data: Partial<EnvironmentData> = {}, images?: ImageSource) {
+// The editor viewport and the game both call this, so they look the same. `registry` gives the picture of
+// the sky ("skyImage") and the sky made by code ("skyShader"); without it, and until the picture has
+// arrived, the sky is its three colors.
+export function applyEnvironment(scene: THREE.Scene, data: Partial<EnvironmentData> = {}, registry?: Registry) {
     const env = { ...defaultEnvironment, ...data };
     scene.userData.environment = env;
 
     // What is around the scene, as a picture: the sky, or the plain background when its light is asked for
     const lit = env.skyLight > 0;
-    let image = env.sky && env.skyImage ? images?.(env.skyImage) ?? null : null;
+    let image = env.sky && env.skyImage ? registry?.loadTexture(env.skyImage) ?? null : null;
     if (image instanceof Promise) {
         // Drawn again with the picture, unless the scene has got another environment in the meantime
-        image.then(() => scene.userData.environment === env && applyEnvironment(scene, env, images)).catch(() => console.warn(`Sky image "${env.skyImage}" could not be loaded`));
+        image.then(() => scene.userData.environment === env && applyEnvironment(scene, env, registry)).catch(() => console.warn(`Sky image "${env.skyImage}" could not be loaded`));
         image = null;
     }
     const colors = env.sky ? [env.skyTop, env.skyHorizon, env.skyGround] : [env.background, env.background, env.background];
@@ -116,6 +129,14 @@ export function applyEnvironment(scene: THREE.Scene, data: Partial<EnvironmentDa
     // three.js turns the picture into the light and the reflections of the standard materials
     scene.environment = lit ? sky : null;
     scene.environmentIntensity = env.skyLight;
+    scene.backgroundRotation.set(0, THREE.MathUtils.degToRad(env.skyRotation), 0);
+    scene.environmentRotation.copy(scene.backgroundRotation);
+
+    // A sky made by code is drawn by whoever draws the scene (SkyBaker in the pipeline): it takes the place
+    // of the picture above, which stays where nothing draws (a check without a browser)
+    const named = env.sky && env.skyShader && !image && registry?.getSky(env.skyShader) ? env.skyShader : "";
+    const state: SkyState | null = named && registry ? { def: () => registry.getSky(named), params: env.skyParams ?? {}, colors: [env.skyTop, env.skyHorizon, env.skyGround], lit } : null;
+    scene.userData.skyShader = state;
     scene.fog = env.fog ? new THREE.Fog(env.fogColor, env.fogNear, env.fogFar) : null;
 
     let ambient = scene.children.find((c) => c.name === AMBIENT_NAME) as THREE.AmbientLight | undefined;
@@ -128,11 +149,12 @@ export function applyEnvironment(scene: THREE.Scene, data: Partial<EnvironmentDa
     ambient.intensity = env.ambientIntensity;
 }
 
-// What a Zone component changes of the environment while the camera is inside it; the sky is not its to change
+// What a Zone component changes of the environment while the camera is inside it. Of the sky it can only
+// say that it is not seen from inside (its "sky" field).
 export const ZONE_KEYS = ["background", "ambientColor", "ambientIntensity", "fog", "fogColor", "fogNear", "fogFar", "look"] as const;
 
 // The fields of a Zone component, defaults filled in (see components.ts)
-export type ZoneFields = Pick<EnvironmentData, (typeof ZONE_KEYS)[number]> & { sizeX: number; sizeY: number; sizeZ: number; blend: number };
+export type ZoneFields = Pick<EnvironmentData, (typeof ZONE_KEYS)[number]> & { sizeX: number; sizeY: number; sizeZ: number; blend: number; sky?: boolean };
 
 const local = new THREE.Vector3();
 const inverse = new THREE.Matrix4();
@@ -159,6 +181,7 @@ export function zoneAt(root: THREE.Object3D, point: THREE.Vector3): ZoneFields |
 export function withZone(base: EnvironmentData, zone: ZoneFields | null): EnvironmentData {
     if (!zone) return base;
     const env = { ...base };
+    if (zone.sky === false) env.sky = false;
     for (const key of ZONE_KEYS) {
         if (key === "look" && !zone.look) continue;
         (env as Record<string, unknown>)[key] = zone[key];

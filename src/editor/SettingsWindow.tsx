@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { environmentFields } from "../engine";
 import type { EnvironmentData, Params } from "../engine";
-import { Fields, GameSection, LayersSection, Section, TagsSection } from "./Inspector";
+import { Fields, GameSection, LayersSection, Section, SkyParams, TagsSection } from "./Inspector";
 import { resetLayout } from "./layout";
 import type { SettingsPage } from "./core/SceneStore";
 import { useSceneStore } from "./core/useSceneStore";
@@ -138,13 +138,16 @@ export default function SettingsWindow() {
                             store.editingPrefab ? (
                                 <div className="empty">A prefab is open. Go back to the scene to change its settings.</div>
                             ) : (
-                                <Section title={`Environment of the scene ${store.sceneName}`}>
-                                    <Fields
-                                        defs={environmentFields}
-                                        values={store.environment as unknown as Params}
-                                        onChange={(key, value) => store.setEnvironment(key as keyof EnvironmentData, value as never)}
-                                    />
-                                </Section>
+                                <>
+                                    <Section title={`Environment of the scene ${store.sceneName}`}>
+                                        <Fields
+                                            defs={environmentFields}
+                                            values={store.environment as unknown as Params}
+                                            onChange={(key, value) => store.setEnvironment(key as keyof EnvironmentData, value as never)}
+                                        />
+                                    </Section>
+                                    <SkyParams />
+                                </>
                             )
                         )}
 
