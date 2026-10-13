@@ -119,7 +119,7 @@ npx eslint .
   и редактора одна копия three.js.
 - **Формат** (версия 3) подробно описан в `projects/demo/AGENTS.md`. Кратко: сцена — дерево объектов;
   объект — контейнер с `position`, `rotation` (градусы), `scale`, `components`, `children`; значения
-  по умолчанию и `id` можно не писать. Компоненты: `mesh`, `light`, `camera`, `collider`, `body`, `zone`, `particles`, `sprite`, `label`, `sound`, `listener`, `canvas`, `ui`, `text`, `image`, `button`, `model`,
+  по умолчанию и `id` можно не писать. Компоненты: `mesh`, `light`, `camera`, `collider`, `body`, `zone`, `particles`, `sprite`, `label`, `sound`, `listener`, `canvas`, `ui`, `text`, `image`, `button`, `model`, `gltf`,
   `script`; не больше
   одного каждого типа, кроме `script` (сколько угодно, но каждое поведение один раз). Настройки сцены —
   `environment` (фон, окружающий свет, туман).
