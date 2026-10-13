@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "check": "node tools/check.mjs",
+    "test": "node tools/test.mjs",
     "build:game": "node tools/build.mjs",
     "render": "node tools/render.mjs",
     "editor": "node tools/editor.mjs"

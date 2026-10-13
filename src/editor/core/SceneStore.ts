@@ -414,8 +414,8 @@ class SceneStore {
     // The two views of a running scene, like Unity's tabs. "game": through the camera of the scene, the
     // keyboard and the mouse go to the scripts, it looks and plays as the built game. "editor" (Scene):
     // the editor's free camera with selection and the gizmo. The scene runs in both, and the Hierarchy and
-    // the Inspector edit it in both.
-    playCamera: "editor" | "game" | "both" = "game";
+    // the Inspector edit it in both. "both" (the two side by side) is remembered between runs of the editor.
+    playCamera: "editor" | "game" | "both" = savedOptions.playBoth === true ? "both" : "game";
 
     // With both views side by side: the one that was clicked last, which has the keyboard
     splitFocus: "scene" | "game" = "game";
@@ -995,13 +995,14 @@ class SceneStore {
 
     // The options of the editor itself (Settings, Editor page) are kept in the browser between runs
     private saveOptions() {
-        const options = { gizmoSpace: this.gizmoSpace, snap: this.snap, snapStep: this.snapStep, lookEnabled: this.lookEnabled, muted: this.muted, uiVisible: this.uiVisible };
+        const options = { gizmoSpace: this.gizmoSpace, snap: this.snap, snapStep: this.snapStep, lookEnabled: this.lookEnabled, muted: this.muted, uiVisible: this.uiVisible, playBoth: this.playCamera === "both" };
         localStorage.setItem(OPTIONS_KEY, JSON.stringify(options));
     }
 
     setPlayCamera(camera: "editor" | "game" | "both") {
         this.playCamera = camera;
         if (camera === "both") this.splitFocus = "game";
+        this.saveOptions();
         this.notify();
     }
 

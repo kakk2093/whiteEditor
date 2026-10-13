@@ -21,6 +21,7 @@ npm run dev
 ```bash
 npm run dev                          # редактор
 npm run check -- demo                # проверка проекта без браузера: сцены, префабы, материалы, типы скриптов
+npm run test                         # проверки самого движка (вложенные префабы), без проекта
 npm run render -- demo [сцена]       # картинка сцены в projects/demo/renders/<сцена>.png
 npm run build:game -- demo [сцена]   # сборка игры в projects/demo/build (index.html + game.js)
 npx tsc -b                           # типы редактора

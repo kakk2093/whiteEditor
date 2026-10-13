@@ -964,130 +964,132 @@ export default function Viewport() {
             <div ref={marqueeRef} className="viewport-marquee" />
             <div ref={frameRef} className="viewport-frame" />
 
-            <div className="viewport-tools">
-                {!store.gameView && GIZMO_MODES.map(({ mode, icon, title }) => (
-                    <button
-                        key={mode}
-                        className={`btn ghost ${store.gizmoMode === mode ? "active" : ""}`}
-                        title={title}
-                        onClick={() => store.setGizmoMode(mode)}
-                    >
-                        <Icon name={icon} />
-                    </button>
-                ))}
-                {!store.gameView && (
-                    <>
+            <div className="viewport-top">
+                <div className="viewport-tools">
+                    {!store.gameView && GIZMO_MODES.map(({ mode, icon, title }) => (
                         <button
-                            className="btn ghost"
-                            title="The axes of the gizmo: World — along the axes of the scene, Local — turned with the object (X)"
-                            onClick={() => store.setGizmoSpace(store.gizmoSpace === "world" ? "local" : "world")}
+                            key={mode}
+                            className={`btn ghost ${store.gizmoMode === mode ? "active" : ""}`}
+                            title={title}
+                            onClick={() => store.setGizmoMode(mode)}
                         >
-                            {store.gizmoSpace === "world" ? "World" : "Local"}
+                            <Icon name={icon} />
                         </button>
+                    ))}
+                    {!store.gameView && (
+                        <>
+                            <button
+                                className="btn ghost"
+                                title="The axes of the gizmo: World — along the axes of the scene, Local — turned with the object (X)"
+                                onClick={() => store.setGizmoSpace(store.gizmoSpace === "world" ? "local" : "world")}
+                            >
+                                {store.gizmoSpace === "world" ? "World" : "Local"}
+                            </button>
+                            <button
+                                className={`btn ghost ${store.snap ? "active" : ""}`}
+                                title="Snap: the gizmo moves by whole steps, turns by 15° and scales by 0.25"
+                                onClick={() => store.setSnap(!store.snap)}
+                            >
+                                <Icon name="snap" />
+                            </button>
+                            {store.snap && (
+                                <select
+                                    className="select"
+                                    value={store.snapStep}
+                                    title="The step of a move, meters"
+                                    onChange={(e) => store.setSnap(true, Number(e.target.value))}
+                                >
+                                    {[0.1, 0.25, 0.5, 1, 2].map((step) => (
+                                        <option key={step} value={step}>{step} m</option>
+                                    ))}
+                                </select>
+                            )}
+                        </>
+                    )}
+                    {!store.playing && store.hasCollider && (
                         <button
-                            className={`btn ghost ${store.snap ? "active" : ""}`}
-                            title="Snap: the gizmo moves by whole steps, turns by 15° and scales by 0.25"
-                            onClick={() => store.setSnap(!store.snap)}
+                            className={`btn ghost ${store.colliderEdit ? "active" : ""}`}
+                            title="Edit Collider: drag the dots on its sides to resize it, the square in the middle to move it"
+                            onClick={() => store.setColliderEdit(!store.colliderEdit)}
                         >
-                            <Icon name="snap" />
+                            <Icon name="collider" />
                         </button>
-                        {store.snap && (
+                    )}
+                    {looks.length > 0 && !store.editingPrefab && (
+                        <>
+                            {!store.gameView && <span className="sep" />}
                             <select
                                 className="select"
-                                value={store.snapStep}
-                                title="The step of a move, meters"
-                                onChange={(e) => store.setSnap(true, Number(e.target.value))}
+                                value={store.environment.look}
+                                title="The look of this scene: its render style (pixels, outlines, palette…). Looks are made in the Project panel, Looks tab"
+                                onChange={(e) => store.setEnvironment("look", e.target.value)}
                             >
-                                {[0.1, 0.25, 0.5, 1, 2].map((step) => (
-                                    <option key={step} value={step}>{step} m</option>
+                                <option value="">Standard (no effects)</option>
+                                {/* A look the scene names but the project no longer has stays visible */}
+                                {(looks.includes(store.environment.look) || !store.environment.look ? looks : [...looks, store.environment.look]).map((name) => (
+                                    <option key={name} value={name}>{name}</option>
                                 ))}
                             </select>
-                        )}
-                    </>
-                )}
-                {!store.playing && store.hasCollider && (
-                    <button
-                        className={`btn ghost ${store.colliderEdit ? "active" : ""}`}
-                        title="Edit Collider: drag the dots on its sides to resize it, the square in the middle to move it"
-                        onClick={() => store.setColliderEdit(!store.colliderEdit)}
-                    >
-                        <Icon name="collider" />
-                    </button>
-                )}
-                {looks.length > 0 && !store.editingPrefab && (
-                    <>
-                        {!store.gameView && <span className="sep" />}
-                        <select
-                            className="select"
-                            value={store.environment.look}
-                            title="The look of this scene: its render style (pixels, outlines, palette…). Looks are made in the Project panel, Looks tab"
-                            onChange={(e) => store.setEnvironment("look", e.target.value)}
+                            {store.environment.look && (
+                                <button
+                                    className={`btn ghost ${store.lookEnabled ? "active" : ""}`}
+                                    title="Show the look in the viewport; off draws the plain scene, easier to arrange. The game always has its look"
+                                    onClick={() => store.setLookEnabled(!store.lookEnabled)}
+                                >
+                                    <Icon name="look" />
+                                </button>
+                            )}
+                        </>
+                    )}
+                    {!store.playing && (
+                        <button
+                            className={`btn ghost ${store.uiVisible ? "active" : ""}`}
+                            title="Show the interface of the game (the UI elements of the scene) over the viewport"
+                            onClick={() => store.setUiVisible(!store.uiVisible)}
                         >
-                            <option value="">Standard (no effects)</option>
-                            {/* A look the scene names but the project no longer has stays visible */}
-                            {(looks.includes(store.environment.look) || !store.environment.look ? looks : [...looks, store.environment.look]).map((name) => (
-                                <option key={name} value={name}>{name}</option>
-                            ))}
-                        </select>
-                        {store.environment.look && (
+                            UI
+                        </button>
+                    )}
+                    {store.playing && (
+                        <>
+                            {(!store.gameView || looks.length > 0) && <span className="sep" />}
                             <button
-                                className={`btn ghost ${store.lookEnabled ? "active" : ""}`}
-                                title="Show the look in the viewport; off draws the plain scene, easier to arrange. The game always has its look"
-                                onClick={() => store.setLookEnabled(!store.lookEnabled)}
+                                className={`btn ghost ${store.playCamera !== "editor" && store.hasGameCamera ? "" : "active"}`}
+                                title="Scene view: the editor camera; select and move objects while the scene runs"
+                                onClick={() => store.setPlayCamera("editor")}
                             >
-                                <Icon name="look" />
+                                Scene
                             </button>
-                        )}
-                    </>
-                )}
-                {!store.playing && (
-                    <button
-                        className={`btn ghost ${store.uiVisible ? "active" : ""}`}
-                        title="Show the interface of the game (the UI elements of the scene) over the viewport"
-                        onClick={() => store.setUiVisible(!store.uiVisible)}
-                    >
-                        UI
-                    </button>
-                )}
-                {store.playing && (
-                    <>
-                        {(!store.gameView || looks.length > 0) && <span className="sep" />}
-                        <button
-                            className={`btn ghost ${store.playCamera !== "editor" && store.hasGameCamera ? "" : "active"}`}
-                            title="Scene view: the editor camera; select and move objects while the scene runs"
-                            onClick={() => store.setPlayCamera("editor")}
-                        >
-                            Scene
-                        </button>
-                        <button
-                            className={`btn ghost ${store.playCamera === "game" && store.hasGameCamera ? "active" : ""}`}
-                            title={store.hasGameCamera
-                                ? "Game view: the camera of the scene, keys and mouse go to the game. On pause the viewport is the editor"
-                                    + " until the game resumes"
-                                : "The scene has no active object with a Camera component"}
-                            disabled={!store.hasGameCamera}
-                            onClick={() => store.setPlayCamera("game")}
-                        >
-                            <Icon name="camera" /> Game
-                        </button>
-                        <button
-                            className={`btn ghost ${store.split ? "active" : ""}`}
-                            title="Both views side by side: Scene on the left, Game on the right. The keys go to the half that was clicked last"
-                            disabled={!store.hasGameCamera}
-                            onClick={() => store.setPlayCamera("both")}
-                        >
-                            Both
-                        </button>
-                    </>
+                            <button
+                                className={`btn ghost ${store.playCamera === "game" && store.hasGameCamera ? "active" : ""}`}
+                                title={store.hasGameCamera
+                                    ? "Game view: the camera of the scene, keys and mouse go to the game. On pause the viewport is the editor"
+                                        + " until the game resumes"
+                                    : "The scene has no active object with a Camera component"}
+                                disabled={!store.hasGameCamera}
+                                onClick={() => store.setPlayCamera("game")}
+                            >
+                                <Icon name="camera" /> Game
+                            </button>
+                            <button
+                                className={`btn ghost ${store.split ? "active" : ""}`}
+                                title="Both views side by side: Scene on the left, Game on the right. The keys go to the half that was clicked last"
+                                disabled={!store.hasGameCamera}
+                                onClick={() => store.setPlayCamera("both")}
+                            >
+                                Both
+                            </button>
+                        </>
+                    )}
+                </div>
+
+                {(store.editingPrefab || store.playing) && (
+                    <div className={`viewport-badge ${store.playing ? "playing" : ""}`}>
+                        {store.paused ? "Paused" : store.playing ? "Playing" : `Editing prefab: ${store.editingPrefab}`}
+                        {store.playScene && ` · scene ${store.playScene}`}
+                    </div>
                 )}
             </div>
-
-            {(store.editingPrefab || store.playing) && (
-                <div className={`viewport-badge ${store.playing ? "playing" : ""}`}>
-                    {store.paused ? "Paused" : store.playing ? "Playing" : `Editing prefab: ${store.editingPrefab}`}
-                    {store.playScene && ` · scene ${store.playScene}`}
-                </div>
-            )}
 
             {store.previewCamera && (
                 // With a shape given to the picture of the game the frame has that shape too

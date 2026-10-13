@@ -33,6 +33,16 @@ try {
   const engine = await server.ssrLoadModule('/src/engine/index.ts')
   const registry = new engine.Registry()
 
+  // The engine itself first, on its own data (tools/selfTest.ts, also `npm run test`): a broken engine would
+  // show below as problems of the project
+  if (!process.argv.includes('--no-selftest')) {
+    try {
+      for (const failure of (await server.ssrLoadModule('/tools/selfTest.ts')).selfTest()) problems.push(`engine self-test: ${failure}`)
+    } catch (e) {
+      problems.push(`engine self-test: ${e.message}`)
+    }
+  }
+
   // The scripts and the looks of the project "shared" are every project's; its own replace them by name
   const sharedDir = path.join(root, 'projects', engine.SHARED_PROJECT)
   const shared = project !== engine.SHARED_PROJECT && fs.existsSync(sharedDir)

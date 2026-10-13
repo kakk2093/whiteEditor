@@ -793,12 +793,25 @@ kbd {
     display: block;
 }
 
-.viewport-tools {
+/* The tools on the left and the badge on the right: in a narrow viewport the tools wrap instead of going
+   under the badge */
+.viewport-top {
     position: absolute;
     top: 8px;
     left: 8px;
+    right: 8px;
     display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+    pointer-events: none;
+}
+
+.viewport-tools {
+    display: flex;
+    flex-wrap: wrap;
     gap: 2px;
+    pointer-events: auto;
     padding: 3px;
     background: rgba(35, 36, 40, 0.9);
     border: 1px solid var(--border);
@@ -891,10 +904,10 @@ kbd {
 }
 
 .viewport-badge {
-    position: absolute;
-    top: 8px;
-    right: 8px;
+    flex-shrink: 0;
+    margin-left: auto;
     padding: 4px 9px;
+    white-space: nowrap;
     background: rgba(38, 74, 133, 0.9);
     border-radius: 4px;
     color: #fff;
