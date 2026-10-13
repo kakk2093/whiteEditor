@@ -1,0 +1,30 @@
+{
+  "pixelSize": 1,
+  "effects": [
+    {
+      "effect": "outline",
+      "lineColor": "#0a1a24",
+      "thickness": 0.5,
+      "enabled": true,
+      "normal": 0.5,
+      "opacity": 0.45
+    },
+    {
+      "effect": "palette",
+      "levels": 32,
+      "dither": 0.25,
+      "enabled": true
+    },
+    {
+      "effect": "grade",
+      "contrast": 2.15,
+      "saturation": 2.05,
+      "enabled": true,
+      "brightness": 1.15
+    }
+  ],
+  "toneMapping": "reinhard",
+  "exposure": 1,
+  "pixelUi": false,
+  "pixelSnap": true
+}

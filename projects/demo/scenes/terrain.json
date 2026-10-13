@@ -14,30 +14,18 @@
     "ambientIntensity": 0.5,
     "fog": true,
     "fogColor": "#bfd9ee",
-    "fogNear": 60,
-    "fogFar": 240,
-    "look": "",
+    "fogNear": 30,
+    "fogFar": 90,
+    "look": "PixelArt_1",
     "skyParams": {}
   },
   "entities": [
     {
       "id": "6718accb",
       "name": "Sun",
-      "position": [
-        10,
-        20,
-        8
-      ],
-      "rotation": [
-        -50,
-        40,
-        0
-      ],
-      "scale": [
-        1,
-        1,
-        1
-      ],
+      "position": [10, 20, 8],
+      "rotation": [-50, 40, 0],
+      "scale": [1, 1, 1],
       "components": [
         {
           "type": "light",
@@ -51,21 +39,9 @@
     {
       "id": "9aa6c2ae",
       "name": "Ground",
-      "position": [
-        0,
-        0,
-        0
-      ],
-      "rotation": [
-        0,
-        0,
-        0
-      ],
-      "scale": [
-        1,
-        1,
-        1
-      ],
+      "position": [0, 0, 0],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
       "components": [
         {
           "type": "terrain",
@@ -79,21 +55,9 @@
       "id": "4611ab8f",
       "name": "Player",
       "tag": "player",
-      "position": [
-        0,
-        2.5,
-        0
-      ],
-      "rotation": [
-        0,
-        0,
-        0
-      ],
-      "scale": [
-        1,
-        1,
-        1
-      ],
+      "position": [0, 3.1271, 0],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
       "components": [
         {
           "type": "collider",
@@ -113,21 +77,9 @@
         {
           "id": "4325be7a",
           "name": "Head",
-          "position": [
-            0,
-            0.7,
-            0
-          ],
-          "rotation": [
-            0,
-            0,
-            0
-          ],
-          "scale": [
-            1,
-            1,
-            1
-          ],
+          "position": [0, 0.7, 0],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1],
           "components": [
             {
               "type": "camera",
@@ -141,21 +93,9 @@
     {
       "id": "6b99df92",
       "name": "Ball",
-      "position": [
-        14,
-        3.28,
-        3
-      ],
-      "rotation": [
-        0,
-        0,
-        0
-      ],
-      "scale": [
-        1,
-        1,
-        1
-      ],
+      "position": [14, 3.28, 3],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
       "components": [
         {
           "type": "mesh",
@@ -176,21 +116,9 @@
     {
       "id": "6d0f49fb",
       "name": "Ball 2",
-      "position": [
-        -12,
-        3.34,
-        -9
-      ],
-      "rotation": [
-        0,
-        0,
-        0
-      ],
-      "scale": [
-        1,
-        1,
-        1
-      ],
+      "position": [-12, 3.34, -9],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
       "components": [
         {
           "type": "mesh",
@@ -211,21 +139,9 @@
     {
       "id": "2fc9d5dd",
       "name": "Ball 3",
-      "position": [
-        20,
-        2.42,
-        14
-      ],
-      "rotation": [
-        0,
-        0,
-        0
-      ],
-      "scale": [
-        1,
-        1,
-        1
-      ],
+      "position": [20, 2.42, 14],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
       "components": [
         {
           "type": "mesh",
@@ -246,21 +162,9 @@
     {
       "id": "8f1479b9",
       "name": "Crate",
-      "position": [
-        4,
-        4.5,
-        -4
-      ],
-      "rotation": [
-        0,
-        0,
-        0
-      ],
-      "scale": [
-        1,
-        1,
-        1
-      ],
+      "position": [4, 4.5, -4],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
       "components": [
         {
           "type": "mesh",
@@ -277,12 +181,11 @@
       "children": []
     },
     {
+      "id": "794d748e",
       "name": "Swamp Water",
-      "position": [
-        75,
-        -1.55,
-        75
-      ],
+      "position": [75, -1.55, 75],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
       "components": [
         {
           "type": "water",
@@ -295,7 +198,8 @@
           "visibility": 7,
           "underLight": 0.5
         }
-      ]
+      ],
+      "children": []
     }
   ]
 }
