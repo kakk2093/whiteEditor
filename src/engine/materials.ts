@@ -10,6 +10,8 @@ export interface MaterialData {
     emissiveIntensity: number;
     // How much of that light spills over what is next to the surface on the screen, in any look; 0: none
     glow: number;
+    // How far that light spills, in percent of the height of the picture
+    glowRadius: number;
     opacity: number;
     // An image from the project's assets/ folder, drawn over the color (multiplied by it); "" for none
     texture: string;
@@ -34,6 +36,7 @@ export const materialFields: Record<keyof MaterialData, ParamDef> = {
     emissive: { type: "color", default: "#000000" },
     emissiveIntensity: { type: "number", default: 1, min: 0, step: 0.1 },
     glow: { type: "number", default: 0, min: 0, step: 0.1 },
+    glowRadius: { type: "number", default: 3, min: 0.5, max: 30, step: 0.5 },
     opacity: { type: "number", default: 1, min: 0, max: 1, step: 0.05 },
     texture: { type: "asset", kind: "texture", default: "" },
     tilingX: { type: "number", default: 1, min: 0.01, step: 0.5 },
@@ -102,6 +105,7 @@ export function applyMaterialData(material: THREE.MeshStandardMaterial, data: Pa
     material.emissiveIntensity = m.emissiveIntensity;
     // Read by the pipeline (RenderPipeline.drawGlow)
     material.userData.glow = m.glow;
+    material.userData.glowRadius = m.glowRadius;
     material.opacity = m.opacity;
     material.transparent = m.opacity < 1;
     material.needsUpdate = true;

@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "environment": { "sky": true, "ambientIntensity": 0.7 },
+  "environment": { "sky": true, "skyLight": 1, "ambientIntensity": 0.7 },
   "entities": [
     { "name": "Camera", "position": [0, 2.4, 8], "rotation": [-12, 0, 0], "components": [{ "type": "camera" }] },
     {
@@ -14,6 +14,12 @@
       "name": "Lamp",
       "position": [-3, 0.6, 0],
       "components": [{ "type": "mesh", "shape": "sphere", "material": "Glowing" }]
+    },
+    {
+      "name": "Mirror Ball",
+      "position": [-1, 0.7, 3],
+      "scale": [1.4, 1.4, 1.4],
+      "components": [{ "type": "mesh", "shape": "sphere", "material": "Mirror" }]
     },
     {
       "name": "Fire",

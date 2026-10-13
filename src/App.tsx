@@ -36,7 +36,7 @@ function onKeyDown(e: KeyboardEvent) {
     }
 
     // In the Game view the keys belong to the scripts of the running scene; an open window keeps them too
-    if (sceneStore.gameView || sceneStore.settingsPage) return;
+    if (sceneStore.gameKeys || sceneStore.settingsPage) return;
 
     const target = e.target as HTMLElement;
     if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
@@ -77,7 +77,7 @@ function onKeyDown(e: KeyboardEvent) {
 
 // true if the keys and the clipboard belong to something else: a field being typed in, or the running game
 function busy(e: Event) {
-    return sceneStore.gameView || ["INPUT", "TEXTAREA", "SELECT"].includes((e.target as HTMLElement).tagName);
+    return sceneStore.gameKeys || ["INPUT", "TEXTAREA", "SELECT"].includes((e.target as HTMLElement).tagName);
 }
 
 // Ctrl+C / Ctrl+X: the selected objects go to the clipboard as text, the JSON of a scene file

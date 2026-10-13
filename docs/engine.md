@@ -86,6 +86,13 @@
   **Небо** — поля окружения `sky`, `skyTop`, `skyHorizon`, `skyGround`: `applyEnvironment` делает картинку
   1 × 128 (`DataTexture`, equirect) и ставит её в `scene.background`; хранится в `scene.userData.sky`, пока
   цвета те же. `background` при небе в Inspector скрыт (`when`).
+  **Свет неба и панорама** (13.10.2026) — «карта окружения»: `skyLight` больше 0 ставит ту же картинку в
+  `scene.environment` (сила — `scene.environmentIntensity`), и three.js сам делает из неё свет и отражения
+  стандартных материалов; без неба картинка — ровный `background`. Для этого она шириной `SKY_COLUMNS` (256):
+  из картинки в один столбец three.js карту не строит (шейдер не собирается). `skyImage` — панорама из
+  `assets/` (2:1, equirect) вместо трёх цветов: третий аргумент `applyEnvironment` — `images`
+  (`registry.imageSource`); пока картинка в пути, небо из цветов, по приходу окружение применяется ещё раз
+  (если сцена не получила другое — сверка по `scene.userData.environment`).
   **Зоны** — компонент `zone` (коробка + свои фон, свет, туман, `look`, `blend`), метка `userData.zone`.
   `Game.update` → `look(dt)`: `zoneAt(root, место камеры)` → `withZone(окружение, зона)` →
   `blendEnvironment` (цвета и числа переходят за `blend`, вкл / выкл тумана и стиль — сразу) →

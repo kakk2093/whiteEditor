@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import type { ImageSource } from "./materials";
 import type { ParamDef } from "./Registry";
 
 // Scene-wide rendering settings (Unity keeps these in the Lighting window)
@@ -9,6 +10,12 @@ export interface EnvironmentData {
     skyTop: string;
     skyHorizon: string;
     skyGround: string;
+    // An image from assets/ wrapped around the scene instead of the three colors: a panorama, twice as wide
+    // as it is high (equirectangular); "" for none
+    skyImage: string;
+    // How much the sky (the plain background, without one) lights the surfaces and is mirrored in the smooth
+    // and the metal ones: the environment map of the scene. 0: none
+    skyLight: number;
     ambientColor: string;
     ambientIntensity: number;
     fog: boolean;
@@ -25,6 +32,8 @@ export const environmentFields: Record<keyof EnvironmentData, ParamDef> = {
     skyTop: { type: "color", default: "#2f6fc4", when: { sky: [true] } },
     skyHorizon: { type: "color", default: "#bfd9ee", when: { sky: [true] } },
     skyGround: { type: "color", default: "#6b6156", when: { sky: [true] } },
+    skyImage: { type: "asset", kind: "texture", default: "", when: { sky: [true] } },
+    skyLight: { type: "number", default: 0, min: 0, step: 0.1 },
     ambientColor: { type: "color", default: "#ffffff" },
     ambientIntensity: { type: "number", default: 1, min: 0, step: 0.1 },
     fog: { type: "boolean", default: false },
@@ -43,12 +52,13 @@ const AMBIENT_NAME = "__ambient";
 // How many rows the picture of the sky has, from straight down to straight up
 const SKY_ROWS = 128;
 
+// As many columns when the picture also lights the scene: three.js makes the light from a picture that has a width
+const SKY_COLUMNS = 256;
+
 // The sky as a picture wrapped around the scene: one column, three.js stretches it all the way round
-function createSky(env: EnvironmentData) {
-    const top = new THREE.Color(env.skyTop);
-    const horizon = new THREE.Color(env.skyHorizon);
-    const ground = new THREE.Color(env.skyGround);
-    const data = new Uint8Array(SKY_ROWS * 4);
+function createSky(colors: string[], columns: number) {
+    const [top, horizon, ground] = colors.map((color) => new THREE.Color(color));
+    const data = new Uint8Array(SKY_ROWS * columns * 4);
     const color = new THREE.Color();
     const written = new THREE.Color();
     for (let row = 0; row < SKY_ROWS; row++) {
@@ -59,10 +69,13 @@ function createSky(env: EnvironmentData) {
         else color.lerpColors(horizon, ground, Math.min(1, -height * 8));
         // The colors are mixed as numbers of light and written the way a picture keeps them
         written.copy(color).convertLinearToSRGB();
-        data.set([written.r, written.g, written.b].map((c) => Math.round(THREE.MathUtils.clamp(c, 0, 1) * 255)), row * 4);
-        data[row * 4 + 3] = 255;
+        const pixel = [...[written.r, written.g, written.b].map((c) => Math.round(THREE.MathUtils.clamp(c, 0, 1) * 255)), 255];
+        for (let column = 0; column < columns; column++) data.set(pixel, (row * columns + column) * 4);
     }
-    const texture = new THREE.DataTexture(data, 1, SKY_ROWS);
+    return wrapAround(new THREE.DataTexture(data, columns, SKY_ROWS));
+}
+
+function wrapAround(texture: THREE.Texture) {
     texture.mapping = THREE.EquirectangularReflectionMapping;
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.magFilter = THREE.LinearFilter;
@@ -71,23 +84,38 @@ function createSky(env: EnvironmentData) {
     return texture;
 }
 
-// The editor viewport and the game both call this, so they look the same
-export function applyEnvironment(scene: THREE.Scene, data: Partial<EnvironmentData> = {}) {
+// The editor viewport and the game both call this, so they look the same. `images` loads the picture of
+// the sky ("skyImage"); without it, and until the picture has arrived, the sky is its three colors.
+export function applyEnvironment(scene: THREE.Scene, data: Partial<EnvironmentData> = {}, images?: ImageSource) {
     const env = { ...defaultEnvironment, ...data };
+    scene.userData.environment = env;
 
-    // The picture of the sky is kept while its colors stay the same
-    const skyKey = env.sky ? [env.skyTop, env.skyHorizon, env.skyGround].join() : "";
+    // What is around the scene, as a picture: the sky, or the plain background when its light is asked for
+    const lit = env.skyLight > 0;
+    let image = env.sky && env.skyImage ? images?.(env.skyImage) ?? null : null;
+    if (image instanceof Promise) {
+        // Drawn again with the picture, unless the scene has got another environment in the meantime
+        image.then(() => scene.userData.environment === env && applyEnvironment(scene, env, images)).catch(() => console.warn(`Sky image "${env.skyImage}" could not be loaded`));
+        image = null;
+    }
+    const colors = env.sky ? [env.skyTop, env.skyHorizon, env.skyGround] : [env.background, env.background, env.background];
+    // The picture is kept while what it is made of stays the same
+    const skyKey = env.sky || lit ? (image ? `image:${env.skyImage}` : [...colors, lit].join()) : "";
     const kept = scene.userData.sky as { key: string; texture: THREE.Texture } | undefined;
     if (kept && kept.key !== skyKey) {
         kept.texture.dispose();
         delete scene.userData.sky;
     }
-    if (env.sky) {
-        if (!scene.userData.sky) scene.userData.sky = { key: skyKey, texture: createSky(env) };
-        scene.background = (scene.userData.sky as { texture: THREE.Texture }).texture;
-    } else {
-        scene.background = new THREE.Color(env.background);
+    if (skyKey && !scene.userData.sky) {
+        const texture = image ? wrapAround(new THREE.Texture(image)) : createSky(colors, lit ? SKY_COLUMNS : 1);
+        if (image) texture.generateMipmaps = false;
+        scene.userData.sky = { key: skyKey, texture };
     }
+    const sky = (scene.userData.sky as { texture: THREE.Texture } | undefined)?.texture ?? null;
+    scene.background = env.sky && sky ? sky : new THREE.Color(env.background);
+    // three.js turns the picture into the light and the reflections of the standard materials
+    scene.environment = lit ? sky : null;
+    scene.environmentIntensity = env.skyLight;
     scene.fog = env.fog ? new THREE.Fog(env.fogColor, env.fogNear, env.fogFar) : null;
 
     let ambient = scene.children.find((c) => c.name === AMBIENT_NAME) as THREE.AmbientLight | undefined;

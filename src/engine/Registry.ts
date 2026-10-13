@@ -534,6 +534,9 @@ export class Registry {
         return this.textureFiles.includes(name) ? this.loadImage(name) : null;
     }
 
+    // The same as a function to hand over (applyEnvironment)
+    imageSource = (name: string) => this.loadTexture(name);
+
     // Resolves when the font is loaded (or has failed); null for a file the project does not have
     fontReady(name: string) {
         return this.fontFiles.includes(name) ? loadFont(this.fontUrl(name))?.done ?? null : null;

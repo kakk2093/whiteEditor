@@ -106,8 +106,28 @@ void main() {
     gl_FragColor = vec4(color.rgb + texture2D(tGlow, vUv).rgb * strength, color.a);
 }`;
 
-// How far the glow of a material spreads, as a part of the height of the picture
-const GLOW_RADIUS = 0.03;
+// Lays one blurred glow onto the others (drawn with additive blending)
+const GLOW_SUM = `
+uniform sampler2D tGlow;
+varying vec2 vUv;
+void main() {
+    gl_FragColor = vec4(texture2D(tGlow, vUv).rgb, 1.0);
+}`;
+
+// How far the glow of a material spreads unless it says otherwise ("glowRadius"), in percent of the height
+// of the picture
+const GLOW_RADIUS = 3;
+
+// Every radius is a drawing of the scene and a blur of its own: materials with more radii than this share
+// the nearest one
+const MAX_GLOW_RADII = 4;
+
+const glowRadiusOf = (material: THREE.Material) => {
+    const radius = Number(material.userData.glowRadius ?? GLOW_RADIUS);
+    return radius > 0 ? Math.round(radius * 10) / 10 : GLOW_RADIUS;
+};
+
+const nearest = (list: number[], value: number) => list.reduce((best, one) => (Math.abs(one - value) < Math.abs(best - value) ? one : best));
 
 const TONE_MAPPINGS = ["none", "reinhard", "aces"];
 
@@ -171,6 +191,18 @@ export class RenderPipeline {
         vertexShader: VERTEX,
         fragmentShader: GLOW_BLUR,
         uniforms: { tGlow: { value: null }, step: { value: new THREE.Vector2() } },
+        depthTest: false,
+        depthWrite: false,
+    });
+
+    // Where the glows of several radii are added up, at the size of the blur
+    private glowSumTarget = createTarget(false, true);
+
+    private glowSumPass = new THREE.ShaderMaterial({
+        vertexShader: VERTEX,
+        fragmentShader: GLOW_SUM,
+        uniforms: { tGlow: { value: null } },
+        blending: THREE.AdditiveBlending,
         depthTest: false,
         depthWrite: false,
     });
@@ -316,21 +348,25 @@ export class RenderPipeline {
         };
     }
 
-    // true if something the camera draws has a material with "glow"
-    private glows(scene: THREE.Scene, camera: THREE.Camera) {
-        let found = false;
+    // The radii of the glow of the materials the camera draws ("glow" above zero); empty if nothing glows
+    private glowRadii(scene: THREE.Scene, camera: THREE.Camera) {
+        const radii: number[] = [];
         scene.traverseVisible((object) => {
             const mesh = object as THREE.Mesh;
-            if (found || !mesh.isMesh || !mesh.layers.test(camera.layers)) return;
-            found = (Array.isArray(mesh.material) ? mesh.material : [mesh.material]).some((material) => material.userData.glow > 0);
+            if (!mesh.isMesh || !mesh.layers.test(camera.layers)) return;
+            for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+                if (!(material.userData.glow > 0)) continue;
+                const radius = glowRadiusOf(material);
+                if (!radii.includes(radius) && radii.length < MAX_GLOW_RADII) radii.push(radius);
+            }
         });
-        return found;
+        return radii;
     }
 
-    // The material that stands for another one in the picture of the glow
-    private glowOf(material: THREE.Material) {
+    // The material that stands for another one in the picture of the glow of one radius
+    private glowOf(material: THREE.Material, radius: number, radii: number[]) {
         const source = material as THREE.MeshStandardMaterial;
-        if (!(material.userData.glow > 0) || !source.emissive) return this.darkMaterial;
+        if (!(material.userData.glow > 0) || !source.emissive || nearest(radii, glowRadiusOf(material)) !== radius) return this.darkMaterial;
         let own = this.glowMaterials.get(material);
         if (!own) {
             own = new THREE.MeshBasicMaterial();
@@ -350,7 +386,8 @@ export class RenderPipeline {
     // The glow of the materials (their "glow" field), in any look and without one: draws the scene once more
     // with the glowing surfaces in the color of their light and everything else black (so what stands in
     // front hides the light), then adds that picture, spread, to `source`. Returns the target with the sum.
-    private drawGlow(scene: THREE.Scene, camera: THREE.Camera, source: THREE.WebGLRenderTarget, width: number, height: number) {
+    // Materials that spread their light differently ("glowRadius") are drawn and blurred apart: once per radius.
+    private drawGlow(scene: THREE.Scene, camera: THREE.Camera, source: THREE.WebGLRenderTarget, width: number, height: number, radii: number[]) {
         const { renderer } = this;
         const swapped: [THREE.Mesh, THREE.Material | THREE.Material[]][] = [];
         const hidden: THREE.Object3D[] = [];
@@ -363,46 +400,61 @@ export class RenderPipeline {
             else swapped.push([mesh, mesh.material]);
         });
         hidden.forEach((object) => (object.visible = false));
-        for (const [mesh, material] of swapped) {
-            mesh.material = Array.isArray(material) ? material.map((one) => this.glowOf(one)) : this.glowOf(material);
-        }
 
         const { background } = scene;
+        const { autoClear } = renderer;
         const clearColor = renderer.getClearColor(new THREE.Color());
         const clearAlpha = renderer.getClearAlpha();
         scene.background = null;
         renderer.setClearColor(0x000000, 1);
-        renderer.setRenderTarget(this.glowTarget);
-        renderer.render(scene, camera);
+
+        const [first, second] = this.blurTargets;
+        for (const target of [...this.blurTargets, this.glowSumTarget]) {
+            const w = Math.max(1, Math.round(width / 2));
+            const h = Math.max(1, Math.round(height / 2));
+            if (target.width !== w || target.height !== h) target.setSize(w, h);
+        }
+        const blur = this.blurPass.uniforms;
+        radii.forEach((radius, i) => {
+            for (const [mesh, material] of swapped) {
+                mesh.material = Array.isArray(material) ? material.map((one) => this.glowOf(one, radius, radii)) : this.glowOf(material, radius, radii);
+            }
+            renderer.setRenderTarget(this.glowTarget);
+            renderer.render(scene, camera);
+
+            // The blur: along x and along y, again and again, each time twice as wide, so the light fades out
+            // softly. The widest pass sets the radius; a wider glow takes more passes, not sparser samples.
+            // `reach`: how far apart the nine samples of that pass are, as a part of the height of the picture.
+            const reach = radius / 100 / 4;
+            const passes = 2 + Math.max(0, Math.ceil(Math.log2(radius / GLOW_RADIUS)));
+            let from: THREE.WebGLRenderTarget = this.glowTarget;
+            for (let pass = passes - 1; pass >= 0; pass--) {
+                const wide = reach / 2 ** pass;
+                blur.tGlow.value = from.texture;
+                (blur.step.value as THREE.Vector2).set((wide * height) / width, 0);
+                this.drawQuad(this.blurPass, first);
+                blur.tGlow.value = first.texture;
+                (blur.step.value as THREE.Vector2).set(0, wide);
+                this.drawQuad(this.blurPass, second);
+                from = second;
+            }
+
+            if (radii.length > 1) {
+                this.glowSumPass.uniforms.tGlow.value = second.texture;
+                renderer.autoClear = i === 0;
+                this.drawQuad(this.glowSumPass, this.glowSumTarget);
+                renderer.autoClear = autoClear;
+            }
+        });
+
         scene.background = background;
         renderer.setClearColor(clearColor, clearAlpha);
         for (const [mesh, material] of swapped) mesh.material = material;
         hidden.forEach((object) => (object.visible = true));
 
-        // The blur: twice along x and along y, the second time wider, so the light fades out softly
-        const [first, second] = this.blurTargets;
-        for (const target of this.blurTargets) {
-            const w = Math.max(1, Math.round(width / 2));
-            const h = Math.max(1, Math.round(height / 2));
-            if (target.width !== w || target.height !== h) target.setSize(w, h);
-        }
-        // How far apart the nine samples are, as a part of the height of the picture
-        const reach = GLOW_RADIUS / 4;
-        const blur = this.blurPass.uniforms;
-        let from: THREE.WebGLRenderTarget = this.glowTarget;
-        for (const wide of [0.5, 1]) {
-            blur.tGlow.value = from.texture;
-            (blur.step.value as THREE.Vector2).set((reach * wide * height) / width, 0);
-            this.drawQuad(this.blurPass, first);
-            blur.tGlow.value = first.texture;
-            (blur.step.value as THREE.Vector2).set(0, reach * wide);
-            this.drawQuad(this.blurPass, second);
-            from = second;
-        }
-
         const u = this.glowPass.uniforms;
         u.tColor.value = source.texture;
-        u.tGlow.value = second.texture;
+        u.tGlow.value = (radii.length > 1 ? this.glowSumTarget : second).texture;
         // The blur spreads the light thin: this brings the halo back to about what a material asks for
         u.strength.value = 1.6;
         this.drawQuad(this.glowPass, this.litTarget);
@@ -436,7 +488,8 @@ export class RenderPipeline {
         this.surfaces.prepare(scene, camera, width, height, this.time);
 
         // The glow of the materials does not wait for a look
-        const glows = this.glows(scene, camera);
+        const glowRadii = this.glowRadii(scene, camera);
+        const glows = glowRadii.length > 0;
 
         // Nothing to do to the picture: draw straight onto the canvas, exactly as without a pipeline
         if (!glows && (!look || (look.pixelSize <= 1 && this.passes.length === 0 && look.toneMapping === "none" && look.exposure === 1))) {
@@ -485,7 +538,7 @@ export class RenderPipeline {
             renderer.setClearColor(clearColor, clearAlpha);
         }
         let source = this.sceneTarget;
-        if (glows) source = this.drawGlow(scene, camera, source, width, height);
+        if (glows) source = this.drawGlow(scene, camera, source, width, height, glowRadii);
         snap?.restore();
 
         const perspective = camera as THREE.PerspectiveCamera;
@@ -527,8 +580,9 @@ export class RenderPipeline {
         this.glowMaterials.forEach((material) => material.dispose());
         this.glowMaterials.clear();
         this.glowPass.dispose();
+        this.glowSumPass.dispose();
         this.blurPass.dispose();
-        [this.sceneTarget, this.normalTarget, this.glowTarget, this.litTarget, ...this.blurTargets, ...this.targets].forEach((target) => {
+        [this.sceneTarget, this.normalTarget, this.glowTarget, this.litTarget, this.glowSumTarget, ...this.blurTargets, ...this.targets].forEach((target) => {
             target.depthTexture?.dispose();
             target.dispose();
         });

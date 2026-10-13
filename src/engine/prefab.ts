@@ -24,6 +24,20 @@ function applyRenames(entity: EntityData) {
     const name = renames.get(entity);
     if (name) entity.name = name;
     entity.children.forEach(applyRenames);
+    // An instance that is not expanded (in a prefab being saved) keeps what it adds in its overrides
+    for (const list of addedLists(entity)) list.forEach(applyRenames);
+}
+
+// A copy of an entity an instance adds; the name an outer instance gave it goes with the copy
+function copyAdded(entity: EntityData): EntityData {
+    const copy = structuredClone(entity);
+    const carry = (from: EntityData, to: EntityData) => {
+        const name = renames.get(from);
+        if (name) renames.set(to, name);
+        from.children.forEach((child, i) => carry(child, to.children[i]));
+    };
+    carry(entity, copy);
+    return copy;
 }
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
@@ -68,6 +82,23 @@ function applyComponents(entity: EntityData, components: NonNullable<EntityOverr
     }
 }
 
+// Hands an override down to an instance of another prefab: `rest` is the path inside it. What that instance
+// adds itself is a real entity, written whole in its "addChildren", and is changed right there; the rest
+// becomes an override of the instance.
+function handDown(instance: EntityData, rest: string, override: EntityOverride) {
+    for (const [path, own] of Object.entries(instance.overrides ?? {})) {
+        const prefix = path === ROOT_PATH ? "" : `${path}/`;
+        if (!own.addChildren || !rest.startsWith(prefix)) continue;
+        const inside = rest.slice(prefix.length);
+        const first = inside.split("/")[0];
+        if (!own.addChildren.some((child) => child.name === first)) continue;
+        // The list stands in for the children of a root, so that the entity can also be removed from it
+        applyAt({ ...instance, prefab: undefined, children: own.addChildren }, inside, override);
+        return;
+    }
+    instance.overrides = { ...instance.overrides, [rest]: mergeOverride(instance.overrides?.[rest], override) };
+}
+
 // Applies one override to what is at `path` under `root`; false if there is nothing at that path
 function applyAt(root: EntityData, path: string, override: EntityOverride): boolean {
     const names = path === ROOT_PATH ? [] : path.split("/");
@@ -76,8 +107,7 @@ function applyAt(root: EntityData, path: string, override: EntityOverride): bool
     for (let i = 0; i < names.length; i++) {
         // The path goes on inside an instance of another prefab: that instance carries the rest
         if (node !== root && node.prefab) {
-            const rest = names.slice(i).join("/");
-            node.overrides = { ...node.overrides, [rest]: mergeOverride(node.overrides?.[rest], override) };
+            handDown(node, names.slice(i).join("/"), override);
             return true;
         }
         const next = node.children.find((child) => child.name === names[i]);
@@ -121,7 +151,7 @@ function applyAt(root: EntityData, path: string, override: EntityOverride): bool
         if (!findComponent(node, componentKey(component))) node.components.push(structuredClone(component));
     }
     if (components) applyComponents(node, components);
-    for (const child of addChildren ?? []) node.children.push(structuredClone(child));
+    for (const child of addChildren ?? []) node.children.push(copyAdded(child));
     return true;
 }
 

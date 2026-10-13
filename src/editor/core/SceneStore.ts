@@ -415,7 +415,10 @@ class SceneStore {
     // keyboard and the mouse go to the scripts, it looks and plays as the built game. "editor" (Scene):
     // the editor's free camera with selection and the gizmo. The scene runs in both, and the Hierarchy and
     // the Inspector edit it in both.
-    playCamera: "editor" | "game" = "game";
+    playCamera: "editor" | "game" | "both" = "game";
+
+    // With both views side by side: the one that was clicked last, which has the keyboard
+    splitFocus: "scene" | "game" = "game";
 
     // Play is on, but time stands still; step() moves it by one frame
     paused = false;
@@ -468,7 +471,7 @@ class SceneStore {
         this.scene = new THREE.Scene();
         this.scene.add(this.root);
         this.prefabLight.position.set(3, 6, 4);
-        applyEnvironment(this.scene, this.environment);
+        applyEnvironment(this.scene, this.environment, this.registry.imageSource);
     }
 
     subscribe = (fn: Listener) => {
@@ -550,7 +553,7 @@ class SceneStore {
                 else if ("asset" in step && step.asset.section === section && step.asset.name === from) step.asset.name = to;
             }
         }
-        applyEnvironment(this.scene, this.environment);
+        applyEnvironment(this.scene, this.environment, this.registry.imageSource);
         this.notify();
     }
 
@@ -646,7 +649,7 @@ class SceneStore {
     private restore(data: SceneData) {
         this.entities = data.entities;
         this.environment = { ...defaultEnvironment, ...data.environment };
-        applyEnvironment(this.scene, this.environment);
+        applyEnvironment(this.scene, this.environment, this.registry.imageSource);
         this.rebuild();
         this.pruneSelection();
         // A field being typed in must forget its text
@@ -996,9 +999,32 @@ class SceneStore {
         localStorage.setItem(OPTIONS_KEY, JSON.stringify(options));
     }
 
-    setPlayCamera(camera: "editor" | "game") {
+    setPlayCamera(camera: "editor" | "game" | "both") {
         this.playCamera = camera;
+        if (camera === "both") this.splitFocus = "game";
         this.notify();
+    }
+
+    setSplitFocus(focus: "scene" | "game") {
+        if (this.splitFocus === focus) return;
+        this.splitFocus = focus;
+        this.notify();
+    }
+
+    // true while the viewport shows both views side by side: the Scene view on the left, with everything
+    // the editor does there, and the picture of the game on the right
+    get split() {
+        return this.playCamera === "both" && this.hasGameCamera;
+    }
+
+    // true while, of the two views side by side, the game has the keyboard and its own mouse
+    get gameFocused() {
+        return this.split && this.splitFocus === "game" && !this.paused;
+    }
+
+    // true while the keys belong to the behaviors of the running scene, not to the editor
+    get gameKeys() {
+        return this.gameView || this.gameFocused;
     }
 
     // true if the running scene has a camera to look through
@@ -1015,12 +1041,20 @@ class SceneStore {
 
     // The input of the running scene while it is to hear the keyboard and the mouse
     get gameInput() {
-        return this.game && this.gameView ? this.game.input : null;
+        return this.game && this.gameKeys ? this.game.input : null;
     }
 
     // The camera of the running scene fitted to a viewport of this size, or null if the editor camera is in use
     gameCamera(width: number, height: number) {
         if (!this.game || !this.gameView) return null;
+        this.game.resize(width, height);
+        return this.game.camera;
+    }
+
+    // The camera of the running scene fitted to a picture of this size, for the game half of the two views
+    // side by side; null if they are not shown
+    splitCamera(width: number, height: number) {
+        if (!this.game || !this.split) return null;
         this.game.resize(width, height);
         return this.game.camera;
     }
@@ -1084,8 +1118,9 @@ class SceneStore {
         this.playGlobals = {};
         this.status = "";
         this.paused = false;
-        // Play starts the way the game does; the Scene view is one click away
-        this.playCamera = "game";
+        // Play starts the way the game does; the Scene view is one click away. Both views side by side stay.
+        if (this.playCamera !== "both") this.playCamera = "game";
+        this.splitFocus = "game";
         this.startGame();
         // A script that failed in start() has already written its own message
         if (!this.status) {
@@ -1825,7 +1860,7 @@ class SceneStore {
 
     setEnvironment<K extends keyof EnvironmentData>(key: K, value: EnvironmentData[K]) {
         this.environment[key] = value;
-        applyEnvironment(this.scene, this.environment);
+        applyEnvironment(this.scene, this.environment, this.registry.imageSource);
         this.game?.setEnvironment(this.environment);
         this.notify();
     }
@@ -1893,7 +1928,7 @@ class SceneStore {
         this.selectedAsset = null;
         this.entities = entities;
         this.environment = environment;
-        applyEnvironment(this.scene, this.environment);
+        applyEnvironment(this.scene, this.environment, this.registry.imageSource);
         this.rebuild();
     }
 

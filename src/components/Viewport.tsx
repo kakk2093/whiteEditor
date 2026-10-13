@@ -57,6 +57,10 @@ export default function Viewport() {
     const marqueeRef = useRef<HTMLDivElement>(null);
     // The frame of the picture of the game, shown while the interface is edited
     const frameRef = useRef<HTMLDivElement>(null);
+    // The game half of the two views side by side: the picture of the game is drawn on the one canvas of the
+    // viewport first and copied here
+    const gamePaneRef = useRef<HTMLDivElement>(null);
+    const gameCanvasRef = useRef<HTMLCanvasElement>(null);
 
     useEffect(() => {
         if (!ref.current) return;
@@ -605,7 +609,15 @@ export default function Viewport() {
 
         // The input of the running game the canvas is attached to now, and how to detach it
         let gameInput: Input | null = null;
+        let inputElement: HTMLElement | null = null;
         let detachInput = () => {};
+
+        // Two views side by side: a press on the game half gives it the keyboard, a press anywhere else in
+        // the editor takes it back
+        const onFocusDown = (e: PointerEvent) => {
+            if (sceneStore.split) sceneStore.setSplitFocus(gamePaneRef.current?.contains(e.target as Node) ? "game" : "scene");
+        };
+        document.addEventListener("pointerdown", onFocusDown, true);
 
         // With several objects selected each one gets a box around it; the gizmo holds the main one
         const boxes = new THREE.Group();
@@ -642,10 +654,13 @@ export default function Viewport() {
             shownZone = "?";
 
             // Game view: the keyboard and the mouse go to the behaviors of the scene
-            if (sceneStore.gameInput !== gameInput) {
+            // With the two views side by side the mouse of the game is the one over its half
+            const element = (sceneStore.split && gameCanvasRef.current) || domElement;
+            if (sceneStore.gameInput !== gameInput || (gameInput && element !== inputElement)) {
                 detachInput();
                 gameInput = sceneStore.gameInput;
-                detachInput = gameInput ? gameInput.attach(domElement) : () => {};
+                inputElement = element;
+                detachInput = gameInput ? gameInput.attach(element) : () => {};
                 // The Play button or a field of the Inspector must not keep the keys: Space would press the button
                 if (gameInput) (document.activeElement as HTMLElement | null)?.blur?.();
             }
@@ -704,7 +719,7 @@ export default function Viewport() {
                 const key = zone ? JSON.stringify(zone) : "";
                 if (key !== shownZone) {
                     shownZone = key;
-                    applyEnvironment(sceneStore.scene, withZone(sceneStore.environment, zone));
+                    applyEnvironment(sceneStore.scene, withZone(sceneStore.environment, zone), sceneStore.registry.imageSource);
                     applyLook();
                 }
             }
@@ -719,8 +734,40 @@ export default function Viewport() {
                 const camera = sceneStore.gameCamera(area?.width ?? canvas.clientWidth, area?.height ?? canvas.clientHeight) ?? ctx.camera;
                 const { renderer } = ctx;
                 const scene = sceneStore.viewScene;
+
+                // Two views side by side: the picture of the game first, as its own camera sees it, with its
+                // interface; it goes to the canvas of the game half, and the Scene view is drawn over it here.
+                // The halves are of one size, so the copy is pixel for pixel.
+                const gameCanvas = sceneStore.split ? gameCanvasRef.current : null;
+                const splitArea = gameCanvas ? sceneStore.gameArea(canvas.clientWidth, canvas.clientHeight) : null;
+                const splitCamera = splitArea ? sceneStore.splitCamera(splitArea.width, splitArea.height) : null;
+                if (gameCanvas && splitArea && splitCamera) {
+                    const shown = gizmo.visible;
+                    gizmo.visible = false;
+                    renderer.setScissorTest(false);
+                    renderer.setClearColor(0x000000);
+                    renderer.clear();
+                    const bottom = canvas.clientHeight - splitArea.top - splitArea.height;
+                    renderer.setViewport(splitArea.left, bottom, splitArea.width, splitArea.height);
+                    renderer.setScissor(splitArea.left, bottom, splitArea.width, splitArea.height);
+                    renderer.setScissorTest(true);
+                    pipeline.render(scene, splitCamera, Math.min(dt, 0.1), sceneStore.gameUi);
+                    renderer.setScissorTest(false);
+                    renderer.setViewport(0, 0, canvas.clientWidth, canvas.clientHeight);
+                    gizmo.visible = shown;
+                    if (gameCanvas.width !== canvas.width || gameCanvas.height !== canvas.height) {
+                        gameCanvas.width = canvas.width;
+                        gameCanvas.height = canvas.height;
+                    }
+                    gameCanvas.getContext("2d")?.drawImage(canvas, 0, 0);
+                }
+                const splitShown = splitCamera !== null;
                 // The mouse of the game is counted over the picture, not over the whole view
-                if (gameInput) gameInput.area = framed ? area : null;
+                if (gameInput) {
+                    const picture = splitShown ? splitArea : area;
+                    const whole = !picture || (picture.width === canvas.clientWidth && picture.height === canvas.clientHeight);
+                    gameInput.area = whole ? null : picture;
+                }
 
                 // The picture itself: the scene through its look. Editor tools are not a part of it: the grid
                 // and the markers are on their own layer, the gizmo is hidden for a moment.
@@ -757,7 +804,8 @@ export default function Viewport() {
                 // picture of the game: it is drawn into that part of the view, with a frame around it
                 const shape = ui === editorUi ? sceneStore.gameArea(canvas.clientWidth, canvas.clientHeight) : null;
                 const shaped = shape !== null && (shape.width !== canvas.clientWidth || shape.height !== canvas.clientHeight);
-                pipeline.render(scene, camera, Math.min(dt, 0.1), shaped ? null : ui);
+                // The picture of the game has moved the time of the effects already
+                pipeline.render(scene, camera, splitShown ? 0 : Math.min(dt, 0.1), shaped ? null : ui);
                 if (shaped) {
                     const bottom = canvas.clientHeight - shape.top - shape.height;
                     renderer.setViewport(shape.left, bottom, shape.width, shape.height);
@@ -781,9 +829,11 @@ export default function Viewport() {
                 // What the behaviors have put over the picture with HTML (self.overlay): seen in the Game view
                 const game = sceneStore.runningGame;
                 if (game?.overlay) {
-                    if (game.overlay.parentElement !== canvas.parentElement) canvas.after(game.overlay);
-                    game.overlay.style.display = area ? "" : "none";
-                    if (area) game.placeOverlay(area.left, area.top, area.width, area.height);
+                    const host = splitShown && gameCanvas ? gameCanvas : canvas;
+                    const place = splitShown ? splitArea : area;
+                    if (game.overlay.parentElement !== host.parentElement) host.after(game.overlay);
+                    game.overlay.style.display = place ? "" : "none";
+                    if (place) game.placeOverlay(place.left, place.top, place.width, place.height);
                 }
 
                 renderer.autoClear = false;
@@ -855,6 +905,7 @@ export default function Viewport() {
             window.removeEventListener("blur", stopFlying);
             stopFlying();
             detachInput();
+            document.removeEventListener("pointerdown", onFocusDown, true);
             pipeline.dispose();
             editorUi.dispose();
             sceneStore.focusHandler = null;
@@ -896,7 +947,7 @@ export default function Viewport() {
             // A right click opens the menu; holding the button to look around or fly must not
             onContextMenu={(e) => {
                 e.preventDefault();
-                if ((e.target as HTMLElement).tagName !== "CANVAS") return;
+                if ((e.target as HTMLElement).tagName !== "CANVAS" || e.target === gameCanvasRef.current) return;
                 if (downRef.current.moved || store.gameView) return;
                 if (Math.hypot(e.clientX - downRef.current.x, e.clientY - downRef.current.y) > 4) return;
 
@@ -906,7 +957,10 @@ export default function Viewport() {
                 openContextMenu(e, entity ? entityContextMenu(entity) : sceneContextMenu());
             }}
         >
-            <div ref={ref} style={{ width: "100%", height: "100%" }} />
+            <div ref={ref} style={{ width: store.split ? "50%" : "100%", height: "100%" }} />
+            <div ref={gamePaneRef} className={`viewport-game ${store.gameFocused ? "focused" : ""}`} style={{ display: store.split ? "block" : "none" }}>
+                <canvas ref={gameCanvasRef} />
+            </div>
             <div ref={marqueeRef} className="viewport-marquee" />
             <div ref={frameRef} className="viewport-frame" />
 
@@ -999,7 +1053,7 @@ export default function Viewport() {
                     <>
                         {(!store.gameView || looks.length > 0) && <span className="sep" />}
                         <button
-                            className={`btn ghost ${store.playCamera === "game" && store.hasGameCamera ? "" : "active"}`}
+                            className={`btn ghost ${store.playCamera !== "editor" && store.hasGameCamera ? "" : "active"}`}
                             title="Scene view: the editor camera; select and move objects while the scene runs"
                             onClick={() => store.setPlayCamera("editor")}
                         >
@@ -1015,6 +1069,14 @@ export default function Viewport() {
                             onClick={() => store.setPlayCamera("game")}
                         >
                             <Icon name="camera" /> Game
+                        </button>
+                        <button
+                            className={`btn ghost ${store.split ? "active" : ""}`}
+                            title="Both views side by side: Scene on the left, Game on the right. The keys go to the half that was clicked last"
+                            disabled={!store.hasGameCamera}
+                            onClick={() => store.setPlayCamera("both")}
+                        >
+                            Both
                         </button>
                     </>
                 )}
@@ -1037,7 +1099,9 @@ export default function Viewport() {
                 </div>
             )}
             <div className="viewport-hint">
-                {store.gameView
+                {store.split
+                    ? `Scene on the left, Game on the right · the keys go to ${store.gameFocused ? "the game" : "the editor"}: click a half to give them to it`
+                    : store.gameView
                     ? "Game view: the camera of the scene, keys and mouse go to the game · " +
                         "switch to Scene to look around, select and move objects"
                     : "Click — select · drag — orbit · Shift-drag — frame ·hold right button — look around, W A S D fly, Q E down/up, Shift faster · " +
