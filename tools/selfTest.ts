@@ -932,8 +932,8 @@ function terrainTests(
       generateTerrain(data, { ...settings, biome }, { x: 0, z: 0 }, { x, z, radius, amount: 1 }, BIOMES[biome])
     const ground = flatTerrain(96, 1)
     equal('a ground without a map is not made by it', [generateByMap(ground, settings, { x: 0, z: 0 }, biomeOf), ground.biomeMap], [false, undefined])
-    lay(ground, 'Plateau', -24, 0, 24)
-    lay(ground, 'Marsh', 24, 0, 24)
+    lay(ground, 'Plateau', -26, 0, 30)
+    lay(ground, 'Marsh', 26, 0, 30)
     equal('the brush writes down where it has laid which biome', [ground.biomes, ground.biomeMap?.[48][24], ground.biomeMap?.[48][72], ground.biomeMap?.[2][2]], [['Plateau', 'Marsh'], 0, 1, -1])
     const shares = biomeShares(ground)
     ok(`most of the ground is still nobody's (${[...shares].map(([name, count]) => `${name || 'none'} ${count}`).join(', ')})`, (shares.get('') ?? 0) > (shares.get('Plateau') ?? 0) && (shares.get('Plateau') ?? 0) > 400)
@@ -944,12 +944,12 @@ function terrainTests(
 
     // By hand, after the brush: a mound on nobody's ground with a bush on it, a pit on the plateau with a bush in it
     brushTerrain(ground, 'raise', 0, -40, 4, 6)
-    brushTerrain(ground, 'lower', -24, 0, 3, 9)
-    ground.scatter = [...(ground.scatter ?? []), { prefab: 'Bush', items: [[0, -40, 0, 1], [-24, 0, 0, 1]] }]
+    brushTerrain(ground, 'lower', -28, 0, 3, 9)
+    ground.scatter = [...(ground.scatter ?? []), { prefab: 'Bush', items: [[0, -40, 0, 1], [-28, 0, 0, 1]] }]
     const mound = ground.heights[8][48]
     ok('made again by its map', generateByMap(ground, settings, { x: 0, z: 0 }, biomeOf))
-    near('the plateau is the plateau again: the pit is gone', ground.heights[48][24], generatedHeight({ ...settings, ...BIOMES.Plateau } as never, -24, 0), 0.01)
-    near('the marsh is the marsh', ground.heights[48][72], generatedHeight({ ...settings, ...BIOMES.Marsh } as never, 24, 0), 0.01)
+    near('the plateau is the plateau again: the pit is gone', ground.heights[48][20], generatedHeight({ ...settings, ...BIOMES.Plateau } as never, -28, 0), 0.01)
+    near('the marsh is the marsh', ground.heights[48][76], generatedHeight({ ...settings, ...BIOMES.Marsh } as never, 28, 0), 0.01)
     equal('what no biome has made stays as the hand left it', [ground.heights[8][48], ground.heights[2][2]], [mound, 0])
     const between = ground.heights[48][48]
     ok(`between the two the land goes over from one into the other (${between.toFixed(1)} m)`, between > -3 && between < 29)

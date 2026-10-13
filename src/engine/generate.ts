@@ -342,7 +342,7 @@ export function generateTerrain(
 }
 
 // Meters over which the land of one biome goes over into the land of its neighbor
-const BIOME_BLEND = 10;
+const BIOME_BLEND = 24;
 
 // The average over a square of `reach` heights each way of a number every height has (the part of the
 // square that is off the ground counts as nothing)
@@ -397,21 +397,57 @@ export function generateByMap(data: TerrainData, settings: GeneratorSettings, of
     const freeWeight = blurred(rows, columns, reach, (i, j) => (free(i, j) ? 1 : 0));
     const freeHeight = blurred(rows, columns, reach, (i, j) => (free(i, j) ? data.heights[j][i] : 0));
 
-    // The heights of the land of the biomes: everything around has its say by how much of it there is
+    // How far every height is from the nearest ground that is free, in heights (two sweeps over the grid: a
+    // step along a row or a column is 1, across a corner 1.41). A small piece of free ground is little of
+    // what is around a height, but it is near: so the land comes to it by the distance, not by the share.
+    const far = new Float32Array(rows * columns);
+    for (let j = 0; j < rows; j++) {
+        for (let i = 0; i < columns; i++) {
+            const n = j * columns + i;
+            far[n] = free(i, j) ? 0 : Math.min(
+                reach + 1,
+                i > 0 ? far[n - 1] + 1 : Infinity,
+                j > 0 ? far[n - columns] + 1 : Infinity,
+                i > 0 && j > 0 ? far[n - columns - 1] + Math.SQRT2 : Infinity,
+                i < columns - 1 && j > 0 ? far[n - columns + 1] + Math.SQRT2 : Infinity,
+            );
+        }
+    }
+    for (let j = rows - 1; j >= 0; j--) {
+        for (let i = columns - 1; i >= 0; i--) {
+            const n = j * columns + i;
+            far[n] = Math.min(
+                far[n],
+                i < columns - 1 ? far[n + 1] + 1 : Infinity,
+                j < rows - 1 ? far[n + columns] + 1 : Infinity,
+                i < columns - 1 && j < rows - 1 ? far[n + columns + 1] + Math.SQRT2 : Infinity,
+                i > 0 && j < rows - 1 ? far[n + columns - 1] + Math.SQRT2 : Infinity,
+            );
+        }
+    }
+
+    // The heights of the land of the biomes: every biome around has its say by how much of it there is; near
+    // free ground the land comes to the height that ground has there
     forgetTerrainRange(data);
     for (let j = 0; j < rows; j++) {
         for (let i = 0; i < columns; i++) {
             if (free(i, j)) continue;
             const n = j * columns + i;
-            let height = freeHeight[n];
-            let said = freeWeight[n];
+            let height = 0;
+            let said = 0;
             for (let k = 0; k < weights.length; k++) {
                 const weight = weights[k]?.[n] ?? 0;
                 if (weight <= 0) continue;
                 height += weight * generatedHeight(reliefs[k]!, offset.x + (i - (columns - 1) / 2) * cell, offset.z + (j - (rows - 1) / 2) * cell);
                 said += weight;
             }
-            data.heights[j][i] = height / said;
+            height = said > 0 ? height / said : data.heights[j][i];
+            if (far[n] <= reach && freeWeight[n] > 0) {
+                const near = 1 - far[n] / (reach + 1);
+                const part = near * near * (3 - 2 * near);
+                height += (freeHeight[n] / freeWeight[n] - height) * part;
+            }
+            data.heights[j][i] = height;
         }
     }
 

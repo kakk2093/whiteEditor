@@ -1,0 +1,35 @@
+{
+  "base": 24,
+  "height": 60,
+  "size": 95,
+  "detail": 1.2,
+  "ground": "#6f7468",
+  "rock": "#7d7f84",
+  "rockSlope": 0.65,
+  "high": "#eef2f5",
+  "highAbove": 31,
+  "lowBelow": -1000,
+  "props": [
+    {
+      "prefab": "Boulder",
+      "spacing": 16,
+      "cover": 0.5,
+      "maxSlope": 0.7,
+      "sizeMin": 0.8,
+      "sizeMax": 2.2
+    },
+    {
+      "prefab": "Pine",
+      "spacing": 11,
+      "cover": 0.35,
+      "maxSlope": 0.45,
+      "maxHeight": 26
+    },
+    {
+      "prefab": "Rock",
+      "spacing": 9,
+      "cover": 0.5,
+      "maxSlope": 0.9
+    }
+  ]
+}

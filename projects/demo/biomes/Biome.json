@@ -12,7 +12,7 @@
   "highAbove": 100,
   "props": [
     {
-      "prefab": "GameObject"
+      "prefab": "Pillars"
     }
   ]
 }

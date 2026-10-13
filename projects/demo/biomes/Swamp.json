@@ -1,0 +1,32 @@
+{
+  "base": -1.4,
+  "height": 2.2,
+  "size": 30,
+  "detail": 0.25,
+  "ground": "#4c5b33",
+  "rock": "#6b6b60",
+  "rockSlope": 0.9,
+  "low": "#3b3528",
+  "lowBelow": -1.7,
+  "props": [
+    {
+      "prefab": "DeadTree",
+      "spacing": 10,
+      "cover": 0.55,
+      "sizeMin": 0.8,
+      "sizeMax": 1.4
+    },
+    {
+      "prefab": "Reeds",
+      "spacing": 2.5,
+      "cover": 0.5,
+      "maxHeight": -0.9
+    },
+    {
+      "prefab": "Bush",
+      "spacing": 9,
+      "cover": 0.3,
+      "minHeight": -1.2
+    }
+  ]
+}

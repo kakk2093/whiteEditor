@@ -1,0 +1,37 @@
+{
+  "base": 2,
+  "height": 10,
+  "size": 55,
+  "detail": 0.5,
+  "ground": "#3f6b35",
+  "rock": "#777b74",
+  "rockSlope": 0.75,
+  "lowBelow": -1000,
+  "props": [
+    {
+      "prefab": "Pine",
+      "spacing": 5,
+      "cover": 0.75,
+      "maxSlope": 0.55,
+      "sizeMin": 0.8,
+      "sizeMax": 1.5
+    },
+    {
+      "prefab": "Tree",
+      "spacing": 9,
+      "cover": 0.5,
+      "maxSlope": 0.45
+    },
+    {
+      "prefab": "Bush",
+      "spacing": 7,
+      "cover": 0.4
+    },
+    {
+      "prefab": "Rock",
+      "spacing": 20,
+      "cover": 0.3,
+      "maxSlope": 1
+    }
+  ]
+}
