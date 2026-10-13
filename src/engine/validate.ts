@@ -42,6 +42,7 @@ function checkValue(def: ParamDef, value: unknown, registry: Registry): string |
                 if (value === DEFAULT_LAYER) return null;
                 return `there is no layer "${value}" in project.json (layers: ${[DEFAULT_LAYER, ...registry.settings.layers].join(", ")})`;
             }
+            if (def.kind === "terrain") return `there is no terrain "${value}" in terrains/ (terrains: ${registry.terrainNames().join(", ") || "none"})`;
             if (def.kind === "clip") return `there is no clip "${value}" in the scripts (clips: ${registry.assetNames("clip").join(", ") || "none"})`;
             if (def.kind === "font") return `there is no font "${value}" in assets/ (fonts: ${registry.fontNames().join(", ") || "none"})`;
             if (def.kind === "gltf") return `there is no model "${value}" in assets/ (models: ${registry.modelFileNames().join(", ") || "none"})`;
@@ -262,6 +263,11 @@ function checkEntity(entity: EntityData, path: string, registry: Registry, ids: 
         const collider = entity.components.find((component) => component.type === "collider");
         if (!collider) problems.push(`${where} [body]: needs a shape: add a Collider, { "type": "collider" }`);
         else if (collider.solid === false) problems.push(`${where} [body]: its Collider must be solid; a trigger is not a part of the physics`);
+    }
+    if (keys.has("terrain")) {
+        // The collisions take the heights as they are in the file: only the place of the entity counts
+        if (entity.rotation.some((n) => n !== 0)) problems.push(`${where} [terrain]: a terrain cannot be turned: rotation must be [0, 0, 0]`);
+        if (entity.scale.some((n) => n !== 1)) problems.push(`${where} [terrain]: a terrain cannot be scaled: scale must be [1, 1, 1] (its size is "cell" of the file in terrains/)`);
     }
     const inside = canvas || keys.has("canvas");
     if (keys.has("ui") && !inside) {

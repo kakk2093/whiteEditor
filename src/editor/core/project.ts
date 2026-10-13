@@ -1,11 +1,11 @@
-import { parsePrefab, parseSettings, Registry, serializeSettings, SHARED_PROJECT } from "../../engine";
+import { parsePrefab, parseSettings, parseTerrain, Registry, serializeSettings, SHARED_PROJECT } from "../../engine";
 import type { LookData, ProjectSettings } from "../../engine";
 
 // Talks to the dev-server API from vite-plugin-projects.ts
 const API = "/__api/projects";
 
 // Folders of a project that hold JSON assets
-export type AssetSection = "scenes" | "materials" | "prefabs" | "looks";
+export type AssetSection = "scenes" | "materials" | "prefabs" | "looks" | "terrains";
 
 async function request(path: string, init?: RequestInit) {
     const res = await fetch(path ? `${API}/${path}` : API, init);
@@ -127,6 +127,14 @@ export async function loadRegistry(project: string) {
     }
     for (const name of await listAssets(project, "looks")) {
         registry.setLook(name, (await readAsset(project, "looks", name)) as LookData);
+    }
+    // A project made before there were terrains has no such folder: the server then lists nothing
+    for (const name of await listAssets(project, "terrains").catch(() => [] as string[])) {
+        try {
+            registry.setTerrain(name, parseTerrain(await readAsset(project, "terrains", name)));
+        } catch (e) {
+            errors.push(`terrains/${name}.json: ${e instanceof Error ? e.message : String(e)}`);
+        }
     }
     for (const name of await listAssets(project, "prefabs")) {
         try {

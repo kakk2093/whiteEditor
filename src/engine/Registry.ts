@@ -17,6 +17,7 @@ import type { SoundHandle, SoundOptions } from "./sound";
 import type { ProjectSettings } from "./settings";
 import { builtinSurfaces, isSurfaceDef } from "./surface";
 import type { SurfaceDef } from "./surface";
+import type { TerrainData } from "./terrain";
 import type { EntityData, Params, ParamValue, Vec3 } from "./types";
 import { loadFont } from "./ui";
 import type { UiElement } from "./ui";
@@ -25,7 +26,8 @@ import type { UiElement } from "./ui";
 // "font" is a font file of assets/, named with its extension: "pixel.ttf"
 // "sky" is a sky made by code: a defineSky() of scripts/
 // "clip" is an animation clip: a defineClip() of scripts/
-export type AssetKind = "material" | "look" | "prefab" | "texture" | "layer" | "scene" | "sound" | "font" | "object" | "gltf" | "sky" | "clip";
+// "terrain" is a grid of heights: a file of terrains/
+export type AssetKind = "material" | "look" | "prefab" | "texture" | "layer" | "scene" | "sound" | "font" | "object" | "gltf" | "sky" | "clip" | "terrain";
 
 export type ParamDef = (
     | { type: "number"; default: number; min?: number; max?: number; step?: number }
@@ -331,11 +333,29 @@ export class Registry {
 
     private materialObjects = new Map<string, THREE.MeshStandardMaterial>();
 
+    // The same materials for what is painted by its vertices (a terrain): a material takes the colors of
+    // the vertices or does not, so it is another three.js material of the same asset
+    private paintedObjects = new Map<string, THREE.MeshStandardMaterial>();
+
     // Root entities of the prefab assets
     private prefabRoots = new Map<string, EntityData>();
 
+    // The terrain assets: grids of heights
+    private terrainData = new Map<string, TerrainData>();
+
     // Used by meshes that have no material assigned
     private defaultMaterial = createSharedMaterial();
+
+    // For a terrain with no material: white where it is painted (its colors show as they are)
+    private defaultPainted = Object.assign(createSharedMaterial({ color: "#ffffff", roughness: 1 }), { vertexColors: true });
+
+    private defaultGround = Object.assign(createSharedMaterial(), { vertexColors: true });
+
+    // The material of a terrain: it always takes the colors of the vertices (white where the ground is not painted)
+    getGroundMaterial(name: string, painted: boolean): THREE.MeshStandardMaterial {
+        if (this.materialData.has(name)) return this.getMaterial(name, true);
+        return painted ? this.defaultPainted : this.defaultGround;
+    }
 
     // The image files of the project's assets/ folder, and where they are loaded from
     private textureFiles: string[] = [];
@@ -677,6 +697,7 @@ export class Registry {
         if (kind === "gltf") return this.modelFileNames();
         if (kind === "sky") return [...this.skyDefs.keys()];
         if (kind === "clip") return [...this.clipDefs.keys()].sort();
+        if (kind === "terrain") return this.terrainNames();
         if (kind === "font") return this.fontNames();
         if (kind === "scene") return this.scenes;
         if (kind === "texture") return this.textureNames();
@@ -715,6 +736,8 @@ export class Registry {
         this.materialData.set(name, data);
         const material = this.materialObjects.get(name);
         if (material) applyMaterialData(material, data, this.loadImage);
+        const painted = this.paintedObjects.get(name);
+        if (painted) applyMaterialData(painted, data, this.loadImage);
         return this;
     }
 
@@ -722,6 +745,8 @@ export class Registry {
         this.materialData.delete(name);
         this.materialObjects.get(name)?.dispose();
         this.materialObjects.delete(name);
+        this.paintedObjects.get(name)?.dispose();
+        this.paintedObjects.delete(name);
     }
 
     setPrefab(name: string, root: EntityData) {
@@ -741,6 +766,25 @@ export class Registry {
         return [...this.prefabRoots.keys()].sort();
     }
 
+    // The data is kept as it is given: whoever changes a height gives a new object, and the meshes made
+    // from the old one are made anew
+    setTerrain(name: string, data: TerrainData) {
+        this.terrainData.set(name, data);
+        return this;
+    }
+
+    removeTerrain(name: string) {
+        this.terrainData.delete(name);
+    }
+
+    getTerrain(name: string) {
+        return this.terrainData.get(name);
+    }
+
+    terrainNames() {
+        return [...this.terrainData.keys()].sort();
+    }
+
     materialNames() {
         return [...this.materialData.keys()].sort();
     }
@@ -749,14 +793,17 @@ export class Registry {
         return this.materialData.get(name);
     }
 
-    getMaterial(name: string): THREE.MeshStandardMaterial {
+    // `painted`: the one that takes the colors of the vertices
+    getMaterial(name: string, painted = false): THREE.MeshStandardMaterial {
         const data = this.materialData.get(name);
-        if (!data) return this.defaultMaterial;
+        if (!data) return painted ? this.defaultGround : this.defaultMaterial;
 
-        let material = this.materialObjects.get(name);
+        const objects = painted ? this.paintedObjects : this.materialObjects;
+        let material = objects.get(name);
         if (!material) {
             material = createSharedMaterial(data, this.loadImage);
-            this.materialObjects.set(name, material);
+            material.vertexColors = painted;
+            objects.set(name, material);
         }
         return material;
     }

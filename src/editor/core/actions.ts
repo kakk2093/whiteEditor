@@ -1,7 +1,7 @@
 import {
-    applyToPrefab, FONT_FILE, MODEL_FILE, parsePrefab, parseScene, renameLayerIn, resolveLook, SHARED_PROJECT, SOUND_FILE, validateLook, validateMaterial, validatePrefab, validateScene, validateScripts
+    applyToPrefab, cloneTerrain, DEFAULT_PALETTE, flatTerrain, generateTerrain, generatorOf, FONT_FILE, isPainted, MODEL_FILE, parsePrefab, parseScene, parseTerrain, resizeTerrain, validateTerrain, renameLayerIn, resolveLook, SHARED_PROJECT, SOUND_FILE, validateLook, validateMaterial, validatePrefab, validateScene, validateScripts
 } from "../../engine";
-import type { LookData, MaterialData, ProjectSettings, SceneData } from "../../engine";
+import type { LookData, TerrainData, MaterialData, ProjectSettings, SceneData } from "../../engine";
 import { renameInEntities, renameInScene } from "./references";
 import { changeFolder, moveToFolder, parseFolders, removeFolderTree, renameFolderTree, renameInFolders } from "./folders";
 import type { Folders, FolderSection } from "./folders";
@@ -259,6 +259,7 @@ export async function validateProject() {
     };
     for (const problem of validateScripts(registry)) problems.push(`scripts: ${problem}`);
     await each("materials", (_, data) => validateMaterial(data, registry));
+    await each("terrains", (_, data) => validateTerrain(data));
     await each("looks", (name, data) => validateLook(name, data as LookData, registry));
     await each("prefabs", (name, data) => validatePrefab(name, parsePrefab(data), registry));
     await each("scenes", (_, data) => validateScene(parseScene(data), registry));
@@ -520,6 +521,15 @@ export async function assetChangedOnDisk(project: string, section: AssetSection,
                 if (sceneStore.selectedAsset?.kind === "look" && sceneStore.selectedAsset.name === name) sceneStore.selectAsset(null);
             }
             sceneStore.update({ status: `Look ${name} updated from disk` });
+        }
+
+        if (section === "terrains") {
+            const { registry } = sceneStore;
+            if ((await listAssets(project, "terrains")).includes(name)) registry.setTerrain(name, parseTerrain(await readAsset(project, "terrains", name)));
+            else registry.removeTerrain(name);
+            // The meshes of the Terrain components that name it are made anew
+            sceneStore.setRegistry(registry);
+            sceneStore.update({ status: `Terrain ${name} updated from disk` });
         }
 
         if (section === "prefabs") {
@@ -796,6 +806,20 @@ sceneStore.assetHandler = (section, name, data) => {
         done.then(async () => sceneStore.update({ scenes: await listAssets(project, "scenes") })).catch(report);
         return;
     }
+    if (section === "terrains") {
+        clearTimeout(pendingWrites.get(`terrains/${name}`));
+        pendingWrites.delete(`terrains/${name}`);
+        if (data === null) {
+            deleteAsset(project, section, name).catch(report);
+            registry.removeTerrain(name);
+        } else {
+            writeAsset(project, section, name, data).catch(report);
+            registry.setTerrain(name, data as TerrainData);
+        }
+        // The meshes of the Terrain components are built again from what the ground is now
+        sceneStore.setRegistry(registry);
+        return;
+    }
     if (section === "prefabs") {
         if (data === null) {
             deleteAsset(project, section, name).catch(report);
@@ -956,6 +980,106 @@ async function renameAssetNow(kind: "material" | "look" | "prefab", from: string
     } catch (e) {
         report(e);
     }
+}
+
+// A new terrain: level ground 64 x 64 m, a height every meter, painted with the first color of the usual
+// palette. With `entity`, the Terrain component of that entity shows it at once.
+export async function createTerrainAsset(entity?: string) {
+    const { project, registry } = sceneStore;
+    try {
+        const name = freeName("Terrain", registry.terrainNames());
+        const flat = flatTerrain(64, 1);
+        const data: TerrainData = { ...flat, palette: [...DEFAULT_PALETTE], colors: flat.heights.map((row) => row.map(() => 0)) };
+        await writeAsset(project, "terrains", name, data);
+        registry.setTerrain(name, data);
+        sceneStore.recordAsset("terrains", name, null, data, false);
+        if (entity) sceneStore.setComponentField(entity, "terrain", "terrain", name);
+        sceneStore.update({ status: `Created terrains/${name}.json` });
+        return name;
+    } catch (e) {
+        report(e);
+        return null;
+    }
+}
+
+function writeTerrainSoon(name: string, data: TerrainData) {
+    const { project } = sceneStore;
+    const key = `terrains/${name}`;
+    clearTimeout(pendingWrites.get(key));
+    pendingWrites.set(key, setTimeout(() => {
+        pendingWrites.delete(key);
+        writeAsset(project, "terrains", name, data).catch(report);
+    }, 300));
+}
+
+// A brush stroke is over: `data` is the ground as the stroke left it, and the meshes of the scene show it
+// already (see terrainBrush.ts). One stroke is one step of undo.
+export function strokeTerrain(name: string, before: TerrainData, data: TerrainData) {
+    sceneStore.registry.setTerrain(name, data);
+    sceneStore.recordAsset("terrains", name, before, data, false);
+    // During Play the game runs on the ground as it is now
+    if (sceneStore.playing) sceneStore.setRegistry(sceneStore.registry);
+    writeTerrainSoon(name, data);
+}
+
+// Another ground under the same name (resized, another palette): the meshes are built again
+export function updateTerrain(name: string, data: TerrainData, merge = true) {
+    const { registry } = sceneStore;
+    const before = registry.getTerrain(name);
+    if (!before) return;
+    sceneStore.recordAsset("terrains", name, before, data, merge);
+    registry.setTerrain(name, data);
+    sceneStore.setRegistry(registry);
+    writeTerrainSoon(name, data);
+}
+
+// `width` x `depth` meters with a height every `cell` meters; what the ground was keeps its shape
+export function resizeTerrainAsset(name: string, width: number, depth: number, cell: number) {
+    const data = sceneStore.registry.getTerrain(name);
+    if (!data || !(cell > 0)) return;
+    const columns = Math.max(1, Math.min(1024, Math.round(width / cell)));
+    const rows = Math.max(1, Math.min(1024, Math.round(depth / cell)));
+    updateTerrain(name, resizeTerrain(data, columns, rows, cell), false);
+}
+
+// Changes the settings the terrain is generated with (they are kept in its file). The ground itself stays
+// as it is until it is generated again.
+export function setTerrainGenerator(name: string, change: Record<string, number | boolean>) {
+    const { registry } = sceneStore;
+    const before = registry.getTerrain(name);
+    if (!before) return;
+    // The rows of the ground are shared with what it was: nothing of it has changed
+    const data: TerrainData = { ...before, generator: { ...before.generator, ...change } };
+    sceneStore.recordAsset("terrains", name, before, data);
+    registry.setTerrain(name, data);
+    for (const mesh of sceneStore.terrainMeshes(name)) (mesh.userData.terrain as { data: TerrainData }).data = data;
+    sceneStore.changed();
+    writeTerrainSoon(name, data);
+}
+
+// Makes the whole ground of a terrain anew by its settings: one step of undo. `at` is where the middle of
+// the terrain stands in the world: the same settings give neighbors that meet without a seam.
+export function generateTerrainAsset(name: string, at: { x: number; z: number } = { x: 0, z: 0 }) {
+    const before = sceneStore.registry.getTerrain(name);
+    if (!before) return;
+    const data = cloneTerrain(before);
+    generateTerrain(data, generatorOf(data), at);
+    // Centimeters are enough, and keep the file readable
+    for (const row of data.heights) {
+        for (let i = 0; i < row.length; i++) row[i] = Math.round(row[i] * 100) / 100;
+    }
+    updateTerrain(name, data, false);
+    sceneStore.update({ status: `Generated terrains/${name}.json (seed ${generatorOf(data).seed})` });
+}
+
+// Changes the palette of a terrain: a color of it, one more at its end, or its last one removed (what was
+// painted with it becomes the first). A ground that was not painted gets its paint with the first change.
+export function setTerrainPalette(name: string, palette: string[]) {
+    const data = sceneStore.registry.getTerrain(name);
+    if (!data || palette.length === 0) return;
+    const last = palette.length - 1;
+    const colors = isPainted(data) ? data.colors!.map((row) => row.map((n) => (n > last ? 0 : n))) : data.heights.map((row) => row.map(() => 0));
+    updateTerrain(name, { ...data, palette, colors });
 }
 
 // A new look starts as the pixel-art one: small picture, outlines, few colors

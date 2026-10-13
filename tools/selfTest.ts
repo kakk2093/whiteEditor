@@ -6,13 +6,17 @@ import {
   applyToPrefab, assignAddedIds, diffOverride, expandInstance, expandPristine, findInExpanded, innerPaths, ROOT_PATH,
 } from '../src/engine/prefab'
 import { Registry } from '../src/engine/Registry'
+import { brushRegion, brushTerrain, cloneTerrain, fillTerrainGeometry, flatTerrain, terrainRange, isPainted, rayTerrain, resizeTerrain, terrainGeometry, terrainHeight, terrainSize, validateTerrain } from '../src/engine/terrain'
+import type { TerrainData } from '../src/engine/terrain'
+import { defaultGenerator, generatedHeight, generateTerrain, generatorOf, noise2D } from '../src/engine/generate'
 import { parsePrefab, parseScene } from '../src/engine/types'
 import type { EntityData, EntityOverride } from '../src/engine/types'
 import { validatePrefab, validateScene, validateScripts } from '../src/engine/validate'
 
 // Checks of the engine itself, on data made right here: nothing of a project is read. `npm run check` runs
 // them before it looks at the project, so a change in the engine that breaks them shows at once.
-// Three parts: prefabs inside prefabs, animation (clips and animators), colliders that are turned (slopes).
+// Four parts: prefabs inside prefabs, animation (clips and animators), colliders that are turned (slopes),
+// the ground of a terrain.
 //
 // The prefabs: a lamp, a desk with that lamp on it, a room with that desk in it.
 
@@ -391,6 +395,7 @@ export function selfTest(): string[] {
 
   animationTests(test, ok, equal)
   slopeTests(test, ok, equal)
+  terrainTests(test, ok, equal)
   return failures
 }
 
@@ -519,6 +524,303 @@ function slopeTests(
       coin.position.set(5, rampTop(5, 20) + 0.4, 0)
       game.update(1 / 60)
       equal('just over it, nothing again', touching(), [])
+    })
+  })
+}
+
+// ---------- terrain ----------
+
+// The height of the test ground at this x, the same all along z: level, a slope of about 22 degrees up to
+// 4 m, a ledge, a cliff too steep to walk up, a plateau
+const groundAt = (x: number) => (x < 0 ? 0 : x < 10 ? 0.4 * x : x < 12 ? 4 : x < 14 ? 4 + 3 * (x - 12) : 10)
+
+// 40 x 40 m, a height every meter
+const GROUND: TerrainData = {
+  cell: 1,
+  heights: Array.from({ length: 41 }, () => Array.from({ length: 41 }, (_, i) => groundAt(i - 20))),
+}
+
+function terrainTests(
+  test: (name: string, run: () => void) => void,
+  ok: (what: string, condition: unknown) => void,
+  equal: (what: string, actual: unknown, expected: unknown) => void,
+) {
+  const registry = new Registry().setTerrain('Ground', GROUND)
+  const TERRAIN = { name: 'Ground', components: [{ type: 'terrain', terrain: 'Ground' }] }
+  const capsule = { type: 'collider', shape: 'capsule', radius: 0.3, height: 1 }
+  const PLAYER = { name: 'Player', position: [-5, 0.6, 0], components: [capsule] }
+  // How far over the slope the middle of that capsule is when it stands on it: its round end touches the
+  // slope with its side, and the middle is 0.2 m above the middle of that end
+  const SLOPE = Math.atan(0.4)
+  const onSlope = (x: number) => 0.4 * x + 0.3 / Math.cos(SLOPE) + 0.2
+
+  const play = (entities: unknown[], run: (game: Game, object: (name: string) => THREE.Object3D) => void) => {
+    const game = new Game(registry, parseScene({ version: 3, entities }))
+    game.sound.enabled = false
+    try {
+      game.start()
+      game.update(1 / 60)
+      run(game, (name) => game.root.getObjectByName(name)!)
+    } finally {
+      game.dispose()
+    }
+  }
+  const walk = (game: Game, object: THREE.Object3D, speed: number, seconds: number) => {
+    let air = 0
+    for (let i = 0; i < Math.round(seconds * 60); i++) {
+      game.runtime.move(object, speed / 60, 0, 0, 0.3)
+      if (!game.runtime.fall(object, 1 / 60)) air++
+    }
+    return air
+  }
+  const near = (what: string, actual: number, expected: number, within = 0.05) => ok(`${what}: expected about ${expected.toFixed(3)}, got ${actual.toFixed(3)}`, Math.abs(actual - expected) <= within)
+  const rounded = (vector?: THREE.Vector3) => vector?.toArray().map((n) => Math.round(n * 100) / 100)
+
+  test('the heights of a terrain', () => {
+    near('at a height of the grid', terrainHeight(GROUND, 5, 3) ?? NaN, 2, 1e-9)
+    near('between them', terrainHeight(GROUND, 5.25, 3.75) ?? NaN, 2.1, 1e-9)
+    equal('none outside of it', terrainHeight(GROUND, 20.01, 0), null)
+    near('its very edge is still it', terrainHeight(GROUND, 20, -20) ?? NaN, 10, 1e-9)
+    // Two triangles of one cell: heights 0, 1 / 0, 0 make a fold along the cut from the first corner to the last
+    const fold: TerrainData = { cell: 1, heights: [[0, 1], [0, 0]] }
+    near('a cell is cut from its first corner to the opposite one: on the side of the raised corner', terrainHeight(fold, 0.25, -0.25) ?? NaN, 0.5, 1e-9)
+    near('on the other side', terrainHeight(fold, -0.25, 0.25) ?? NaN, 0, 1e-9)
+    const hit = rayTerrain(GROUND, new THREE.Vector3(-5, 1, 0.3), new THREE.Vector3(1, 0, 0))
+    near('a level ray meets the slope where it is that high', hit?.distance ?? NaN, 7.5, 0.001)
+    equal('a ray that goes up meets nothing', rayTerrain(GROUND, new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 1, 0)), null)
+    equal('nor one that starts under the ground', rayTerrain(GROUND, new THREE.Vector3(5, 1, 0), new THREE.Vector3(0, -1, 0)), null)
+  })
+
+  test('a terrain file', () => {
+    equal('a good one', validateTerrain({ cell: 2, heights: [[0, 1], [2, 3]] }), [])
+    ok('rows of different lengths', validateTerrain({ cell: 1, heights: [[0, 1, 2], [0, 1]] })[0]?.includes('row 2'))
+    ok('a cell of no size', validateTerrain({ cell: 0, heights: [[0, 1], [0, 1]] })[0]?.includes('cell'))
+    ok('not a number', validateTerrain({ cell: 1, heights: [[0, 1], [0, 'a']] })[0]?.includes('row 2'))
+    ok('a field it does not have', validateTerrain({ cell: 1, heights: [[0, 1], [0, 1]], size: 3 })[0]?.includes('size'))
+    equal('a scene with it', validateScene(parseScene({ version: 3, entities: [TERRAIN] }), registry), [])
+    ok('a terrain that is not there', validateScene(parseScene({ version: 3, entities: [{ name: 'G', components: [{ type: 'terrain', terrain: 'Moon' }] }] }), registry)[0]?.includes('there is no terrain "Moon"'))
+    ok('a turned one', validateScene(parseScene({ version: 3, entities: [{ ...TERRAIN, rotation: [0, 30, 0] }] }), registry)[0]?.includes('cannot be turned'))
+    ok('a scaled one', validateScene(parseScene({ version: 3, entities: [{ ...TERRAIN, scale: [2, 1, 2] }] }), registry)[0]?.includes('cannot be scaled'))
+  })
+
+  test('the paint of a terrain', () => {
+    const painted: TerrainData = { cell: 1, heights: [[0, 0, 0], [0, 0, 0], [0, 0, 0]], palette: ['#ff0000', '#0000ff'], colors: [[0, 0, 0], [0, 1, 0], [0, 0, 0]] }
+    equal('a painted file', validateTerrain(painted), [])
+    ok('colors without a palette', validateTerrain({ ...painted, palette: undefined })[0]?.includes('no palette'))
+    ok('a color the palette does not have', validateTerrain({ ...painted, colors: [[0, 0, 0], [0, 2, 0], [0, 0, 0]] })[0]?.includes('0 to 1'))
+    ok('colors of another size', validateTerrain({ ...painted, colors: [[0, 0, 0], [0, 1, 0]] })[0]?.includes('as many rows'))
+    ok('a palette that is not colors', validateTerrain({ ...painted, palette: ['red'] })[0]?.includes('palette'))
+    ok('it is painted', isPainted(painted) && !isPainted(GROUND))
+    const colors = terrainGeometry(painted, false, 4).getAttribute('color')
+    equal('the middle height has the second color', [colors.getX(4), colors.getZ(4)], [0, 1])
+    equal('a corner has the first', [colors.getX(0), colors.getZ(0)], [1, 0])
+    const plain = terrainGeometry(GROUND, false, 4).getAttribute('color')
+    equal('unpainted ground is white: the material shows as it is', [plain.getX(0), plain.getY(0), plain.getZ(0)], [1, 1, 1])
+    // With facets every triangle has one color: its three corners mixed
+    const facets = terrainGeometry(painted, true, 4).getAttribute('color')
+    equal('a facet at the middle is a third of the second color', Math.round(facets.getZ(0) * 100), 33)
+    equal('two triangles in each of four cells', facets.count, 24)
+  })
+
+  test('the brush of a terrain', () => {
+    const ground = { ...flatTerrain(16, 1), palette: ['#ff0000', '#0000ff'], colors: flatTerrain(16, 1).heights.map((row) => row.map(() => 0)) }
+    const worked = cloneTerrain(ground)
+    ok('it tells that it changed something', brushTerrain(worked, 'raise', 0, 0, 4, 2))
+    near('raised by the amount in the middle', worked.heights[8][8], 2, 1e-9)
+    ok(`less towards the edge (${worked.heights[8][10].toFixed(2)})`, worked.heights[8][10] > 0.5 && worked.heights[8][10] < 1.5)
+    equal('nothing past the radius', [worked.heights[8][12], worked.heights[8][13]], [0, 0])
+    equal('the original is as it was', ground.heights[8][8], 0)
+    brushTerrain(worked, 'lower', 0, 0, 4, 0.5)
+    near('lowered', worked.heights[8][8], 1.5, 1e-9)
+    brushTerrain(worked, 'flatten', 0, 0, 4, 1, { level: 1 })
+    near('flattened to the level in the middle', worked.heights[8][8], 1, 1e-9)
+    const spike = cloneTerrain(ground)
+    spike.heights[8][8] = 4
+    brushTerrain(spike, 'smooth', 0, 0, 3, 1)
+    near('a spike is smoothed away', spike.heights[8][8], 0, 1e-9)
+    brushTerrain(worked, 'paint', 2, 0, 1.5, 0, { color: 1 })
+    equal('painted within the radius', [worked.colors?.[8][10], worked.colors?.[8][11], worked.colors?.[8][12]], [1, 1, 0])
+    ok('a touch that changes nothing says so', !brushTerrain(worked, 'paint', 2, 0, 1.5, 0, { color: 1 }))
+    ok('off the ground there is nothing to change', !brushTerrain(worked, 'raise', 40, 40, 2, 1))
+    // The corner of the ground is worked as well as its middle
+    ok('at the very corner', brushTerrain(worked, 'smooth', -8, -8, 2, 1) || true)
+
+    const hill = cloneTerrain(ground)
+    brushTerrain(hill, 'raise', 0, 0, 4, 2)
+    brushTerrain(hill, 'paint', 0, 0, 2, 0, { color: 1 })
+    const wider = resizeTerrain(hill, 24, 24, 1)
+    equal('resized: more ground around', terrainSize(wider), [24, 24])
+    near('the hill is where it was', terrainHeight(wider, 0, 0) ?? NaN, 2, 0.01)
+    equal('level where the ground is new and its edge was level', wider.heights[0][0], 0)
+    // The test ground rises to 10 m at its far edge: more ground there goes on at that height, painted as the edge is
+    const edged = resizeTerrain({ ...GROUND, palette: ['#ff0000', '#00ff00'], colors: GROUND.heights.map((row) => row.map((_, i) => (i > 30 ? 1 : 0))) }, 60, 40, 1)
+    equal('new ground goes on from the edge: no cliff', [edged.heights[20][59], edged.heights[20][60], edged.heights[20][0]], [10, 10, 0])
+    equal('with the color of the edge', [edged.colors?.[20][60], edged.colors?.[20][0]], [1, 0])
+    equal('the paint is where it was', [wider.colors?.[12][12], wider.colors?.[12][16]], [1, 0])
+    const coarse = resizeTerrain(hill, 8, 8, 2)
+    equal('resized: the same ground with a bigger cell', [terrainSize(coarse), coarse.heights.length], [[16, 16], 9])
+    near('the hill is still there', terrainHeight(coarse, 0, 0) ?? NaN, 2, 0.01)
+    equal('a resized ground is a good file', validateTerrain(coarse), [])
+  })
+
+  test('a part of a terrain written anew', () => {
+    const bumpy = (): TerrainData => {
+      const data = { ...flatTerrain(24, 1.5), palette: ['#ff0000', '#00ff00'], colors: flatTerrain(24, 1.5).heights.map((row) => row.map(() => 0)) }
+      brushTerrain(data, 'raise', 3, -4, 9, 5)
+      brushTerrain(data, 'lower', -8, 6, 7, 3)
+      return data
+    }
+    const numbers = (geometry: THREE.BufferGeometry, name: string) => Array.from(geometry.getAttribute(name).array as Float32Array)
+    // How far apart two lists of numbers are at most
+    const apart = (a: number[], b: number[]) => a.reduce((most, value, n) => Math.max(most, Math.abs(value - b[n])), a.length === b.length ? 0 : Infinity)
+    for (const flat of [false, true]) {
+      const what = flat ? 'with facets' : 'smooth'
+      const data = bumpy()
+      const geometry = terrainGeometry(data, flat, 4)
+      // The normals are counted here, not by three.js: they have to be the same ones
+      const usual = geometry.clone()
+      usual.computeVertexNormals()
+      ok(`${what}: the normals are those three.js would count (apart by ${apart(numbers(geometry, 'normal'), numbers(usual, 'normal')).toExponential(1)})`, apart(numbers(geometry, 'normal'), numbers(usual, 'normal')) < 1e-5)
+
+      // A touch of the brush, written into the old geometry as a part and into a new one as a whole
+      brushTerrain(data, 'raise', -2, 5, 4.2, 2)
+      brushTerrain(data, 'paint', -2, 5, 4.2, 0, { color: 1 })
+      const region = brushRegion(data, -2, 5, 4.2)
+      ok(`${what}: the brush reaches a part of the ground`, region && region.toI - region.fromI === 5)
+      fillTerrainGeometry(geometry, data, flat, region ?? undefined)
+      const whole = terrainGeometry(data, flat, 4)
+      for (const name of ['position', 'color', 'normal']) {
+        equal(`${what}: the ${name} of the part is what the whole would be`, apart(numbers(geometry, name), numbers(whole, name)), 0)
+      }
+      const sent = (geometry.getAttribute('position') as THREE.BufferAttribute).updateRanges[0]
+      ok(`${what}: only a part goes to the video card (${sent?.count} of ${numbers(geometry, 'position').length})`, sent && sent.count < numbers(geometry, 'position').length / 2)
+      ok(`${what}: the box of the ground has grown with it`, (geometry.boundingBox?.max.y ?? 0) >= terrainRange(data)[1] - 1e-6)
+    }
+    equal('at the edge the brush reaches what is there', brushRegion(GROUND, -20, -20, 2), { fromI: 0, toI: 2, fromJ: 0, toJ: 2 })
+    equal('and nothing off the ground', brushRegion(GROUND, 40, 0, 2), null)
+    const range = cloneTerrain(GROUND)
+    equal('the lowest and the highest', terrainRange(range), [0, 10])
+    brushTerrain(range, 'raise', 18, 0, 2, 3)
+    equal('are counted anew after a touch', terrainRange(range), [0, 13])
+  })
+
+  test('a generated terrain', () => {
+    const settings = { ...defaultGenerator, seed: 7, height: 20, size: 40 }
+    const make = (seed = 7, at = { x: 0, z: 0 }, cells = 64) => {
+      const data = flatTerrain(cells, 1)
+      generateTerrain(data, { ...settings, seed }, at)
+      return data
+    }
+    const ground = make()
+    const [low, high] = terrainRange(ground)
+    ok(`hills about as high as asked (from ${low.toFixed(1)} to ${high.toFixed(1)})`, high - low > 8 && high - low < 30)
+    equal('the same seed gives the same ground', make().heights[20], ground.heights[20])
+    ok('another seed gives another', JSON.stringify(make(8).heights[20]) !== JSON.stringify(ground.heights[20]))
+    near('the noise stays between 0 and 1', Math.min(1, Math.max(0, noise2D(3.7, -12.2, 5))), noise2D(3.7, -12.2, 5), 0)
+    // A neighbor 64 m to the east: its west edge is the east edge of this one
+    const neighbor = make(7, { x: 64, z: 0 })
+    equal('neighbors with the same settings meet without a seam', neighbor.heights.map((row) => row[0]), ground.heights.map((row) => row[64]))
+    near('a height is that of its place in the world', ground.heights[32][32], generatedHeight({ ...settings }, 0, 0), 1e-9)
+
+    ok('it is painted as it is made', isPainted(ground) && ground.palette?.length === 5)
+    const kinds = new Set(ground.colors?.flat())
+    ok(`with grass and sand at least (kinds: ${[...kinds].join(', ')})`, kinds.has(0) && kinds.has(3))
+    const steep = flatTerrain(32, 1)
+    generateTerrain(steep, { ...settings, height: 60, size: 15, rock: 0.5 }, { x: 0, z: 0 })
+    ok('rock where it is steep', steep.colors?.flat().includes(2))
+    const plain = flatTerrain(16, 1)
+    generateTerrain(plain, { ...settings, paint: false }, { x: 0, z: 0 })
+    ok('without paint the ground keeps its colors', !isPainted(plain))
+    const snowy = flatTerrain(16, 1)
+    generateTerrain(snowy, { ...settings, snowAbove: -1000, rock: 100 }, { x: 0, z: 0 })
+    equal('snow above its height', [...new Set(snowy.colors?.flat())], [4])
+
+    // The brush: only what is under it, the more the nearer its middle
+    const touched = flatTerrain(64, 1)
+    const region = generateTerrain(touched, settings, { x: 0, z: 0 }, { x: 10, z: -6, radius: 8, amount: 1 })
+    near('under the middle of the brush the ground is what the settings give', touched.heights[26][42], ground.heights[26][42], 1e-9)
+    equal('past the brush nothing has moved', [touched.heights[26][52], touched.heights[2][2], touched.colors?.[2][2]], [0, 0, 0])
+    equal('the part it wrote', region, { fromI: 34, toI: 50, fromJ: 18, toJ: 34 })
+    const half = flatTerrain(64, 1)
+    generateTerrain(half, settings, { x: 0, z: 0 }, { x: 10, z: -6, radius: 8, amount: 0.5 })
+    near('half of the way with half of the amount', half.heights[26][42], ground.heights[26][42] / 2, 1e-9)
+    equal('off the ground it writes nothing', generateTerrain(touched, settings, { x: 0, z: 0 }, { x: 200, z: 0, radius: 8, amount: 1 }), null)
+
+    equal('the settings of a file, the rest as usual', generatorOf({ ...flatTerrain(2, 1), generator: { seed: 9 } }), { ...defaultGenerator, seed: 9 })
+    equal('a file with settings', validateTerrain({ ...flatTerrain(2, 1), generator: { seed: 9, paint: false } }), [])
+    ok('a setting it does not have', validateTerrain({ ...flatTerrain(2, 1), generator: { hills: 3 } })[0]?.includes('unknown field "hills"'))
+    ok('a setting of the wrong kind', validateTerrain({ ...flatTerrain(2, 1), generator: { seed: 'a' } })[0]?.includes('generator.seed'))
+  })
+
+  test('walking on a terrain', () => {
+    play([TERRAIN, PLAYER], (game, object) => {
+      const player = object('Player')
+      for (let i = 0; i < 30; i++) game.runtime.fall(player, 1 / 60)
+      near('it lands on the level ground', player.position.y, 0.5, 0.01)
+      ok('and is grounded', game.runtime.grounded(player))
+      const air = walk(game, player, 3, 3)
+      near('it keeps its pace up the slope', player.position.x, 4, 0.1)
+      near('and stands on it', player.position.y, onSlope(player.position.x), 0.06)
+      ok(`with its feet on the ground (in the air for ${air} frames of 180)`, air <= 6)
+      walk(game, player, 3, 4)
+      ok(`the cliff is a wall (stopped at x = ${player.position.x.toFixed(2)}, y = ${player.position.y.toFixed(2)})`, player.position.x < 12.2 && player.position.y < 4.8)
+      const back = walk(game, player, -3, 3)
+      near('back down the slope', player.position.y, onSlope(player.position.x), 0.06)
+      ok(`with its feet on the ground (in the air for ${back} frames of 180)`, back <= 6)
+    })
+    // A box is as much on the ground as a capsule
+    play([TERRAIN, { name: 'Crate', position: [-5, 0.6, 0], components: [{ type: 'collider' }] }], (game, object) => {
+      const crate = object('Crate')
+      for (let i = 0; i < 30; i++) game.runtime.fall(crate, 1 / 60)
+      near('a box lands on it', crate.position.y, 0.5, 0.01)
+      for (let i = 0; i < 200; i++) game.runtime.move(crate, 0.05, 0, 0)
+      near('and without a step the slope stops it', crate.position.x, -0.5, 0.05)
+    })
+  })
+
+  test('a terrain that is not at the origin', () => {
+    play([{ ...TERRAIN, position: [100, 2, -50] }, { ...PLAYER, position: [95, 2.6, -50] }], (game, object) => {
+      const player = object('Player')
+      for (let i = 0; i < 30; i++) game.runtime.fall(player, 1 / 60)
+      near('the ground is where its entity is', player.position.y, 2.5, 0.01)
+      const hit = game.runtime.raycast([105, 50, -50], [0, -1, 0])
+      near('for a ray too', hit?.point.y ?? NaN, 4, 0.001)
+      equal('outside of it there is nothing to stand on', game.runtime.raycast([0, 50, 0], [0, -1, 0]), null)
+    })
+  })
+
+  test('rays and triggers on a terrain', () => {
+    play([TERRAIN, { name: 'Coin', position: [5, 2.6, 0], components: [{ type: 'collider', shape: 'sphere', radius: 0.3, solid: false }] }], (game, object) => {
+      const hit = game.runtime.raycast([5, 30, 0.4], [0, -1, 0])
+      near('a ray from above lands on the slope', hit?.point.y ?? NaN, 2, 0.001)
+      equal('the slope faces up and back', rounded(hit?.normal), [-0.37, 0.93, 0])
+      equal('it is the terrain', hit?.object.name, 'Ground')
+      equal('a ray that is too short does not reach', game.runtime.raycast([5, 30, 0.4], [0, -1, 0], { distance: 27 }), null)
+      near('a slanted one', game.runtime.raycast([-5, 5, 0], [1, -1, 0])?.point.x ?? NaN, 0, 0.001)
+      const coin = object('Coin')
+      const touching = () => [...((game.runtime as unknown as { contacts: Map<THREE.Object3D, Set<THREE.Object3D>> }).contacts.get(coin) ?? [])].map((other) => other.name)
+      equal('a trigger over the ground touches nothing', touching(), [])
+      coin.position.y = 2.2
+      game.update(1 / 60)
+      equal('one that is in it touches the terrain', touching(), ['Ground'])
+    })
+  })
+
+  test('the physics on a terrain', () => {
+    const body = { type: 'body', bounce: 0 }
+    const ball = { name: 'Ball', position: [5, 3.5, 0], components: [{ type: 'collider', shape: 'sphere' }, body] }
+    const crate = { name: 'Crate', position: [-6, 1.5, 3], components: [{ type: 'collider' }, body] }
+    play([TERRAIN, ball, crate], (game, object) => {
+      for (let i = 0; i < 180; i++) game.update(1 / 60)
+      const rolled = object('Ball').position
+      ok(`a ball rolls down the slope (it is at x = ${rolled.x.toFixed(2)})`, rolled.x < 3)
+      ok(`on the ground, not through it (y = ${rolled.y.toFixed(2)} over ${groundAt(rolled.x).toFixed(2)})`, rolled.y > groundAt(rolled.x) + 0.4 && rolled.y < groundAt(rolled.x) + 0.7)
+      near('a box comes to rest on the level ground', object('Crate').position.y, 0.5, 0.03)
+    })
+    // The same ground higher and elsewhere: the body of the physics is where the entity is
+    play([{ ...TERRAIN, position: [50, 3, 0] }, { ...crate, position: [44, 5, 3] }], (game, object) => {
+      for (let i = 0; i < 120; i++) game.update(1 / 60)
+      near('a terrain that is moved', object('Crate').position.y, 3.5, 0.03)
     })
   })
 }

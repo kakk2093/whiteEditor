@@ -1,7 +1,7 @@
 import * as THREE from "three";
-import { animatorOf, animationOf, componentDefs, parsePrefab } from "../../engine";
-import type { EntityData, PrefabData, SceneData } from "../../engine";
-import { applyOverrides, closePrefab, createPrefab, openProject, save, updateMaterial } from "../core/actions";
+import { animatorOf, animationOf, brushTerrain, cloneTerrain, componentDefs, parsePrefab, terrainSize } from "../../engine";
+import type { EntityData, PrefabData, SceneData, TerrainData } from "../../engine";
+import { applyOverrides, closePrefab, createPrefab, createTerrainAsset, generateTerrainAsset, openProject, resizeTerrainAsset, save, setTerrainGenerator, setTerrainPalette, strokeTerrain, updateMaterial } from "../core/actions";
 import { editorLog } from "../core/log";
 import { deleteAsset, listAssets, readAsset, writeAsset } from "../core/project";
 import type { AssetSection } from "../core/project";
@@ -77,7 +77,7 @@ function undoAll() {
 }
 
 // The files of the project as they were when the run started; every group of checks starts from them
-const SECTIONS: AssetSection[] = ["scenes", "materials", "prefabs", "looks"];
+const SECTIONS: AssetSection[] = ["scenes", "materials", "prefabs", "looks", "terrains"];
 const initial = new Map<string, unknown>();
 
 async function reset() {
@@ -394,6 +394,95 @@ async function run() {
         store.undo();
         equal("undo in the editor", store.registry.getMaterialData("Red")?.color, "#ff0000");
         await until("and in the file", async () => ((await readAsset(PROJECT, "materials", "Red")) as { color: string }).color === "#ff0000");
+    });
+
+    await test("a terrain", async () => {
+        const ground = store.addEntity("Ground", [{ type: "terrain" }]);
+        settle();
+        store.select(ground.id);
+        equal("without an asset it shows the level piece", store.terrainTarget?.name, "");
+        const name = await createTerrainAsset(ground.id);
+        equal("a new terrain", [name, store.registry.terrainNames()], ["Terrain", ["Terrain"]]);
+        equal("is on the object", store.findEntity(ground.id)?.components[0].terrain, "Terrain");
+        await until("and in its file", async () => (await listAssets(PROJECT, "terrains")).includes("Terrain"));
+        // null while the server is in the middle of writing it
+        const file = async () => (await readAsset(PROJECT, "terrains", "Terrain").catch(() => null)) as TerrainData | null;
+        const data = () => store.registry.getTerrain("Terrain")!;
+        equal("64 x 64 m, painted with the first color", [terrainSize(data()), data().colors?.[0][0], data().palette?.length], [[64, 64], 0, 5]);
+        // The height the mesh of the object shows at the middle of the ground
+        const shown = () => {
+            const mesh = store.terrainTarget!.mesh;
+            const rows = data().heights.length;
+            const columns = data().heights[0].length;
+            return Math.round(mesh.geometry.getAttribute("position").getY(((rows - 1) / 2) * columns + (columns - 1) / 2) * 100) / 100;
+        };
+        equal("its mesh is the one of the object", [store.terrainMeshes("Terrain").length, shown()], [1, 0]);
+
+        // A stroke, the way the brush makes it: a copy is worked and given back
+        settle();
+        const before = data();
+        const worked = cloneTerrain(before);
+        brushTerrain(worked, "raise", 0, 0, 4, 2);
+        strokeTerrain("Terrain", before, worked);
+        equal("a stroke: the terrain is what the brush left", data().heights[32][32], 2);
+        await until("and so is the file", async () => (await file())?.heights[32][32] === 2);
+        const again = cloneTerrain(data());
+        brushTerrain(again, "raise", 0, 0, 4, 1);
+        strokeTerrain("Terrain", data(), again);
+        equal("a second stroke right after", data().heights[32][32], 3);
+        store.undo();
+        equal("is a step of its own", [data().heights[32][32], shown()], [2, 2]);
+        store.undo();
+        equal("undo of the first", [data().heights[32][32], shown()], [0, 0]);
+        await until("in the file too", async () => (await file())?.heights[32][32] === 0);
+        store.redo();
+        equal("redo", [data().heights[32][32], shown()], [2, 2]);
+
+        setTerrainPalette("Terrain", [...data().palette!, "#123456"]);
+        equal("one more color", data().palette?.length, 6);
+        const painted = cloneTerrain(data());
+        brushTerrain(painted, "paint", 0, 0, 2, 0, { color: 5 });
+        strokeTerrain("Terrain", data(), painted);
+        equal("painted with it", data().colors?.[32][32], 5);
+        settle();
+        setTerrainPalette("Terrain", data().palette!.slice(0, -1));
+        equal("the color is removed: its ground gets the first one", [data().palette?.length, data().colors?.[32][32]], [5, 0]);
+
+        settle();
+        resizeTerrainAsset("Terrain", 32, 48, 2);
+        equal("resized", [terrainSize(data()), data().heights.length, data().heights[0].length], [[32, 48], 25, 17]);
+        equal("the hill is where it was, and the mesh is made anew", [data().heights[12][8], shown()], [2, 2]);
+        store.undo();
+        equal("undo of the resize", terrainSize(data()), [64, 64]);
+
+        // Generating: the settings go into the file, the ground is made by them, undo takes it back
+        settle();
+        const mesh = store.terrainTarget!.mesh;
+        setTerrainGenerator("Terrain", { seed: 5, height: 30 });
+        equal("the settings of the generator are kept with the terrain", [data().generator, data().heights[32][32]], [{ seed: 5, height: 30 }, 2]);
+        ok("changing them builds nothing anew", store.terrainTarget!.mesh === mesh && (mesh.userData.terrain as { data: TerrainData }).data === data());
+        await until("and they are in the file", async () => (await file())?.generator?.seed === 5);
+        settle();
+        generateTerrainAsset("Terrain", { x: 0, z: 0 });
+        const made = data().heights.map((row) => [...row]);
+        const spread = Math.max(...made.flat()) - Math.min(...made.flat());
+        ok(`generated: hills (${spread.toFixed(1)} m from the lowest to the highest)`, spread > 8);
+        equal("the mesh shows them", shown(), made[32][32]);
+        store.undo();
+        equal("undo gives the ground back, the settings stay", [data().heights[32][32], data().generator?.seed], [2, 5]);
+        store.redo();
+        equal("redo", data().heights[32][32], made[32][32]);
+        generateTerrainAsset("Terrain", { x: 0, z: 0 });
+        equal("the same settings give the same ground again", data().heights, made);
+
+        store.setTerrainEdit(true);
+        store.setColliderEdit(true);
+        ok("one editing tool at a time", !store.terrainEdit && store.colliderEdit);
+        store.setTerrainEdit(true);
+        ok("and the other way", store.terrainEdit && !store.colliderEdit);
+        store.setTerrainEdit(false);
+        store.setColliderEdit(false);
+        equal("the Console has no errors", editorLog.entries.filter((entry) => entry.level === "error").map((entry) => entry.text), []);
     });
 
     await test("an animation clip", () => {

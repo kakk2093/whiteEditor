@@ -9,6 +9,8 @@ import type { ComponentData, EntityData, Params } from "./types";
 import { UI_ANCHORS } from "./ui";
 import { createModelFile } from "./gltf";
 import type { ModelFileFields } from "./gltf";
+import { createTerrain, flatTerrain, isPainted } from "./terrain";
+import type { TerrainFields } from "./terrain";
 
 // What a component can take from the project's scripts/: a code model, a behavior
 export interface SourceDef {
@@ -97,6 +99,9 @@ function marker(key: string, fields: object) {
     return object;
 }
 
+// What a Terrain component shows while it names no asset
+const DEFAULT_TERRAIN = flatTerrain();
+
 // The components of the interface that need a UI Element next to them
 export const UI_PARTS = ["text", "image", "button", "layout", "slider", "input", "scroll"];
 
@@ -183,6 +188,29 @@ export const componentDefs: Record<string, ComponentDef> = {
             marker.position.set(f.centerX as number, f.centerY as number, f.centerZ as number);
             marker.userData.collider = f;
             return marker;
+        },
+    },
+    // The ground of a world (see terrain.ts): a grid of heights with a material on it. It is solid as it is
+    // drawn, with no Collider next to it: what moves with self.move() walks on it, the bodies of the physics
+    // lie and roll on it. The entity only places it: turned or scaled, it is not what the collisions see.
+    terrain: {
+        label: "Terrain",
+        fields: {
+            // A file of terrains/; none is a flat piece 32 x 32 m
+            terrain: { type: "asset", kind: "terrain", default: "" },
+            material: { type: "asset", kind: "material", default: "" },
+            // Every triangle is lit as a whole, so the facets show; off, the ground is smooth
+            flat: { type: "boolean", default: false },
+            // Meters of the ground one repeat of the image of the material covers
+            textureSize: { type: "number", default: 4, min: 0.01, step: 0.5 },
+            castShadow: { type: "boolean", default: false },
+            receiveShadow: { type: "boolean", default: true },
+            // A collision layer of the project (project.json)
+            layer: { type: "asset", kind: "layer", default: "" },
+        },
+        create: (f, registry) => {
+            const data = registry.getTerrain(f.terrain as string) ?? DEFAULT_TERRAIN;
+            return createTerrain(f as unknown as TerrainFields, data, registry.getGroundMaterial(f.material as string, isPainted(data)));
         },
     },
     // A box of the world with an environment of its own (see environment.ts): while the camera is inside

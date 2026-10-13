@@ -167,7 +167,7 @@ const settings = fs.existsSync(settingsFile) ? JSON.parse(fs.readFileSync(settin
 
 // The same assembly as a built game (tools/buildGame.ts), ending in one picture instead of a running game
 const entryCode = () => [
-  `import { Registry, parsePrefab, parseScene, parseSettings, renderStill } from "/src/engine/index.ts"`,
+  `import { Registry, parsePrefab, parseScene, parseSettings, parseTerrain, renderStill } from "/src/engine/index.ts"`,
   `const send = (body) => fetch("/__render/done", { method: "POST", body: JSON.stringify(body) })`,
   `window.addEventListener("error", (e) => send({ error: e.message }))`,
   `window.addEventListener("unhandledrejection", (e) => send({ error: String(e.reason?.message ?? e.reason) }))`,
@@ -189,6 +189,7 @@ const entryCode = () => [
   `for (const [name, data] of Object.entries(${JSON.stringify(readSection('materials'))})) registry.setMaterial(name, data)`,
   `for (const [name, data] of Object.entries(${JSON.stringify(readSection('prefabs'))})) registry.setPrefab(name, parsePrefab(data).root)`,
   `for (const [name, data] of Object.entries(${JSON.stringify(readSection('looks'))})) registry.setLook(name, data)`,
+  `for (const [name, data] of Object.entries(${JSON.stringify(readSection('terrains'))})) { try { registry.setTerrain(name, parseTerrain(data)) } catch (e) { problems.push("terrains/" + name + ".json: " + e.message) } }`,
   // A single picture cannot wait for a late image or font, so they are loaded first
   `await registry.preloadTextures()`,
   // Every scene of the project, so that self.loadScene() works during the run

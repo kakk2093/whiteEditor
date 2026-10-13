@@ -19,6 +19,8 @@ export * from "./sprites";
 export * from "./gltf";
 export * from "./clipAction";
 export * from "./animation";
+export * from "./terrain";
+export * from "./generate";
 export * from "./physics";
 export * from "./ui";
 export * from "./runtime";

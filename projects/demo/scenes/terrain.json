@@ -1,0 +1,185 @@
+{
+  "version": 3,
+  "environment": {
+    "background": "#222222",
+    "sky": true,
+    "skyTop": "#2f6fc4",
+    "skyHorizon": "#bfd9ee",
+    "skyGround": "#6b6156",
+    "skyImage": "",
+    "skyShader": "sun",
+    "skyRotation": 40,
+    "skyLight": 0.6,
+    "ambientColor": "#ffffff",
+    "ambientIntensity": 0.5,
+    "fog": true,
+    "fogColor": "#bfd9ee",
+    "fogNear": 30,
+    "fogFar": 90,
+    "look": "",
+    "skyParams": {}
+  },
+  "entities": [
+    {
+      "id": "6718accb",
+      "name": "Sun",
+      "position": [10, 20, 8],
+      "rotation": [-50, 40, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "light",
+          "intensity": 3,
+          "castShadow": true,
+          "shadowSize": 30
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "9aa6c2ae",
+      "name": "Ground",
+      "position": [0, 0, 0],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "terrain",
+          "terrain": "Hills",
+          "material": "Grass",
+          "flat": true
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "4611ab8f",
+      "name": "Player",
+      "tag": "player",
+      "position": [0, 2.0203, 0],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "collider",
+          "shape": "capsule",
+          "radius": 0.35,
+          "height": 1.8
+        },
+        {
+          "type": "script",
+          "script": "firstPerson",
+          "params": {
+            "head": "Head"
+          }
+        }
+      ],
+      "children": [
+        {
+          "id": "4325be7a",
+          "name": "Head",
+          "position": [0, 0.7, 0],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1],
+          "components": [
+            {
+              "type": "camera",
+              "far": 300
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "6b99df92",
+      "name": "Ball",
+      "position": [14, 5.818892994057725, 3],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "sphere",
+          "material": "Gold"
+        },
+        {
+          "type": "collider",
+          "shape": "sphere"
+        },
+        {
+          "type": "body",
+          "bounce": 0.2
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "6d0f49fb",
+      "name": "Ball 2",
+      "position": [-12, 1.687631800767471, -9],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "sphere",
+          "material": "Gold"
+        },
+        {
+          "type": "collider",
+          "shape": "sphere"
+        },
+        {
+          "type": "body",
+          "bounce": 0.2
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "2fc9d5dd",
+      "name": "Ball 3",
+      "position": [20, 3.9118763887013346, 14],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "sphere",
+          "material": "Gold"
+        },
+        {
+          "type": "collider",
+          "shape": "sphere"
+        },
+        {
+          "type": "body",
+          "bounce": 0.2
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "8f1479b9",
+      "name": "Crate",
+      "position": [4, 3, -4],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "mesh",
+          "material": "Bricks"
+        },
+        {
+          "type": "collider"
+        },
+        {
+          "type": "body",
+          "mass": 2
+        }
+      ],
+      "children": []
+    }
+  ]
+}

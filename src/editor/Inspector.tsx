@@ -19,6 +19,7 @@ import { useSceneStore } from "./core/useSceneStore";
 import { entityIcon } from "./entityIcon";
 import { humanize } from "./humanize";
 import { Icon, Menu } from "./ui";
+import { TerrainTools } from "./TerrainTools";
 import type { MenuSection } from "./ui";
 
 const TRANSFORMS: { property: TransformProperty; title: string }[] = [
@@ -41,7 +42,7 @@ const SCRUB_PIXELS = 4;
 // field and move the mouse left or right (Shift: ten times faster, Alt: ten times finer). A click without
 // moving starts typing. While the field is focused it keeps exactly what is being typed.
 // `mixed`: several objects are edited and their values differ; the field shows a dash until one is given.
-function NumberInput({ value, step = 0.1, min, max, mixed = false, onChange }: {
+export function NumberInput({ value, step = 0.1, min, max, mixed = false, onChange }: {
     value: number;
     mixed?: boolean;
     step?: number;
@@ -424,7 +425,15 @@ function ComponentSection({ entities, components }: { entities: EntityData[]; co
             title={added ? <span className="overridden" title="Added in this instance: the prefab does not have this component">{title}</span> : title}
             onRemove={() => each((id) => store.removeComponent(id, key))}
             removeTitle={single ? undefined : "Remove the component from all the selected objects"}
-            extra={single && component.type === "collider" && !store.playing && (<>
+            extra={single && component.type === "terrain" && !store.playing ? (
+                <button
+                    className={`btn ghost ${store.terrainEdit ? "active" : ""}`}
+                    title="Edit Terrain: work the ground in the viewport with a brush — raise, lower, smooth, flatten, paint"
+                    onClick={() => store.setTerrainEdit(!store.terrainEdit)}
+                >
+                    Edit
+                </button>
+            ) : single && component.type === "collider" && !store.playing && (<>
                 {(getComponent(entity, "gltf") || getComponent(entity, "model") || getComponent(entity, "mesh")) && (
                     <button className="btn ghost" title="Fit: a box around what the object shows (its model or mesh)" onClick={() => store.fitCollider(entity.id)}>
                         Fit
@@ -450,6 +459,8 @@ function ComponentSection({ entities, components }: { entities: EntityData[]; co
                     choices={def.choices && ((field) => def.choices!(field, component, store.registry, () => sceneStore.changed()))}
                 />
             )}
+
+            {single && component.type === "terrain" && <TerrainTools entity={entity} component={component} />}
 
             {source && !def.multiple && (
                 <div className="field">

@@ -103,7 +103,7 @@ export async function buildGame(root: string, projectDir: string, scene?: string
   }
 
   const code = [
-    `import { Registry, parsePrefab, parseScene, parseSettings, runGame } from ${fromRoot(path.join(root, 'src/engine/index.ts'))}`,
+    `import { Registry, parsePrefab, parseScene, parseSettings, parseTerrain, runGame } from ${fromRoot(path.join(root, 'src/engine/index.ts'))}`,
     ...scripts.map((file, i) => `import * as script${i} from ${fromRoot(file)}`),
     `const registry = new Registry()`,
     ...scripts.map((_, i) => `registry.registerExports(script${i})`),
@@ -116,6 +116,7 @@ export async function buildGame(root: string, projectDir: string, scene?: string
     `registry.setSettings(parseSettings(${JSON.stringify(settings)}))`,
     `for (const [name, data] of Object.entries(${await section('materials')})) registry.setMaterial(name, data)`,
     `for (const [name, data] of Object.entries(${await section('prefabs')})) registry.setPrefab(name, parsePrefab(data).root)`,
+    `for (const [name, data] of Object.entries(${await section('terrains')})) registry.setTerrain(name, parseTerrain(data))`,
     ...(shared ? [`for (const [name, data] of Object.entries(${await section('looks', sharedDir)})) registry.setSharedLook(name, data)`] : []),
     `for (const [name, data] of Object.entries(${await section('looks')})) registry.setLook(name, data)`,
     `const scenes = {}`,

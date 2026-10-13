@@ -6,6 +6,7 @@ import { anchorPoint, applyEnvironment, aspectRatio, createRenderer, withZone, z
 import type { Input } from "../engine";
 import { dropAsset, getDraggedAsset } from "../editor/core/dnd";
 import { ColliderHandles } from "./colliderHandles";
+import { TerrainBrush } from "./terrainBrush";
 import { entitiesInRect } from "./marquee";
 import { EDITOR_LAYER, sceneStore } from "../editor/core/SceneStore";
 import type { GizmoMode } from "../editor/core/SceneStore";
@@ -111,6 +112,10 @@ export default function Viewport() {
         const handles = new ColliderHandles(ctx.camera, ctx.renderer.domElement, ctx.controls);
         sceneStore.scene.add(handles.group);
 
+        // "Edit Terrain": the brush on the ground of the selected terrain
+        const brush = new TerrainBrush(ctx.camera, ctx.renderer.domElement, ctx.controls);
+        sceneStore.scene.add(brush.group);
+
         // The ground grid: 1 cell = 1 meter
         const grid = new THREE.GridHelper(40, 40, 0x5a5d66, 0x3a3c43);
         // Just below the ground, so a floor at y = 0 covers it instead of flickering with it
@@ -144,7 +149,7 @@ export default function Viewport() {
 
         const onPointerUp = (e: PointerEvent) => {
             if (!ctx.renderer || !ctx.raycaster || !ctx.mouse || !ctx.camera) return;
-            if (e.button !== 0 || downOnGizmo || handles.grabbed) return;
+            if (e.button !== 0 || downOnGizmo || handles.grabbed || brush.grabbed) return;
             // The press was on an element of the interface: it is selected already
             if (uiPressed) {
                 uiPressed = false;
@@ -248,7 +253,7 @@ export default function Viewport() {
         const onUiDown = (e: PointerEvent) => {
             uiPressed = false;
             if (e.button !== 0 || e.shiftKey || sceneStore.playing || !sceneStore.uiVisible || !ctx.controls) return;
-            if (ctx.transform?.axis || handles.grabbed) return;
+            if (ctx.transform?.axis || handles.grabbed || brush.grabbed) return;
             const rect = uiRect();
             // A handle first: it sticks out of its element, and may lie over another one
             const grabbed = uiHandleAt(e, rect);
@@ -418,7 +423,7 @@ export default function Viewport() {
         // In the capture phase, to turn the orbiting off before OrbitControls gets the press
         const onMarqueeDown = (e: PointerEvent) => {
             if (e.button !== 0 || !e.shiftKey || sceneStore.gameView) return;
-            if (ctx.transform?.axis || handles.grabbed || !ctx.controls) return;
+            if (ctx.transform?.axis || handles.grabbed || brush.grabbed || !ctx.controls) return;
             marquee = { x: e.clientX, y: e.clientY, pointerId: e.pointerId };
             ctx.controls.enabled = false;
             canvas.setPointerCapture(e.pointerId);
@@ -672,7 +677,9 @@ export default function Viewport() {
             const editingCollider = sceneStore.colliderEdit && sceneStore.hasCollider && !sceneStore.playing;
             // An element of the interface has no place in the world: it is moved by dragging it, not by the gizmo
             const flat = sceneStore.selected?.components.some((component) => component.type === "ui" || component.type === "canvas") ?? false;
-            const selected = sceneStore.gameView || editingCollider || flat ? null : sceneStore.selectedViewObject;
+            // The brush of a terrain works its ground: the gizmo would only be in its way
+            const editingTerrain = sceneStore.terrainEdit && !!sceneStore.terrainTarget && !sceneStore.playing;
+            const selected = sceneStore.gameView || editingCollider || editingTerrain || flat ? null : sceneStore.selectedViewObject;
             handles.update();
             // Looking through the camera of the scene: the editor camera stays where it was
             if (ctx.controls && !ctx.transform?.dragging) ctx.controls.enabled = !sceneStore.gameView;
@@ -729,6 +736,7 @@ export default function Viewport() {
                 }
             }
             handles.frame();
+            brush.frame(Math.min(dt, 0.1));
             // The boxes follow what is being dragged
             for (const box of boxes.children as THREE.BoxHelper[]) box.update();
             if (ctx.renderer && ctx.camera) {
@@ -915,6 +923,7 @@ export default function Viewport() {
             editorUi.dispose();
             sceneStore.focusHandler = null;
             handles.dispose();
+            brush.dispose();
             boxes.removeFromParent();
             gizmo.removeFromParent();
             sceneStore.scene.remove(grid);

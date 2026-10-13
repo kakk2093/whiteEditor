@@ -10,6 +10,8 @@ import { updateModelFiles } from "./gltf";
 import { Physics } from "./physics";
 import type { BehaviorDef, BehaviorSelf, Ease, FindQuery, RayHit, RayOptions, Registry, Running, SoundSource, TweenOptions, VectorLike } from "./Registry";
 import { layerOf } from "./settings";
+import { rayTerrain, terrainHeight, terrainRange, terrainSize } from "./terrain";
+import type { TerrainData, TerrainMarker } from "./terrain";
 import { SoundPlayer } from "./sound";
 import type { SoundHandle } from "./sound";
 import { setLabelText } from "./sprites";
@@ -48,6 +50,9 @@ interface Body {
     // ...or an upright capsule: everything within `radius` of the vertical line from `bottom` up to `top`.
     // A sphere is a capsule whose line has no length.
     capsule?: { bottom: THREE.Vector3; top: THREE.Vector3; radius: number };
+    // ...or the ground of a Terrain component: everything under its heights. `origin` is the middle of the
+    // terrain in the world; `box` is then the box the ground fits in.
+    terrain?: { data: TerrainData; origin: THREE.Vector3 };
 }
 
 // A box that is turned: its middle, its three axes (each of length 1) and half its size along each
@@ -116,10 +121,50 @@ function capsuleInBox(capsule: NonNullable<Body["capsule"]>, box: OrientedBox) {
     return distance((low + high) / 2) < capsule.radius;
 }
 
+// Is a collider in the ground of a terrain: is the ground, somewhere under the collider, higher than the
+// underside of the collider there. Looked at in a few places across it, no further apart than half a cell.
+function inTerrain(body: Body, ground: Body) {
+    const { data, origin } = ground.terrain!;
+    const over = (x: number, z: number, y: number) => {
+        const height = terrainHeight(data, x - origin.x, z - origin.z);
+        return height !== null && height + origin.y > y;
+    };
+    if (body.capsule) {
+        const { bottom, radius } = body.capsule;
+        if (bottom.y - radius > ground.box!.max.y) return false;
+        // Rings around its axis: the round end is higher the further from the axis
+        const rings = Math.max(1, Math.min(4, Math.ceil(radius / (data.cell / 2))));
+        if (over(bottom.x, bottom.z, bottom.y - radius)) return true;
+        for (let ring = 1; ring <= rings; ring++) {
+            const reach = (radius * ring) / rings;
+            // The very edge of the round end is its middle height: a wall, not ground
+            const under = bottom.y - Math.sqrt(Math.max(0, radius * radius - reach * reach));
+            for (let n = 0; n < 8; n++) {
+                const angle = (n * Math.PI) / 4;
+                if (over(bottom.x + Math.cos(angle) * reach, bottom.z + Math.sin(angle) * reach, under)) return true;
+            }
+        }
+        return false;
+    }
+    const box = body.box;
+    if (!box || box.min.y > ground.box!.max.y) return false;
+    const countX = Math.max(2, Math.min(9, Math.ceil((box.max.x - box.min.x) / (data.cell / 2)) + 1));
+    const countZ = Math.max(2, Math.min(9, Math.ceil((box.max.z - box.min.z) / (data.cell / 2)) + 1));
+    for (let i = 0; i < countX; i++) {
+        for (let j = 0; j < countZ; j++) {
+            const x = box.min.x + ((box.max.x - box.min.x) * i) / (countX - 1);
+            const z = box.min.z + ((box.max.z - box.min.z) * j) / (countZ - 1);
+            if (over(x, z, box.min.y)) return true;
+        }
+    }
+    return false;
+}
+
 // How far apart two stretches of one line are; 0 if they overlap
 const gap = (min1: number, max1: number, min2: number, max2: number) => Math.max(0, min1 - max2, min2 - max1);
 
 function overlaps(a: Body, b: Body) {
+    if (a.terrain || b.terrain) return a.terrain && b.terrain ? false : a.terrain ? inTerrain(b, a) : inTerrain(a, b);
     if (a.box && b.box) {
         // The boxes they fit in first: most pairs are far apart
         if (!a.box.intersectsBox(b.box)) return false;
@@ -147,7 +192,8 @@ const toVector = (value: VectorLike) => (Array.isArray(value) ? new THREE.Vector
 
 // Where a ray from `origin` along `direction` (of length 1) enters the body: how far that is and which way
 // the surface faces there. null if it misses, or starts inside.
-function rayBody(origin: THREE.Vector3, direction: THREE.Vector3, body: Body): { distance: number; normal: THREE.Vector3 } | null {
+function rayBody(origin: THREE.Vector3, direction: THREE.Vector3, body: Body, reach = Infinity): { distance: number; normal: THREE.Vector3 } | null {
+    if (body.terrain) return rayTerrain(body.terrain.data, origin.clone().sub(body.terrain.origin), direction, reach);
     if (body.oriented) {
         // The same as for a plain box, in the axes of this one
         const { center, axes, half } = body.oriented;
@@ -480,12 +526,27 @@ export class Runtime {
         return { object, solid, layer, dynamic, mass, box: new THREE.Box3(half.clone().negate(), half).applyMatrix4(marker.matrixWorld), ...(oriented ? { oriented } : {}) };
     }
 
+    // The ground of a Terrain component, from its mesh: where it is now
+    private groundOf(mesh: THREE.Object3D): Body {
+        const { data, layer } = mesh.userData.terrain as TerrainMarker;
+        const origin = new THREE.Vector3().setFromMatrixPosition(mesh.matrixWorld);
+        const [width, depth] = terrainSize(data);
+        const [low, high] = terrainRange(data);
+        const box = new THREE.Box3(
+            new THREE.Vector3(origin.x - width / 2, origin.y + low, origin.z - depth / 2),
+            new THREE.Vector3(origin.x + width / 2, origin.y + high, origin.z + depth / 2),
+        );
+        return { object: mesh.parent!, solid: true, layer: layerOf(layer), dynamic: false, mass: 0, box, terrain: { data, origin } };
+    }
+
     // Every collider of the active entities
     private bodies() {
         this.root.updateMatrixWorld();
         const bodies: Body[] = [];
         this.root.traverse((obj) => {
-            if (!obj.userData.collider || !obj.parent || !this.isActive(obj.parent)) return;
+            if (!obj.parent || !this.isActive(obj.parent)) return;
+            if (obj.userData.terrain) bodies.push(this.groundOf(obj));
+            if (!obj.userData.collider) return;
             const body = this.bodyOf(obj.parent);
             if (body) bodies.push(body);
         });
@@ -585,8 +646,9 @@ export class Runtime {
                 if (blocked()) object.position.y += drop;
             }
         }
-        // A tilted box is a slope, not a stair: too steep, and it is a wall after all
-        if (blocker.oriented && Math.abs(blocker.oriented.axes[1].y) < 0.999 && object.position.y - from > Math.abs(part) * MAX_SLOPE + 0.01) {
+        // A tilted box and the ground of a terrain are slopes, not stairs: too steep, and it is a wall after all
+        const sloped = blocker.terrain || (blocker.oriented && Math.abs(blocker.oriented.axes[1].y) < 0.999);
+        if (sloped && object.position.y - from > Math.abs(part) * MAX_SLOPE + 0.01) {
             object.position.y = from;
             object.position[axis] -= part;
             object.updateWorldMatrix(true, true);
@@ -787,7 +849,7 @@ export class Runtime {
         for (const body of this.bodies()) {
             if (skipped.has(body.object) || (!body.solid && !options.triggers)) continue;
             if (options.layers && !options.layers.includes(body.layer)) continue;
-            const hit = rayBody(from, along, body);
+            const hit = rayBody(from, along, body, reach);
             if (!hit || hit.distance > reach || (best && hit.distance >= best.distance)) continue;
             best = { object: body.object, point: from.clone().addScaledVector(along, hit.distance), ...hit };
         }

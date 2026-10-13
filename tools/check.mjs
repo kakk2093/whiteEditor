@@ -117,6 +117,18 @@ try {
     }
   }
 
+  // The grids of heights the Terrain components name
+  for (const name of jsonNames('terrains')) {
+    try {
+      const terrain = readJson('terrains', name)
+      const found = engine.validateTerrain(terrain)
+      for (const problem of found) problems.push(`terrains/${name}.json: ${problem}`)
+      if (found.length === 0) registry.setTerrain(name, engine.parseTerrain(terrain))
+    } catch (e) {
+      problems.push(`terrains/${name}.json: ${e.message}`)
+    }
+  }
+
   // Looks can extend each other, so register all of them before validating any
   const looks = new Map()
   for (const name of jsonNames('looks')) {
@@ -237,7 +249,7 @@ try {
 if (problems.length === 0) {
   const count = (section) => `${jsonNames(section).length} ${section}`
   if (skipped.size > 0) console.log(`${project}: not played here, needs a browser (try npm run render): ${[...skipped].join(', ')}`)
-  console.log(`${project}: OK (${count('scenes')}, ${count('materials')}, ${count('prefabs')}, ${count('looks')})`)
+  console.log(`${project}: OK (${count('scenes')}, ${count('materials')}, ${count('prefabs')}, ${count('looks')}, ${count('terrains')})`)
 } else {
   for (const problem of problems) console.error(problem)
   console.error(`\n${project}: ${problems.length} problem(s)`)

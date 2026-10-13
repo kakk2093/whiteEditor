@@ -2,13 +2,16 @@ import * as CANNON from "cannon-es";
 import * as THREE from "three";
 import type { Registry } from "./Registry";
 import { DEFAULT_LAYER, layerOf } from "./settings";
+import { terrainHeight, terrainSize } from "./terrain";
+import type { TerrainData, TerrainMarker } from "./terrain";
 
 // Real physics, by the cannon-es library: things fall, roll, push each other and bounce. All of the library
 // is used in this file only.
 //
 // An entity with a Body component (and a solid Collider, which is its shape) is a dynamic body: the physics
 // moves it. Every other solid collider is something the bodies run into, standing still or moved by a
-// behavior (self.move): a floor, a wall, the player. Triggers are not a part of it.
+// behavior (self.move): a floor, a wall, the player. Triggers are not a part of it. The ground of a Terrain
+// component is such a thing as well, in the shape of its heights.
 
 // The fields of the Collider and Body components, defaults filled in (see components.ts)
 interface ColliderFields {
@@ -44,7 +47,7 @@ export interface BodyHandle {
 
 interface Tracked {
     body: CANNON.Body;
-    // The entity object, and the marker objects its body was made from
+    // The entity object, and the marker objects its body was made from (for a terrain, its mesh)
     object: THREE.Object3D;
     collider: THREE.Object3D;
     marker: THREE.Object3D | null;
@@ -62,12 +65,114 @@ const position = new THREE.Vector3();
 const quaternion = new THREE.Quaternion();
 const scale = new THREE.Vector3();
 
+// The point of the triangle a, b, c that is nearest to p (Ericson, Real-Time Collision Detection)
+function nearestOnTriangle(p: THREE.Vector3, a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3, target: THREE.Vector3) {
+    const ab = b.clone().sub(a);
+    const ac = c.clone().sub(a);
+    const ap = p.clone().sub(a);
+    const d1 = ab.dot(ap);
+    const d2 = ac.dot(ap);
+    if (d1 <= 0 && d2 <= 0) return target.copy(a);
+    const bp = p.clone().sub(b);
+    const d3 = ab.dot(bp);
+    const d4 = ac.dot(bp);
+    if (d3 >= 0 && d4 <= d3) return target.copy(b);
+    const vc = d1 * d4 - d3 * d2;
+    if (vc <= 0 && d1 >= 0 && d3 <= 0) return target.copy(a).addScaledVector(ab, d1 / (d1 - d3));
+    const cp = p.clone().sub(c);
+    const d5 = ab.dot(cp);
+    const d6 = ac.dot(cp);
+    if (d6 >= 0 && d5 <= d6) return target.copy(c);
+    const vb = d5 * d2 - d1 * d6;
+    if (vb <= 0 && d2 >= 0 && d6 <= 0) return target.copy(a).addScaledVector(ac, d2 / (d2 - d6));
+    const va = d3 * d6 - d5 * d4;
+    if (va <= 0 && d4 - d3 >= 0 && d5 - d6 >= 0) return target.copy(b).addScaledVector(c.clone().sub(b), (d4 - d3) / (d4 - d3 + (d5 - d6)));
+    const denominator = 1 / (va + vb + vc);
+    return target.copy(a).addScaledVector(ab, vb * denominator).addScaledVector(ac, vc * denominator);
+}
+
+// Where a ball touches the ground of a terrain: the points of the ground nearest to its middle that are
+// within its radius, one for every side it leans on (in a gully there are two). `center` is counted from
+// the middle of the terrain. A ball whose middle is under the ground is pushed straight up.
+function ballOnTerrain(data: TerrainData, center: THREE.Vector3, radius: number): { point: THREE.Vector3; normal: THREE.Vector3 }[] {
+    const rows = data.heights.length - 1;
+    const columns = data.heights[0].length - 1;
+    const u = center.x / data.cell + columns / 2;
+    const v = center.z / data.cell + rows / 2;
+    const span = radius / data.cell;
+    const touches: { point: THREE.Vector3; normal: THREE.Vector3; depth: number }[] = [];
+    const corner = (i: number, j: number) => new THREE.Vector3((i - columns / 2) * data.cell, data.heights[j][i], (j - rows / 2) * data.cell);
+    const nearest = new THREE.Vector3();
+    for (let j = Math.max(0, Math.floor(v - span)); j <= Math.min(rows - 1, Math.floor(v + span)); j++) {
+        for (let i = Math.max(0, Math.floor(u - span)); i <= Math.min(columns - 1, Math.floor(u + span)); i++) {
+            const a = corner(i, j);
+            const d = corner(i + 1, j + 1);
+            // The two triangles of the cell, cut the way terrain.ts cuts it
+            for (const other of [corner(i + 1, j), corner(i, j + 1)]) {
+                nearest.copy(nearestOnTriangle(center, a, d, other, nearest));
+                const distance = nearest.distanceTo(center);
+                if (distance >= radius) continue;
+                // Neighbor triangles share the point on their common edge: it is one touch, not two
+                if (touches.some((touch) => touch.point.distanceToSquared(nearest) < 1e-8)) continue;
+                const normal = distance > 1e-6 ? center.clone().sub(nearest).divideScalar(distance) : new THREE.Vector3(0, 1, 0);
+                touches.push({ point: nearest.clone(), normal, depth: radius - distance });
+            }
+        }
+    }
+    const under = terrainHeight(data, center.x, center.z);
+    if (under !== null && under > center.y) return [{ point: new THREE.Vector3(center.x, under, center.z), normal: new THREE.Vector3(0, 1, 0) }];
+    return touches;
+}
+
+// What the narrowphase of the library is called with for a ball and a field of heights
+type BallOnHeights = (
+    ball: CANNON.Sphere, field: CANNON.Heightfield, ballAt: CANNON.Vec3, fieldAt: CANNON.Vec3, ballTurn: CANNON.Quaternion, fieldTurn: CANNON.Quaternion,
+    ballBody: CANNON.Body, fieldBody: CANNON.Body, first?: CANNON.Shape, second?: CANNON.Shape, justTest?: boolean,
+) => boolean | void;
+
+// The parts of the narrowphase of the library that a test of our own has to use
+interface Narrowphase {
+    sphereHeightfield: BallOnHeights;
+    result: CANNON.ContactEquation[];
+    frictionResult: CANNON.FrictionEquation[];
+    createContactEquation: (a: CANNON.Body, b: CANNON.Body, first: CANNON.Shape, second: CANNON.Shape, firstOverride?: CANNON.Shape, secondOverride?: CANNON.Shape) => CANNON.ContactEquation;
+    createFrictionEquationsFromContact: (contact: CANNON.ContactEquation, result: CANNON.FrictionEquation[]) => void;
+}
+
+// A ball on a terrain is tested here, not by the library. The library takes the ground as a pillar under
+// every triangle and looks at the corners of a pillar before its top: a ball that comes down right over a
+// height of the grid hangs on that corner as on a spike and never rolls off, and one that rolls over the
+// edges between the triangles is slowed and pushed aside by them.
+function installBallOnTerrain(world: CANNON.World) {
+    const narrowphase = world.narrowphase as unknown as Narrowphase;
+    const usual = narrowphase.sphereHeightfield;
+    const center = new THREE.Vector3();
+    narrowphase.sphereHeightfield = function ballOnHeights(this: Narrowphase, ball, field, ballAt, fieldAt, ballTurn, fieldTurn, ballBody, fieldBody, first, second, justTest) {
+        const data = (field as unknown as { terrain?: TerrainData }).terrain;
+        if (!data) return usual.call(this, ball, field, ballAt, fieldAt, ballTurn, fieldTurn, ballBody, fieldBody, first, second, justTest);
+        // The body of a terrain is at the middle of it, and is never turned
+        center.set(ballAt.x - fieldBody.position.x, ballAt.y - fieldBody.position.y, ballAt.z - fieldBody.position.z);
+        const touches = ballOnTerrain(data, center, ball.radius);
+        if (justTest) return touches.length > 0;
+        for (const { point, normal } of touches) {
+            const contact = this.createContactEquation(ballBody, fieldBody, ball, field, first, second);
+            // From the ball into the ground
+            contact.ni.set(-normal.x, -normal.y, -normal.z);
+            contact.ri.set(ballAt.x - ballBody.position.x - normal.x * ball.radius, ballAt.y - ballBody.position.y - normal.y * ball.radius, ballAt.z - ballBody.position.z - normal.z * ball.radius);
+            contact.rj.set(point.x, point.y, point.z);
+            this.result.push(contact);
+            this.createFrictionEquationsFromContact(contact, this.frictionResult);
+        }
+        return undefined;
+    };
+}
+
 export class Physics {
     private registry: Registry;
 
     private world: CANNON.World;
 
-    // By the entity object
+    // By the entity object; a terrain by its mesh, so that an entity may have a Collider next to it
     private tracked = new Map<THREE.Object3D, Tracked>();
 
     constructor(registry: Registry) {
@@ -75,6 +180,7 @@ export class Physics {
         this.world = new CANNON.World({ gravity: new CANNON.Vec3(0, -registry.settings.gravity, 0) });
         // What has come to rest stays at rest until something moving touches it: a stack does not creep
         this.world.allowSleep = true;
+        installBallOnTerrain(this.world);
     }
 
     // Number of bodies the physics moves, as of the last step
@@ -104,6 +210,11 @@ export class Physics {
                 body.wakeUp();
             },
         };
+    }
+
+    // What the body of a terrain depends on, besides its heights (those come with a new mesh)
+    private groundKey(mesh: THREE.Object3D) {
+        return String(layerOf((mesh.userData.terrain as TerrainMarker).layer));
     }
 
     // Colliders of layers that are set not to collide do not touch in the physics either: a layer is a bit
@@ -168,6 +279,46 @@ export class Physics {
         return entry;
     }
 
+    // The ground of a Terrain component: a field of heights that stands still
+    private createGround(mesh: THREE.Object3D): Tracked {
+        const { data, layer } = mesh.userData.terrain as TerrainMarker;
+        const object = mesh.parent!;
+        const { group, mask } = this.filter(layerOf(layer));
+        const body = new CANNON.Body({
+            mass: 0,
+            type: CANNON.Body.KINEMATIC,
+            material: new CANNON.Material({ friction: 1, restitution: 1 }),
+            collisionFilterGroup: group,
+            collisionFilterMask: mask,
+            allowSleep: false,
+        });
+        // The library has the heights as columns along its X, each going along its Y, with Z up, from a
+        // corner. Laid down, its Y is the -Z of the world: so a column is read from the far row to the near
+        // one, and the corner is the one of the lowest x and the highest z. It cuts a cell in two the same
+        // way the mesh does (see terrain.ts).
+        const rows = data.heights.length;
+        const columns = data.heights[0].length;
+        const heights: number[][] = [];
+        for (let i = 0; i < columns; i++) {
+            heights.push(Array.from({ length: rows }, (_, k) => data.heights[rows - 1 - k][i]));
+        }
+        const [width, depth] = terrainSize(data);
+        const field = new CANNON.Heightfield(heights, { elementSize: data.cell });
+        // For the test of a ball on it (see installBallOnTerrain)
+        (field as unknown as { terrain: TerrainData }).terrain = data;
+        body.addShape(
+            field,
+            new CANNON.Vec3(-width / 2, 0, depth / 2),
+            new CANNON.Quaternion().setFromEuler(-Math.PI / 2, 0, 0),
+        );
+        const entry: Tracked = { body, object, collider: mesh, marker: null, shape: "", position: new THREE.Vector3(), quaternion: new THREE.Quaternion() };
+        object.getWorldPosition(entry.position);
+        // Never turned, whatever the entity says: the collisions of the behaviors see it the same way
+        body.position.set(entry.position.x, entry.position.y, entry.position.z);
+        this.world.addBody(body);
+        return entry;
+    }
+
     // One frame of physics for the entity objects under `root`. `active` tells whether an entity takes part.
     // Returns the bodies that have fallen below the bottom of the world (settings.bottom): whoever runs the
     // scene removes them.
@@ -179,6 +330,16 @@ export class Physics {
         const present = new Set<THREE.Object3D>();
         let dynamic = 0;
         root.traverse((collider) => {
+            if (collider.userData.terrain && collider.parent && active(collider.parent)) {
+                present.add(collider);
+                const entry = this.tracked.get(collider);
+                if (entry && entry.shape === this.groundKey(collider)) return;
+                if (entry) this.world.removeBody(entry.body);
+                const made = this.createGround(collider);
+                made.shape = this.groundKey(collider);
+                this.tracked.set(collider, made);
+                return;
+            }
             const fields = collider.userData.collider as ColliderFields | undefined;
             const object = collider.parent;
             if (!fields?.solid || !object || !active(object)) return;
@@ -230,7 +391,7 @@ export class Physics {
                     body.position.set(entry.position.x, entry.position.y, entry.position.z);
                     body.velocity.set((position.x - entry.position.x) / dt, (position.y - entry.position.y) / dt, (position.z - entry.position.z) / dt);
                 }
-                body.quaternion.set(quaternion.x, quaternion.y, quaternion.z, quaternion.w);
+                if (!entry.collider.userData.terrain) body.quaternion.set(quaternion.x, quaternion.y, quaternion.z, quaternion.w);
                 entry.position.copy(position);
                 entry.quaternion.copy(quaternion);
             }

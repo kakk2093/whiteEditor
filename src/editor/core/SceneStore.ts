@@ -114,11 +114,21 @@ interface Target {
     path: string;
 }
 
+// The brush of "Edit Terrain". `strength`: meters per second for raise and lower, how fast the others work.
+// "generate" makes the ground under the brush what the generator of the terrain gives there.
+// `color`: the place in the palette of the terrain that "paint" puts down.
+export interface TerrainBrushSettings {
+    tool: "raise" | "lower" | "smooth" | "flatten" | "paint" | "generate";
+    radius: number;
+    strength: number;
+    color: number;
+}
+
 // A change of a material or a look, as a step of undo: what the asset was and what it became.
 // null means there was (or is) no such asset: the step created or deleted it.
 export interface AssetStep {
     // "folders" and "settings" are one file each (folders.json, project.json): their name is the same word
-    section: "materials" | "looks" | "scenes" | "prefabs" | "folders" | "settings";
+    section: "materials" | "looks" | "scenes" | "prefabs" | "terrains" | "folders" | "settings";
     name: string;
     before: unknown | null;
     after: unknown | null;
@@ -559,21 +569,23 @@ class SceneStore {
 
     // An asset was changed, created (before = null) or deleted (after = null): a material, a look, a scene
     // file, a prefab file, the folders or the settings of the project
-    recordAsset(section: AssetStep["section"], name: string, before: unknown | null, after: unknown | null) {
+    // `merge` false: a step of its own even right after another change of the same asset (a brush stroke)
+    recordAsset(section: AssetStep["section"], name: string, before: unknown | null, after: unknown | null, merge = true) {
         if (!this.recording) return;
         const key = `${section}/${name}`;
         const time = performance.now();
         const top = this.undoStack[this.undoStack.length - 1];
         // Dragging a slider or a color is many small changes: together they are one step
-        if (top && "asset" in top && this.lastStep === key && time - this.lastChange <= UNDO_MERGE_MS) {
+        if (merge && top && "asset" in top && this.lastStep === key && time - this.lastChange <= UNDO_MERGE_MS) {
             top.asset.after = after;
         } else {
             this.undoStack.push({ asset: { section, name, before, after } });
             if (this.undoStack.length > UNDO_LIMIT) this.undoStack.shift();
         }
         this.redoStack = [];
-        this.lastChange = time;
+        this.lastChange = merge ? time : 0;
         this.lastStep = key;
+        if (!merge) this.notify();
     }
 
     // false while a step of undo is being carried out by the actions: what they change on the way is a
@@ -1566,7 +1578,45 @@ class SceneStore {
 
     setColliderEdit(on: boolean) {
         this.colliderEdit = on;
+        if (on) this.terrainEdit = false;
         this.notify();
+    }
+
+    // "Edit Terrain": the left button of the mouse works the ground of the selected terrain with the brush
+    // instead of turning the camera (see terrainBrush.ts)
+    terrainEdit = false;
+
+    brush: TerrainBrushSettings = { tool: "raise", radius: 4, strength: 4, color: 0 };
+
+    // The terrain of the selected entity: the name of its asset ("" for none) and its mesh; null if the
+    // selected entity has no Terrain component of its own
+    get terrainTarget() {
+        const entity = this.selected;
+        const component = entity && getComponent(entity, "terrain");
+        const object = entity && this.objects.get(entity.id);
+        const mesh = object?.children.find((child) => child.userData.terrain) as THREE.Mesh | undefined;
+        if (!entity || !component || !mesh) return null;
+        return { id: entity.id, name: (component.terrain as string | undefined) ?? "", mesh };
+    }
+
+    setTerrainEdit(on: boolean) {
+        this.terrainEdit = on;
+        if (on) this.colliderEdit = false;
+        this.notify();
+    }
+
+    setBrush(change: Partial<TerrainBrushSettings>) {
+        this.brush = { ...this.brush, ...change };
+        this.notify();
+    }
+
+    // The meshes of the Terrain components of the scene that show this terrain asset
+    terrainMeshes(name: string) {
+        const meshes: THREE.Mesh[] = [];
+        this.root.traverse((object) => {
+            if (object.userData.terrain && object.userData.terrainName === name) meshes.push(object as THREE.Mesh);
+        });
+        return meshes;
     }
 
     // Changes editor state (project, scene name, status...) and re-renders the panels
