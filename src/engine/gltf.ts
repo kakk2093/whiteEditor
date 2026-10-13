@@ -2,6 +2,8 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js";
+import { actionDone, startAction } from "./clipAction";
+import type { PlayOptions } from "./clipAction";
 
 // Models made elsewhere (Blender and the like) and kept as files of assets/: glTF, one file (.glb) or a
 // .gltf with what it names lying next to it. The component "gltf" shows such a file as a part of an
@@ -21,25 +23,20 @@ export interface ModelFileFields {
     speed: number;
 }
 
-export interface PlayOptions {
-    loop?: boolean;
-    speed?: number;
-    // Seconds over which the clip that was playing gives way to this one
-    fade?: number;
-}
-
-// What a behavior gets from self.animation(): the clips of the model of an object, and playing them
-export interface AnimationHandle {
+// The clips of the model file of an object, and playing them (see animationOf() in animation.ts)
+export interface ModelClips {
     // The names of the clips the file has; empty until it is loaded
     readonly clips: string[];
     // The clip that plays now, null if none
     readonly playing: string | null;
+    // true once a clip that plays once has come to its end
+    readonly done: boolean;
     // false if the file has no clip of that name (or is not loaded yet)
     play: (name: string, options?: PlayOptions) => boolean;
     stop: () => void;
 }
 
-interface ModelState extends AnimationHandle {
+interface ModelState extends ModelClips {
     fields: ModelFileFields;
     mixer: THREE.AnimationMixer | null;
 }
@@ -84,19 +81,13 @@ export function createModelFile(fields: ModelFileFields, source: GLTF | Promise<
         get playing() {
             return current;
         },
+        get done() {
+            return actionDone(action);
+        },
         play: (name, options = {}) => {
             const clip = clips.find((each) => each.name === name);
             if (!clip || !state.mixer) return false;
-            const next = state.mixer.clipAction(clip);
-            next.reset();
-            next.setLoop(options.loop ?? true ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
-            // The last pose of a clip played once stays
-            next.clampWhenFinished = true;
-            next.timeScale = options.speed ?? 1;
-            if (action && action !== next && (options.fade ?? 0) > 0) next.crossFadeFrom(action, options.fade!, false);
-            else if (action && action !== next) action.stop();
-            next.play();
-            action = next;
+            action = startAction(state.mixer.clipAction(clip), action, options);
             current = name;
             return true;
         },
@@ -133,7 +124,7 @@ export function createModelFile(fields: ModelFileFields, source: GLTF | Promise<
 }
 
 // The model file of an entity object, to play its animations; null if it has no "gltf" component
-export function animationOf(object: THREE.Object3D): AnimationHandle | null {
+export function modelClipsOf(object: THREE.Object3D): ModelClips | null {
     return (object.children.find((child) => child.userData.gltf)?.userData.gltf as ModelState | undefined) ?? null;
 }
 

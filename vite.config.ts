@@ -5,7 +5,8 @@ import { projectsPlugin } from './vite-plugin-projects'
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), projectsPlugin()],
+  // WHITE_PROJECTS: another folder of projects, for the checks of the editor (npm run test)
+  plugins: [react(), projectsPlugin(process.env.WHITE_PROJECTS)],
   resolve: {
     alias: {
       // What project scripts import; the same module instance the editor uses

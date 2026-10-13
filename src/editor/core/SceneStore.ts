@@ -47,7 +47,7 @@ export type SettingsPage = "project" | "scene" | "editor" | "controls";
 export interface AssetRef {
     // The last four are not files: what the scripts of the project (and the engine) define
     // "texture" is an image file of assets/, named with its extension; "sound" an audio file of it
-    kind: "material" | "model" | "scene" | "prefab" | "look" | "texture" | "sound" | "behavior" | "effect" | "surface" | "sky";
+    kind: "material" | "model" | "scene" | "prefab" | "look" | "texture" | "sound" | "behavior" | "effect" | "surface" | "sky" | "clip" | "animator";
     name: string;
 }
 
@@ -1769,6 +1769,8 @@ class SceneStore {
                 : entity.components.some((c) => (kind === "material" && c.type === "mesh" && c.material === name)
                     || (kind === "sound" && c.type === "sound" && c.sound === name)
                     || (kind === "behavior" && c.type === "script" && c.script === name)
+                    || (kind === "clip" && c.type === "animation" && c.clip === name)
+                    || (kind === "animator" && c.type === "animator" && c.animator === name)
                     || (kind === "model" && ((c.type === "model" && c.model === name) || (c.type === "gltf" && c.file === name))));
             if (uses) users.push(entity);
             ownLists(entity).forEach(visit);
@@ -1801,6 +1803,14 @@ class SceneStore {
         this.notify();
     }
 
+    // Gives the entity an Animation component that plays the clip, or points the one it has at it; one step of undo
+    addClip(id: string, clip: string) {
+        this.batch(() => {
+            this.addComponent(id, "animation");
+            this.setComponentField(id, "animation", "clip", clip);
+        });
+    }
+
     // `source` names the model or behavior, for the components that take one from scripts/
     addComponent(id: string, type: string, source?: string) {
         const def = componentDefs[type];
@@ -1820,7 +1830,48 @@ class SceneStore {
         this.rebuildComponent(entity, key);
         // For an instance or what is inside one: a component the instance adds
         this.commit(target);
+        // A model does not have the size of the default collider: the new one is put around it
+        if (type === "collider" && entity.components.some((c) => c.type === "gltf" || c.type === "model")) this.fitCollider(id);
         this.notify();
+    }
+
+    // Makes the collider of the entity a box around what the entity itself shows: its model file, its model
+    // made by code, its mesh. false if there is nothing to measure (a model file that is still loading).
+    fitCollider(id: string) {
+        const obj = this.objects.get(id);
+        if (!obj || !this.findEntity(id)?.components.some((c) => c.type === "collider")) return false;
+        obj.updateWorldMatrix(true, true);
+        const toLocal = obj.matrixWorld.clone().invert();
+        const box = new THREE.Box3();
+        const corner = new THREE.Vector3();
+        for (const part of obj.children) {
+            if (!["gltf", "model", "mesh"].includes(part.userData.component as string)) continue;
+            part.traverse((child) => {
+                const mesh = child as THREE.Mesh;
+                if (!mesh.isMesh) return;
+                if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+                const bounds = mesh.geometry.boundingBox!;
+                const matrix = toLocal.clone().multiply(mesh.matrixWorld);
+                for (let i = 0; i < 8; i++) {
+                    corner.set(i & 1 ? bounds.max.x : bounds.min.x, i & 2 ? bounds.max.y : bounds.min.y, i & 4 ? bounds.max.z : bounds.min.z);
+                    box.expandByPoint(corner.applyMatrix4(matrix));
+                }
+            });
+        }
+        if (box.isEmpty()) return false;
+        const size = box.getSize(new THREE.Vector3());
+        const center = box.getCenter(new THREE.Vector3());
+        // To whole centimeters: the numbers are read in the Inspector
+        const cm = (value: number) => Math.round(value * 100) / 100;
+        const fields: Record<string, ParamValue> = {
+            shape: "box",
+            sizeX: Math.max(0.01, cm(size.x)), sizeY: Math.max(0.01, cm(size.y)), sizeZ: Math.max(0.01, cm(size.z)),
+            centerX: cm(center.x), centerY: cm(center.y), centerZ: cm(center.z),
+        };
+        this.batch(() => {
+            for (const [field, value] of Object.entries(fields)) this.setComponentField(id, "collider", field, value);
+        });
+        return true;
     }
 
     // For an instance or what is inside one, a component of the prefab is left out by the instance

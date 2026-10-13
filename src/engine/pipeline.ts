@@ -2,6 +2,7 @@ import * as THREE from "three";
 import type { EffectDef, EffectEntry, ResolvedLook } from "./look";
 import { paramDefaults } from "./Registry";
 import type { Registry } from "./Registry";
+import { marked } from "./shaderErrors";
 import { uniformDeclaration, uniformNames, uniformValues } from "./shaderParams";
 import { SkyBaker } from "./sky";
 import { Surfaces } from "./surface";
@@ -310,7 +311,7 @@ export class RenderPipeline {
                 }
                 const material = new THREE.ShaderMaterial({
                     vertexShader: VERTEX,
-                    fragmentShader: `${HEADER}\n${declarations}\n${def.shader}\n${FOOTER}`,
+                    fragmentShader: `${HEADER}\n${declarations}\n${marked(`effect "${def.name}"`, def.shader)}\n${FOOTER}`,
                     uniforms,
                     depthTest: false,
                     depthWrite: false,

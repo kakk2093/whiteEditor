@@ -118,6 +118,13 @@ Look, поверхности, конвейер рендера, свечение,
   нужен браузер, поэтому `tools/render.mjs` запускает установленный Chrome или Edge в режиме без окна (путь
   к другому — в `WHITE_BROWSER`) с отдельным временным профилем и отдельным кэшем Vite
   (`node_modules/.vite-render`), чтобы не мешать открытому редактору; новых зависимостей нет. Страница
-  шлёт PNG обратно POST-запросом. Ошибки шейдеров (`renderer.debug.onShaderError`), исключения поведений и
+  шлёт PNG обратно POST-запросом. Ошибки шейдеров (`watchShaderErrors`, см. ниже), исключения поведений и
   несуществующий Look печатаются как `problem:` и дают код выхода 1. Папка `renders/` — в `.gitignore` и вне
   слежения dev-сервера.
+- **Ошибки шейдеров** — `src/engine/shaderErrors.ts`. Код автора (эффект, небо, каждая стадия поверхности)
+  вставляется в общий шейдер между метками `//<white effect "имя">` и `//</white>` (`marked()`).
+  `watchShaderErrors(renderer, report)` ставит `renderer.debug.onShaderError`: `shaderErrorMessage` читает лог
+  драйвера и исходник шейдера, по номеру строки находит метку и пишет `Shader error in effect "scanlines", line 3:
+  ...`. Его вызывает `createRenderer()` — общий для вьюпорта и игры, сообщение идёт в `console.error` (в редакторе
+  это Console); `renderStill` ставит своё и кладёт сообщения в `problems`. Новый вид кода в шейдере — обернуть в
+  `marked()`.

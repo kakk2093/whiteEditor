@@ -3,7 +3,8 @@ import type { EnvironmentData } from "./environment";
 import type { Input } from "./input";
 import { builtinEffects, isEffectDef } from "./look";
 import { loadModelFile } from "./gltf";
-import type { AnimationHandle } from "./gltf";
+import { isAnimatorDef, isClipDef } from "./animation";
+import type { AnimationHandle, AnimatorDef, AnimatorHandle, ClipDef } from "./animation";
 import type { EffectDef, LookData } from "./look";
 import { isSkyDef } from "./sky";
 import type { SkyDef } from "./sky";
@@ -23,7 +24,8 @@ import type { UiElement } from "./ui";
 // What a param of type "asset" can refer to
 // "font" is a font file of assets/, named with its extension: "pixel.ttf"
 // "sky" is a sky made by code: a defineSky() of scripts/
-export type AssetKind = "material" | "look" | "prefab" | "texture" | "layer" | "scene" | "sound" | "font" | "object" | "gltf" | "sky";
+// "clip" is an animation clip: a defineClip() of scripts/
+export type AssetKind = "material" | "look" | "prefab" | "texture" | "layer" | "scene" | "sound" | "font" | "object" | "gltf" | "sky" | "clip";
 
 export type ParamDef = (
     | { type: "number"; default: number; min?: number; max?: number; step?: number }
@@ -52,7 +54,7 @@ export function fieldApplies(def: ParamDef, defs: Record<string, ParamDef>, valu
     return Object.entries(def.when ?? {}).every(([key, allowed]) => allowed.includes((values[key] ?? defs[key]?.default) as ParamValue));
 }
 
-type ParamType<D extends ParamDef> = D extends { type: "number" }
+export type ParamType<D extends ParamDef> = D extends { type: "number" }
     ? number
     : D extends { type: "boolean" }
         ? boolean
@@ -214,9 +216,12 @@ export interface BehaviorSelf<P = Params, S = unknown> {
     // What is not named stays. A zone the camera is in still has its say over what it changes.
     environment: EnvironmentData | null;
     setEnvironment: (change: Partial<EnvironmentData>) => void;
-    // The animations of the model file (the "gltf" component) of this object, or of the one given:
-    // self.animation()?.play("Run", { fade: 0.2 }). null if the object has no such component.
-    animation: (object?: THREE.Object3D) => AnimationHandle | null;
+    // The animations of this object, or of the one given: the clips of its model file (the "gltf" component)
+    // and the clips of the scripts (defineClip), played by name: self.animation().play("Run", { fade: 0.2 })
+    animation: (object?: THREE.Object3D) => AnimationHandle;
+    // The Animator component of this object, or of the one given: its state, and the params its transitions
+    // look at: self.animator()?.set("speed", 2). null if the object has no Animator component.
+    animator: (object?: THREE.Object3D) => AnimatorHandle | null;
     // The Particles component of this object, or of the one given: emit(20) throws out a burst,
     // `playing` switches its steady stream. null if the object has no Particles component.
     particles: (object?: THREE.Object3D) => ParticleHandle | null;
@@ -392,6 +397,37 @@ export class Registry {
         return [...this.behaviorDefs.values()];
     }
 
+    // Animation clips and animators, from the project scripts
+    private clipDefs = new Map<string, ClipDef>();
+
+    private animatorDefs = new Map<string, AnimatorDef>();
+
+    registerClip(def: ClipDef) {
+        this.clipDefs.set(def.name, def);
+        return this;
+    }
+
+    getClip(name: string) {
+        return this.clipDefs.get(name);
+    }
+
+    clips() {
+        return [...this.clipDefs.values()];
+    }
+
+    registerAnimator(def: AnimatorDef) {
+        this.animatorDefs.set(def.name, def);
+        return this;
+    }
+
+    getAnimator(name: string) {
+        return this.animatorDefs.get(name);
+    }
+
+    animators() {
+        return [...this.animatorDefs.values()];
+    }
+
     // Skies made by code, from the project scripts
     private skyDefs = new Map<string, SkyDef>();
 
@@ -523,6 +559,16 @@ export class Registry {
         return this.modelFiles.includes(name) ? loadModelFile(this.modelFileUrl(name)) : null;
     }
 
+    // The names of the clips a model file has; null until the file is loaded (`loaded` is then called once it is)
+    modelClipNames(name: string, loaded?: () => void): string[] | null {
+        const file = this.loadModelFile(name);
+        if (file instanceof Promise) {
+            if (loaded) file.then(loaded, () => {});
+            return null;
+        }
+        return file ? file.animations.map((clip) => clip.name) : null;
+    }
+
     // `files` are the font files of assets/ ("pixel.ttf"); the rest is as in setTextures()
     setFonts(base: string, files: string[], query = "") {
         this.fontBase = base;
@@ -630,6 +676,7 @@ export class Registry {
         if (kind === "sound") return this.soundNames();
         if (kind === "gltf") return this.modelFileNames();
         if (kind === "sky") return [...this.skyDefs.keys()];
+        if (kind === "clip") return [...this.clipDefs.keys()].sort();
         if (kind === "font") return this.fontNames();
         if (kind === "scene") return this.scenes;
         if (kind === "texture") return this.textureNames();
@@ -641,7 +688,7 @@ export class Registry {
     // Everything the scripts have defined so far is counted as coming from the project "shared": called once
     // its scripts are registered and before those of the project itself
     markShared() {
-        this.sharedDefs = new Set<object>([...this.modelDefs.values(), ...this.behaviorDefs.values(), ...this.effectDefs.values(), ...this.surfaceDefs.values(), ...this.skyDefs.values()]);
+        this.sharedDefs = new Set<object>([...this.modelDefs.values(), ...this.behaviorDefs.values(), ...this.effectDefs.values(), ...this.surfaceDefs.values(), ...this.skyDefs.values(), ...this.clipDefs.values(), ...this.animatorDefs.values()]);
         for (const def of [...builtinEffects, ...builtinSurfaces]) this.sharedDefs.delete(def);
     }
 
@@ -657,6 +704,8 @@ export class Registry {
             if (isEffectDef(value)) this.registerEffect(value);
             if (isSurfaceDef(value)) this.registerSurface(value);
             if (isSkyDef(value)) this.registerSky(value);
+            if (isClipDef(value)) this.registerClip(value);
+            if (isAnimatorDef(value)) this.registerAnimator(value);
         }
         return this;
     }

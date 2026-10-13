@@ -32,7 +32,7 @@ const TABS: { key: TabKey; title: string; icon: IconName; hint: string }[] = [
     { key: "prefab", title: "Prefabs", icon: "prefab", hint: "Drag into the scene · double-click to edit · drop an object here to make a prefab" },
     { key: "model", title: "Models", icon: "script", hint: "Model files of assets/ (glTF: .glb, .gltf) and models built by code in scripts/ · drop model files here to add · drag or double-click to add to the scene" },
     { key: "look", title: "Looks", icon: "look", hint: "Render styles · click to edit · double-click or drag into the scene to use" },
-    { key: "script", title: "Scripts", icon: "script", hint: "Behaviors, effects and surfaces · click to see params · drag a behavior onto an object" }
+    { key: "script", title: "Scripts", icon: "script", hint: "Behaviors, effects, surfaces, skies, clips and animators · click to see what they are · drag a behavior onto an object · double-click a clip or an animator to give it to the selected object" }
 ];
 
 const ICONS: Record<Kind, IconName> = {
@@ -47,6 +47,8 @@ const ICONS: Record<Kind, IconName> = {
     behavior: "script",
     effect: "look",
     surface: "cube",
+    clip: "script",
+    animator: "script",
 };
 
 // The tabs whose assets can be laid out in folders, and the name of each in folders.json.
@@ -57,7 +59,8 @@ const FOLDERS: Partial<Record<TabKey, FolderSection>> = {
     prefab: "prefabs",
     look: "looks",
     texture: "textures",
-    sound: "sounds"
+    sound: "sounds",
+    model: "models"
 };
 
 // The dialog that asks for a name: of a new scene, of a new folder, or the new name of a folder
@@ -153,6 +156,8 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
                     kind: "surface", name: d.name, label: d.label ?? d.name, note: builtinSurfaces.includes(d) ? "surface · built-in" : `surface${from(d)}`
                 })),
                 ...registry.skies().map((d): Item => ({ kind: "sky", name: d.name, label: d.label ?? d.name, note: `sky${from(d)}` })),
+                ...registry.clips().map((d): Item => ({ kind: "clip", name: d.name, label: d.label ?? d.name, note: `clip${from(d)}` })),
+                ...registry.animators().map((d): Item => ({ kind: "animator", name: d.name, label: d.label ?? d.name, note: `animator${from(d)}` })),
             ];
         }
         return registry.materialNames().map((name) => {
@@ -231,6 +236,13 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
         else store.update({ status: "Select an object to put the behavior on" });
     };
 
+    // A clip becomes the Animation component of the selected object, an animator its Animator component
+    const addAnimation = (kind: "clip" | "animator", name: string) => {
+        if (!store.selectedId) store.update({ status: `Select an object to give the ${kind} to` });
+        else if (kind === "clip") store.addClip(store.selectedId, name);
+        else store.addComponent(store.selectedId, "animator", name);
+    };
+
     // Plays a sound of the project, for the ear; the one that was playing stops
     const listen = (name: string) => {
         preview?.pause();
@@ -249,6 +261,7 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
         if (item.kind === "effect") addToLook("effects", item.name);
         if (item.kind === "surface") addToLook("surfaces", item.name);
         if (item.kind === "sky") setSceneSky(item.name);
+        if (item.kind === "clip" || item.kind === "animator") addAnimation(item.kind, item.name);
     };
 
     const itemMenu = (e: MouseEvent, item: Item) => {
@@ -296,6 +309,11 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
             menu.push({ label: "Add to Selected Object", icon: "plus", run: () => addBehavior(name) });
         } else if (kind === "sky") {
             menu.push({ label: "Use as the Sky of the Scene", icon: "plus", run: () => setSceneSky(name) });
+        } else if (kind === "clip" || kind === "animator") {
+            menu.push({ label: "Add to Selected Object", icon: "plus", run: () => {
+                if (objects.length > 0) store.select(objects[0]);
+                addAnimation(kind, name);
+            } });
         } else {
             menu.push({ label: "Add to the Look of the Scene", icon: "plus", run: () => addToLook(kind === "effect" ? "effects" : "surfaces", name) });
         }
@@ -312,7 +330,7 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
                 }
             });
         }
-        if (kind === "material" || kind === "prefab" || kind === "behavior" || kind === "model") {
+        if (kind === "material" || kind === "prefab" || kind === "behavior" || kind === "model" || kind === "clip" || kind === "animator") {
             const users = store.usersOf(kind, name);
             more.push({
                 label: users.length > 0 ? `Select in Scene (${users.length})` : "Not Used in This Scene",
@@ -380,7 +398,7 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
                 key={`${kind}:${item.name}`}
                 className={`tile ${selected ? "selected" : ""} ${current ? "current" : ""}`}
                 title={current ? `${item.label} (${kind === "look" || kind === "sky" ? "used by the scene" : "open"})` : item.label}
-                draggable={kind !== "scene" && kind !== "effect" && kind !== "surface" && kind !== "sky"}
+                draggable={kind !== "scene" && kind !== "effect" && kind !== "surface" && kind !== "sky" && kind !== "clip" && kind !== "animator"}
                 onDragStart={(e) => setDraggedAsset(e, { kind, name: item.name })}
                 onClick={() => store.selectAsset({ kind, name: item.name })}
                 onDoubleClick={() => activate(item)}

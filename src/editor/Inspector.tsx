@@ -6,7 +6,7 @@ import {
     MAX_COLORS, MODEL_FILE, paramDefaults, resolveLook, setLayersCollide
 } from "../engine";
 import type {
-    ComponentData, EntityData, EnvironmentData, LookData, MaterialData, ParamDef, ParamValue, Params
+    ClipDef, ComponentData, EntityData, EnvironmentData, LookData, MaterialData, ParamDef, ParamValue, Params
 } from "../engine";
 import {
     addToLook, setSceneSky, applyOverrides, createPrefab, deleteLook, deleteMaterial, deletePrefab, deleteScene, deleteTexture, openPrefab, openScene, renameAsset, renameLayer, renameScene, updateLook, updateMaterial, updateSettings
@@ -280,7 +280,7 @@ export function SkyParams() {
 
 const MIXED_TITLE = "the selected objects have different values; a value given here goes to all of them";
 
-export function Fields({ defs, values, onChange, changed, onRevert, mixed }: {
+export function Fields({ defs, values, onChange, changed, onRevert, mixed, choices }: {
     defs: Record<string, ParamDef>;
     values: Params;
     onChange: (key: string, value: ParamValue) => void;
@@ -290,6 +290,8 @@ export function Fields({ defs, values, onChange, changed, onRevert, mixed }: {
     onRevert?: (key: string) => void;
     // The fields that differ between the selected objects; `values` are those of the main one
     mixed?: Set<string>;
+    // What a text field can be picked from, where that is known (the clips of a model file): a list then
+    choices?: (key: string) => string[] | null;
 }) {
     const defaults = paramDefaults(defs);
     return (
@@ -304,7 +306,18 @@ export function Fields({ defs, values, onChange, changed, onRevert, mixed }: {
                         {humanize(key)}
                     </label>
                     <div className="control">
-                        <ParamField def={def} value={values[key] ?? defaults[key]} mixed={mixed?.has(key)} onChange={(value) => onChange(key, value)} />
+                        {def.type === "string" && choices?.(key) ? (
+                            <select className="select" value={mixed?.has(key) ? MIXED_OPTION : (values[key] ?? defaults[key]) as string} onChange={(e) => onChange(key, e.target.value)}>
+                                {mixed?.has(key) && <option value={MIXED_OPTION} disabled>{MIXED_MARK}</option>}
+                                <option value="">(none)</option>
+                                {/* A name that is not among them stays visible, so that it is seen to be wrong */}
+                                {[...new Set([...choices(key)!, ...(values[key] ? [values[key] as string] : [])])].map((name) => (
+                                    <option key={name} value={name}>{name}</option>
+                                ))}
+                            </select>
+                        ) : (
+                            <ParamField def={def} value={values[key] ?? defaults[key]} mixed={mixed?.has(key)} onChange={(value) => onChange(key, value)} />
+                        )}
                     </div>
                 </div>
             ))}
@@ -411,7 +424,12 @@ function ComponentSection({ entities, components }: { entities: EntityData[]; co
             title={added ? <span className="overridden" title="Added in this instance: the prefab does not have this component">{title}</span> : title}
             onRemove={() => each((id) => store.removeComponent(id, key))}
             removeTitle={single ? undefined : "Remove the component from all the selected objects"}
-            extra={single && component.type === "collider" && !store.playing && (
+            extra={single && component.type === "collider" && !store.playing && (<>
+                {(getComponent(entity, "gltf") || getComponent(entity, "model") || getComponent(entity, "mesh")) && (
+                    <button className="btn ghost" title="Fit: a box around what the object shows (its model or mesh)" onClick={() => store.fitCollider(entity.id)}>
+                        Fit
+                    </button>
+                )}
                 <button
                     className={`btn ghost ${store.colliderEdit ? "active" : ""}`}
                     title="Edit in the viewport: drag the dots on the sides of the collider to resize it, the square to move it"
@@ -419,7 +437,7 @@ function ComponentSection({ entities, components }: { entities: EntityData[]; co
                 >
                     <Icon name="collider" size={12} />
                 </button>
-            )}
+            </>)}
         >
             {def && (
                 <Fields
@@ -429,6 +447,7 @@ function ComponentSection({ entities, components }: { entities: EntityData[]; co
                     changed={override}
                     onRevert={(field) => store.revertOverrideField(entity.id, ["components", key, field])}
                     mixed={single ? undefined : mixedKeys(def.fields, components as Params[])}
+                    choices={def.choices && ((field) => def.choices!(field, component, store.registry, () => sceneStore.changed()))}
                 />
             )}
 
@@ -921,12 +940,20 @@ function AssetName({ kind, name }: { kind: "material" | "look" | "prefab" | "sce
     );
 }
 
+// How long the clip plays, seconds: what it says, or up to its last key
+function clipLength(clip: ClipDef) {
+    return clip.length ?? Math.max(0, ...clip.tracks.flatMap((track) => track.keys.map((key) => key.time)));
+}
+
 // A behavior, an effect or a surface: what the scripts of the project (or the engine) define. Nothing to
 // edit here: it shows the params, where it is used, and puts it to use.
-function ScriptInspector({ kind, name }: { kind: "behavior" | "effect" | "surface" | "sky"; name: string }) {
+function ScriptInspector({ kind, name }: { kind: "behavior" | "effect" | "surface" | "sky" | "clip" | "animator"; name: string }) {
     const store = useSceneStore();
     const { registry } = store;
-    const def = kind === "behavior" ? registry.getBehavior(name) : kind === "effect" ? registry.getEffect(name) : kind === "sky" ? registry.getSky(name) : registry.getSurface(name);
+    const clip = kind === "clip" ? registry.getClip(name) : undefined;
+    const animator = kind === "animator" ? registry.getAnimator(name) : undefined;
+    const def = kind === "behavior" ? registry.getBehavior(name) : kind === "effect" ? registry.getEffect(name) : kind === "sky" ? registry.getSky(name)
+        : kind === "clip" ? { label: clip?.label, params: undefined } : kind === "animator" ? animator : registry.getSurface(name);
     const builtin = (kind === "effect" && builtinEffects.some((d) => d === def)) || (kind === "surface" && builtinSurfaces.some((d) => d === def));
     const params = Object.entries(def?.params ?? {});
 
@@ -938,6 +965,8 @@ function ScriptInspector({ kind, name }: { kind: "behavior" | "effect" | "surfac
             visit(entity.children);
         });
         visit(store.entities);
+    } else if (kind === "clip" || kind === "animator") {
+        users.push(...store.usersOf(kind, name).map((entity) => entity.name));
     } else if (kind === "sky") {
         const { environment } = store;
         if (environment.sky && !environment.skyImage && environment.skyShader === name) users.push(store.sceneName);
@@ -963,6 +992,14 @@ function ScriptInspector({ kind, name }: { kind: "behavior" | "effect" | "surfac
                     >
                         <Icon name="plus" /> Add to selected object
                     </button>
+                ) : kind === "clip" || kind === "animator" ? (
+                    <button
+                        className="btn primary"
+                        disabled={!store.selectedId}
+                        onClick={() => store.selectedId && (kind === "clip" ? store.addClip(store.selectedId, name) : store.addComponent(store.selectedId, "animator", name))}
+                    >
+                        <Icon name="plus" /> Add to selected object
+                    </button>
                 ) : kind === "sky" ? (
                     <button className="btn primary" disabled={!!store.editingPrefab} onClick={() => setSceneSky(name)}>
                         <Icon name="plus" /> Use as the sky of the scene
@@ -977,13 +1014,43 @@ function ScriptInspector({ kind, name }: { kind: "behavior" | "effect" | "surfac
                 {kind === "behavior" && "A behavior: code that moves an object while the game runs. "}
                 {kind === "effect" && "A screen effect: changes the finished picture. "}
                 {kind === "surface" && "A surface: changes how every object is drawn. "}
+                {kind === "clip" && "An animation clip: keys over time for the place, turn, size and active flag of an object and of what is under it. An Animation component plays it. "}
+                {kind === "animator" && "An animator: the states of an object, each with its clip, and what leads from one to another. An Animator component runs it. "}
                 {kind === "sky" && "A sky made by code: a scene names it in its settings (Sky Shader) and sets its params there. "}
                 {builtin
                     ? <>Built into the engine as <b>{name}</b>.</>
                     : <>Defined as <b>{name}</b> in the project's scripts/ folder; edit it in VS Code, the editor reloads it on save.</>}
             </div>
 
-            <Section title="Params">
+            {clip && (
+                <Section title={`Tracks · ${clipLength(clip)} s${clip.relative ? " · relative" : ""}`}>
+                    {clip.tracks.map((track, i) => (
+                        <div key={i} className="field">
+                            <label title={track.object || "the object itself"}>{track.object || "(itself)"}</label>
+                            <div className="control">
+                                <span className="muted">{track.property} · {track.keys.length} key{track.keys.length === 1 ? "" : "s"}</span>
+                            </div>
+                        </div>
+                    ))}
+                </Section>
+            )}
+            {animator && (
+                <Section title="States">
+                    {Object.entries(animator.states).map(([state, { clip: played, loop }]) => (
+                        <div key={state} className="field">
+                            <label title={state}>{state}{state === animator.start ? " (start)" : ""}</label>
+                            <div className="control">
+                                <span className="muted">
+                                    clip {played}{loop === false || loop === "once" ? " · once" : ""}
+                                    {(animator.transitions ?? []).filter((t) => t.to !== state && (t.from === undefined || [t.from].flat().some((from) => from === state || from === "*")))
+                                        .map((t) => ` → ${t.to}`).join("")}
+                                </span>
+                            </div>
+                        </div>
+                    ))}
+                </Section>
+            )}
+            {kind !== "clip" && <Section title="Params">
                 {params.map(([key, param]) => (
                     <div key={key} className="field">
                         <label title={key}>{key}</label>
@@ -995,9 +1062,9 @@ function ScriptInspector({ kind, name }: { kind: "behavior" | "effect" | "surfac
                     </div>
                 ))}
                 {params.length === 0 && <div className="muted">No params.</div>}
-            </Section>
+            </Section>}
 
-            <Section title={kind === "behavior" ? "On objects of this scene" : kind === "sky" ? "The sky of the open scene" : "Used by looks"}>
+            <Section title={kind === "behavior" || kind === "clip" || kind === "animator" ? "On objects of this scene" : kind === "sky" ? "The sky of the open scene" : "Used by looks"}>
                 <div className="muted">{users.length > 0 ? users.join(", ") : "Nothing uses it."}</div>
             </Section>
         </>
@@ -1059,7 +1126,7 @@ function AssetInspector({ asset }: { asset: AssetRef }) {
             </>
         );
     }
-    if (asset.kind === "behavior" || asset.kind === "effect" || asset.kind === "surface" || asset.kind === "sky") {
+    if (asset.kind === "behavior" || asset.kind === "effect" || asset.kind === "surface" || asset.kind === "sky" || asset.kind === "clip" || asset.kind === "animator") {
         return <ScriptInspector kind={asset.kind} name={asset.name} />;
     }
 

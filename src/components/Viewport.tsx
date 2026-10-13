@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
-import { anchorPoint, applyEnvironment, aspectRatio, createRenderer, withZone, zoneAt, RenderPipeline, resolveLook, setCameraAspect, UI_HANDLE, UI_HANDLES, UiLayer, uiOf, updateParticles } from "../engine";
+import { anchorPoint, applyEnvironment, aspectRatio, createRenderer, withZone, zoneAt, RenderPipeline, resolveLook, setCameraAspect, UI_HANDLE, UI_HANDLES, UiLayer, uiOf, updateModelFiles, updateParticles } from "../engine";
 import type { Input } from "../engine";
 import { dropAsset, getDraggedAsset } from "../editor/core/dnd";
 import { ColliderHandles } from "./colliderHandles";
@@ -698,7 +698,12 @@ export default function Viewport() {
             // Play mode: runs the behaviors; a long pause (hidden tab) must not become one huge step
             sceneStore.tick(Math.min(dt, 0.1));
             // The game moves its own particles; those of the scene being edited are moved here
-            if (!sceneStore.playing) updateParticles(sceneStore.root, Math.min(dt, 0.1));
+            if (!sceneStore.playing) {
+                updateParticles(sceneStore.root, Math.min(dt, 0.1));
+                // The clip a model file is given plays while the scene is edited too: only inside the model,
+                // nothing of the scene moves
+                updateModelFiles(sceneStore.root, Math.min(dt, 0.1), () => true);
+            }
 
             if (flight && ctx.camera && ctx.controls) {
                 flight.t = Math.min(1, flight.t + dt / FOCUS_TIME);

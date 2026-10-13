@@ -5,6 +5,7 @@ import { resolveLook } from "./look";
 import { RenderPipeline } from "./pipeline";
 import type { Registry } from "./Registry";
 import { fitAspect } from "./settings";
+import { watchShaderErrors } from "./shaderErrors";
 import { SoundPlayer } from "./sound";
 import type { SceneData, Vec3 } from "./types";
 import { uiOf } from "./ui";
@@ -14,6 +15,8 @@ import { uiOf } from "./ui";
 export function createRenderer(keepPicture = false) {
     const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: keepPicture });
     renderer.shadowMap.enabled = true;
+    // A shader of the project that does not compile is told in a few words (in the editor: in the Console)
+    watchShaderErrors(renderer);
     return renderer;
 }
 
@@ -91,10 +94,7 @@ export function renderStill(registry: Registry, data: SceneData, options: StillO
     const renderer = createRenderer(true);
     renderer.setPixelRatio(1);
     renderer.setSize(width, height, false);
-    renderer.debug.onShaderError = (gl, _program, vertexShader, fragmentShader) => {
-        const log = gl.getShaderInfoLog(fragmentShader) || gl.getShaderInfoLog(vertexShader) || "does not link";
-        problems.push(`Shader error: ${log.trim()}`);
-    };
+    watchShaderErrors(renderer, (message) => problems.push(message));
 
     // What the behaviors keep from scene to scene, as in a running game
     const globals: Record<string, unknown> = {};

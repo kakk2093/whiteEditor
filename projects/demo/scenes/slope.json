@@ -1,0 +1,53 @@
+{
+  "version": 3,
+  "environment": { "sky": true, "ambientIntensity": 0.7 },
+  "entities": [
+    { "name": "Camera", "position": [3, 4.5, 11], "rotation": [-18, 0, 0], "components": [{ "type": "camera", "fov": 50 }] },
+    {
+      "name": "Sun",
+      "position": [3, 6, 4],
+      "rotation": [-50, 30, 0],
+      "components": [{ "type": "light", "kind": "directional", "castShadow": true }]
+    },
+    { "name": "Floor", "position": [3, -0.5, 0], "scale": [24, 1, 12], "components": [{ "type": "mesh", "material": "Tiles" }, { "type": "collider" }] },
+    {
+      "name": "Player",
+      "position": [-4, 0.52, 0],
+      "components": [
+        { "type": "mesh", "shape": "capsule", "material": "Gold" },
+        { "type": "collider", "shape": "capsule" },
+        { "type": "script", "script": "walker", "params": { "speed": 4 } }
+      ],
+      "scale": [0.6, 0.5, 0.6]
+    },
+    {
+      "name": "Ramp",
+      "position": [0, 0.75, 0],
+      "rotation": [0, 0, 20],
+      "scale": [5, 0.2, 3],
+      "components": [{ "type": "mesh", "material": "Stone" }, { "type": "collider" }]
+    },
+    { "name": "Deck", "position": [4.3, 0.8, 0], "scale": [4, 1.7, 3], "components": [{ "type": "mesh", "material": "Bricks" }, { "type": "collider" }] },
+    {
+      "name": "Ramp Down",
+      "position": [8.6, 0.75, 0],
+      "rotation": [0, 0, -20],
+      "scale": [5, 0.2, 3],
+      "components": [{ "type": "mesh", "material": "Stone" }, { "type": "collider" }]
+    },
+    {
+      "name": "Steep",
+      "position": [-6.5, 1, 0],
+      "rotation": [0, 0, -65],
+      "scale": [4, 0.2, 3],
+      "components": [{ "type": "mesh", "material": "Bricks" }, { "type": "collider" }]
+    },
+    {
+      "name": "Wall At An Angle",
+      "position": [3, 1, -4],
+      "rotation": [0, 35, 0],
+      "scale": [6, 2, 0.3],
+      "components": [{ "type": "mesh", "material": "Stone" }, { "type": "collider" }]
+    }
+  ]
+}

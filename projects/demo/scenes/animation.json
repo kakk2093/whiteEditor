@@ -1,0 +1,62 @@
+{
+  "version": 3,
+  "environment": { "sky": true, "ambientIntensity": 0.7 },
+  "entities": [
+    { "name": "Camera", "position": [0, 3, 9], "rotation": [-14, 0, 0], "components": [{ "type": "camera", "fov": 50 }] },
+    {
+      "name": "Sun",
+      "position": [3, 6, 4],
+      "rotation": [-50, 30, 0],
+      "components": [{ "type": "light", "kind": "directional", "castShadow": true }]
+    },
+    { "name": "Floor", "position": [0, -0.5, 0], "scale": [16, 1, 12], "components": [{ "type": "mesh", "material": "Tiles" }, { "type": "collider" }] },
+    {
+      "name": "Door",
+      "position": [-4.5, 0, 0],
+      "rotation": [0, 20, 0],
+      "components": [{ "type": "animation", "clip": "Open", "loop": "yoyo" }],
+      "children": [
+        { "name": "Leaf", "position": [0.6, 1.1, 0], "scale": [1.2, 2.2, 0.12], "components": [{ "type": "mesh", "material": "Bricks" }] }
+      ]
+    },
+    {
+      "name": "Gem",
+      "position": [-1.5, 1, 0],
+      "scale": [0.7, 0.7, 0.7],
+      "components": [{ "type": "mesh", "material": "Gold" }, { "type": "animation", "clip": "Hover" }]
+    },
+    {
+      "name": "Crane",
+      "position": [1.5, 0, 0],
+      "components": [{ "type": "animation", "clip": "Crane" }],
+      "children": [
+        { "name": "Mast", "position": [0, 1.5, 0], "scale": [0.3, 3, 0.3], "components": [{ "type": "mesh", "material": "Stone" }] },
+        {
+          "name": "Arm",
+          "position": [0, 3, 0],
+          "children": [
+            { "name": "Beam", "position": [1, 0, 0], "scale": [2.4, 0.2, 0.2], "components": [{ "type": "mesh", "material": "Stone" }] },
+            {
+              "name": "Hook",
+              "position": [2, -0.5, 0],
+              "children": [
+                { "name": "Block", "scale": [0.4, 0.4, 0.4], "components": [{ "type": "mesh", "material": "Gold" }] },
+                { "name": "Lamp", "position": [0, -0.4, 0], "components": [{ "type": "light", "kind": "point", "color": "#ffcc66", "intensity": 6, "range": 5 }] }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Robot",
+      "position": [4.8, 0, 0.5],
+      "rotation": [0, -25, 0],
+      "components": [
+        { "type": "gltf", "file": "robot.glb" },
+        { "type": "animator", "animator": "robot" },
+        { "type": "script", "script": "pacer", "params": { "every": 2 } }
+      ]
+    }
+  ]
+}

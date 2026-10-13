@@ -2,6 +2,7 @@ import * as THREE from "three";
 import type { SurfaceEntry } from "./look";
 import { paramDefaults } from "./Registry";
 import type { ParamDef, Registry } from "./Registry";
+import { marked } from "./shaderErrors";
 import { uniformDeclaration, uniformNames, uniformValues } from "./shaderParams";
 
 // A surface is what a look adds to the materials of the scene: things a screen effect cannot do, because
@@ -104,7 +105,7 @@ function stageCode(used: SurfaceDef[], stage: "vertex" | "fragment", fn: string)
             code += `${uniformDeclaration(d, own.map((name) => names[name]))}\n`;
         }
         const renamed = Object.entries(names);
-        code += `${renamed.map(([from, to]) => `#define ${from} ${to}`).join("\n")}\n${source}\n${renamed.map(([from]) => `#undef ${from}`).join("\n")}\n`;
+        code += `${renamed.map(([from, to]) => `#define ${from} ${to}`).join("\n")}\n${marked(`surface "${def.name}" (${stage})`, source)}\n${renamed.map(([from]) => `#undef ${from}`).join("\n")}\n`;
         calls.push(names[fn]);
     });
     return { code, calls };

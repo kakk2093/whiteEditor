@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { animationOf, animatorOf, defineAnimator, defineClip } from '../src/engine/animation'
 import { componentDefs } from '../src/engine/components'
 import { Game } from '../src/engine/game'
 import {
@@ -7,10 +8,11 @@ import {
 import { Registry } from '../src/engine/Registry'
 import { parsePrefab, parseScene } from '../src/engine/types'
 import type { EntityData, EntityOverride } from '../src/engine/types'
-import { validatePrefab, validateScene } from '../src/engine/validate'
+import { validatePrefab, validateScene, validateScripts } from '../src/engine/validate'
 
 // Checks of the engine itself, on data made right here: nothing of a project is read. `npm run check` runs
-// them before it looks at the project, so a change in the engine that breaks prefabs shows at once.
+// them before it looks at the project, so a change in the engine that breaks them shows at once.
+// Three parts: prefabs inside prefabs, animation (clips and animators), colliders that are turned (slopes).
 //
 // The prefabs: a lamp, a desk with that lamp on it, a room with that desk in it.
 
@@ -55,6 +57,9 @@ const ROOM = {
     children: [{ name: 'Floor' }, { name: 'Desk', prefab: 'Desk', position: [3, 0, 0] }],
   },
 }
+
+// The same prefabs make the project the checks of the editor run on (tools/test.mjs)
+export const PREFABS = { Lamp: LAMP, Desk: DESK, Room: ROOM }
 
 function makeRegistry(extra: Record<string, unknown> = {}) {
   const registry = new Registry()
@@ -384,7 +389,352 @@ export function selfTest(): string[] {
     }
   })
 
+  animationTests(test, ok, equal)
+  slopeTests(test, ok, equal)
   return failures
+}
+
+// ---------- colliders that are turned ----------
+
+function slopeTests(
+  test: (name: string, run: () => void) => void,
+  ok: (what: string, condition: unknown) => void,
+  equal: (what: string, actual: unknown, expected: unknown) => void,
+) {
+  const registry = new Registry()
+  const box = (more: object = {}) => ({ type: 'collider', ...more })
+  const FLOOR = { name: 'Floor', position: [0, -0.5, 0], scale: [40, 1, 40], components: [box()] }
+  // A plate 6 m long whose far end is lifted: its near end meets the floor about x = 1.2, its top is a slope
+  const ramp = (degrees: number) => ({ name: 'Ramp', position: [4, 1, 0], rotation: [0, 0, degrees], scale: [6, 0.2, 3], components: [box()] })
+  const PLAYER = { name: 'Player', position: [0, 0.52, 0], components: [box({ shape: 'capsule', radius: 0.3, height: 1 })] }
+  // The height of the top of the ramp over the floor at this x
+  const rampTop = (x: number, degrees: number) => 1 + (x - 4) * Math.tan(THREE.MathUtils.degToRad(degrees)) + 0.1 / Math.cos(THREE.MathUtils.degToRad(degrees))
+
+  const play = (entities: unknown[], run: (game: Game, object: (name: string) => THREE.Object3D) => void) => {
+    const game = new Game(registry, parseScene({ version: 3, entities }))
+    game.sound.enabled = false
+    try {
+      game.start()
+      game.update(1 / 60)
+      run(game, (name) => game.root.getObjectByName(name)!)
+    } finally {
+      game.dispose()
+    }
+  }
+  // Walks the object along x for so many seconds, the way a behavior does: a move with a step, then gravity.
+  // Tells in how many of the frames it was in the air.
+  const walk = (game: Game, object: THREE.Object3D, speed: number, seconds: number) => {
+    let air = 0
+    for (let i = 0; i < Math.round(seconds * 60); i++) {
+      game.runtime.move(object, speed / 60, 0, 0, 0.3)
+      if (!game.runtime.fall(object, 1 / 60)) air++
+    }
+    return air
+  }
+  const near = (what: string, actual: number, expected: number, within = 0.05) => ok(`${what}: expected about ${expected.toFixed(3)}, got ${actual.toFixed(3)}`, Math.abs(actual - expected) <= within)
+
+  test('a slope', () => {
+    play([FLOOR, ramp(20), PLAYER], (game, object) => {
+      const player = object('Player')
+      const air = walk(game, player, 3, 2)
+      near('it keeps its pace up the slope', player.position.x, 6, 0.1)
+      // A ball of 0.3 m on a slope of 20 degrees is higher over it than its radius, and the middle of the capsule 0.2 m above that
+      near('and stands on it', player.position.y, rampTop(player.position.x, 20) + 0.3 / Math.cos(THREE.MathUtils.degToRad(20)) + 0.2 - 0.3 * Math.tan(THREE.MathUtils.degToRad(20)) * Math.sin(THREE.MathUtils.degToRad(20)), 0.06)
+      ok(`with its feet on the ground (in the air for ${air} frames of 120)`, air <= 4)
+      ok('it is grounded there', game.runtime.grounded(player))
+    })
+    play([FLOOR, ramp(-20), { ...PLAYER, position: [1.5, 2.6, 0] }], (game, object) => {
+      // The ramp now comes down along x; the object is put on its high part and walks down it
+      const player = object('Player')
+      for (let i = 0; i < 60; i++) game.runtime.fall(player, 1 / 60)
+      const top = player.position.y
+      const air = walk(game, player, 3, 1)
+      ok(`down the slope it goes down (from ${top.toFixed(2)} to ${player.position.y.toFixed(2)})`, player.position.y < top - 0.9)
+      ok(`with its feet on the ground (in the air for ${air} frames of 60)`, air <= 4)
+    })
+    play([FLOOR, ramp(65), PLAYER], (game, object) => {
+      const player = object('Player')
+      walk(game, player, 3, 2)
+      ok(`too steep is a wall (stopped at x = ${player.position.x.toFixed(2)})`, player.position.x < 3.6 && player.position.y < 0.8)
+    })
+  })
+
+  test('a stair is still a stair', () => {
+    const stair = { name: 'Stair', position: [3, 0.1, 0], scale: [2, 0.2, 3], components: [box()] }
+    play([FLOOR, stair, PLAYER], (game, object) => {
+      const player = object('Player')
+      walk(game, player, 3, 0.9)
+      near('up onto it', player.position.y, 0.7, 0.03)
+      const air = walk(game, player, 3, 0.6)
+      near('and down from it', player.position.y, 0.5, 0.03)
+      ok(`without a fall (in the air for ${air} frames of 36)`, air <= 2)
+    })
+    // Turned about the vertical only, it is as much a stair as before
+    play([FLOOR, { ...stair, rotation: [0, 30, 0] }, PLAYER], (game, object) => {
+      const player = object('Player')
+      walk(game, player, 3, 0.9)
+      near('a stair that is turned', player.position.y, 0.7, 0.03)
+    })
+    play([FLOOR, { ...stair, position: [3, 0.5, 0], scale: [2, 1, 3] }, PLAYER], (game, object) => {
+      const player = object('Player')
+      walk(game, player, 3, 1)
+      ok(`a ledge higher than the step stops it (x = ${player.position.x.toFixed(2)})`, player.position.x < 1.75 && player.position.y < 0.6)
+    })
+  })
+
+  test('a wall at an angle', () => {
+    // A wall across the way, turned by 45 degrees: the box it fits in is much wider than it is
+    const wall = { name: 'Wall', position: [4, 1, 0], rotation: [0, 45, 0], scale: [6, 2, 0.2], components: [box()] }
+    play([FLOOR, wall, { name: 'Crate', position: [0, 0.5, 1.5], components: [box()] }], (game, object) => {
+      const crate = object('Crate')
+      for (let i = 0; i < 120; i++) game.runtime.move(crate, 0.05, 0, 0)
+      // The wall runs from (1.9, 2.1) to (6.1, -2.1) on the floor, x = 4 - z: the far corner of the crate, at z = 2, meets it at x = 2
+      near('a box stops at the wall itself, not at the box around it', crate.position.x, 2 - 0.1 * Math.SQRT2 - 0.5, 0.02)
+    })
+    play([FLOOR, wall], (game) => {
+      const hit = game.runtime.raycast([0, 1, 1.5], [1, 0, 0])
+      near('a ray hits it where it is', hit?.point.x ?? 0, 2.5 - 0.1 * Math.SQRT2, 0.02)
+      equal('and tells which way it faces', hit?.normal.toArray().map((n) => Math.round(n * 100) / 100), [-0.71, 0, -0.71])
+      // Inside the box around the wall, but past the wall itself
+      equal('a ray that passes by its corner misses', game.runtime.raycast([0, 1, 2.5], [1, 0, 0], { distance: 1.5 }), null)
+    })
+  })
+
+  test('rays and triggers on a slope', () => {
+    play([FLOOR, ramp(20), { name: 'Coin', position: [1.8, 1.6, 0], components: [box({ shape: 'sphere', radius: 0.3, solid: false })] }], (game) => {
+      const hit = game.runtime.raycast([5, 10, 0], [0, -1, 0])
+      near('a ray from above lands on the slope', hit?.point.y ?? 0, rampTop(5, 20), 0.01)
+      equal('the slope faces up and back', hit?.normal.toArray().map((n) => Math.round(n * 100) / 100), [-0.34, 0.94, 0])
+      equal('it is the ramp', hit?.object.name, 'Ramp')
+      // Over the low end of the ramp the box around it is 2 m high, the ramp itself is at the floor
+      near('over its low end the ray goes down to it', game.runtime.raycast([1.8, 10, 0], [0, -1, 0])?.point.y ?? 0, rampTop(1.8, 20), 0.01)
+      game.update(1 / 60)
+      const coin = game.root.getObjectByName('Coin')!
+      // What the collider of the coin touches after this frame
+      const touching = () => [...((game.runtime as unknown as { contacts: Map<THREE.Object3D, Set<THREE.Object3D>> }).contacts.get(coin) ?? [])].map((other) => other.name)
+      equal('a trigger in the empty corner of that box touches nothing', touching(), [])
+      coin.position.set(5, rampTop(5, 20) + 0.2, 0)
+      game.update(1 / 60)
+      equal('on the slope it touches the ramp', touching(), ['Ramp'])
+      coin.position.set(5, rampTop(5, 20) + 0.4, 0)
+      game.update(1 / 60)
+      equal('just over it, nothing again', touching(), [])
+    })
+  })
+}
+
+// ---------- animation ----------
+
+const CLIPS = [
+  defineClip({ name: 'Slide', tracks: [{ property: 'position.x', keys: [{ time: 0, value: 0 }, { time: 1, value: 2 }] }] }),
+  // Counted from where the object is
+  defineClip({ name: 'Open', relative: true, tracks: [{ property: 'rotation.y', keys: [{ time: 0, value: 0 }, { time: 1, value: 90 }] }] }),
+  defineClip({
+    name: 'Parts',
+    length: 2,
+    tracks: [
+      { object: 'Arm/Hand', property: 'position', keys: [{ time: 0, value: [0, 0, 0] }, { time: 1, value: [0, 4, 0] }] },
+      { object: 'Arm', property: 'scale', keys: [{ time: 0, value: 1 }, { time: 1, value: 3 }] },
+      { object: 'Arm', property: 'active', keys: [{ time: 0, value: true }, { time: 1.5, value: false }] },
+      { property: 'rotation', keys: [{ time: 0, value: [0, 0, 0] }, { time: 1, value: [0, 360, 0] }] },
+    ],
+  }),
+  defineClip({
+    name: 'Eased',
+    tracks: [
+      { property: 'position.x', keys: [{ time: 0, value: 0 }, { time: 1, value: 1, ease: 'out' }] },
+      { property: 'position.y', keys: [{ time: 0, value: 0 }, { time: 1, value: 1, ease: 'step' }] },
+    ],
+  }),
+  defineClip({ name: 'Idle', tracks: [{ property: 'position.y', keys: [{ time: 0, value: 0 }] }] }),
+  defineClip({ name: 'Walk', tracks: [{ property: 'position.y', keys: [{ time: 0, value: 1 }] }] }),
+  defineClip({ name: 'Jump', tracks: [{ property: 'position.y', keys: [{ time: 0, value: 2 }, { time: 0.5, value: 3 }] }] }),
+]
+
+const ANIMATOR = defineAnimator({
+  name: 'mover',
+  params: { speed: { type: 'number', default: 0 }, jump: { type: 'boolean', default: false } },
+  start: 'Idle',
+  states: { Idle: { clip: 'Idle' }, Walk: { clip: 'Walk' }, Jump: { clip: 'Jump', loop: 'once' } },
+  transitions: [
+    { to: 'Jump', when: (p) => p.jump },
+    { from: 'Jump', to: 'Idle', after: 'end' },
+    { from: 'Idle', to: 'Walk', when: (p) => p.speed > 0.1 },
+    { from: 'Walk', to: 'Idle', when: (p) => p.speed <= 0.1 },
+  ],
+})
+
+function animationTests(
+  test: (name: string, run: () => void) => void,
+  ok: (what: string, condition: unknown) => void,
+  equal: (what: string, actual: unknown, expected: unknown) => void,
+) {
+  const registry = new Registry()
+  registry.registerExports({ ...CLIPS, ANIMATOR })
+
+  // Plays a scene made of these entities; `run` gets a way to move time and the objects by name
+  const play = (entities: unknown[], run: (step: (seconds: number) => void, object: (name: string) => THREE.Object3D, game: Game) => void) => {
+    const scene = parseScene({ version: 3, entities })
+    const problems = validateScene(scene, registry)
+    if (problems.length > 0) throw new Error(problems.join('; '))
+    const game = new Game(registry, scene)
+    game.sound.enabled = false
+    try {
+      game.resize(320, 240)
+      game.start()
+      const step = (seconds: number) => {
+        for (let i = 0; i < Math.round(seconds * 60); i++) game.update(1 / 60)
+      }
+      run(step, (name) => game.root.getObjectByName(name)!, game)
+    } finally {
+      game.dispose()
+    }
+  }
+  const rounded = (numbers: number[]) => numbers.map((n) => Math.round(n * 100) / 100)
+  const place = (object: THREE.Object3D) => rounded(object.position.toArray())
+  const turn = (object: THREE.Object3D) => rounded([object.rotation.x, object.rotation.y, object.rotation.z].map(THREE.MathUtils.radToDeg))
+  const animation = (clip: string, more: object = {}) => ({ type: 'animation', clip, ...more })
+
+  test('a clip', () => {
+    play([{ name: 'Door', position: [0, 5, 0], components: [animation('Slide')] }], (step, object) => {
+      step(0.5)
+      // Only "position.x" is driven: the height the object was given stays
+      equal('half way', place(object('Door')), [1, 5, 0])
+      step(1)
+      equal('it starts over', place(object('Door')), [1, 5, 0])
+    })
+    play([{ name: 'Door', components: [animation('Slide', { loop: 'once' })] }], (step, object) => {
+      const handle = animationOf(object('Door'), registry)
+      step(0.5)
+      ok('not done yet', !handle.done && handle.playing === 'Slide')
+      step(1)
+      equal('once: it stays at the end', place(object('Door')), [2, 0, 0])
+      ok('and says so', handle.done)
+    })
+    play([{ name: 'Door', components: [animation('Slide', { loop: 'yoyo', speed: 2 })] }], (step, object) => {
+      step(0.75)
+      equal('there and back, twice as fast', place(object('Door')), [1, 0, 0])
+    })
+    play([{ name: 'Door', components: [animation('Slide', { autoplay: false })] }], (step, object) => {
+      step(0.5)
+      equal('waits to be played', place(object('Door')), [0, 0, 0])
+      const handle = animationOf(object('Door'), registry)
+      ok('the clips of the scripts are listed', handle.clips.includes('Slide') && handle.clips.includes('Open'))
+      equal('no such clip', handle.play('Nothing'), false)
+      equal('played by a behavior', handle.play('Slide', { loop: false }), true)
+      step(0.5)
+      equal('goes', place(object('Door')), [1, 0, 0])
+      handle.stop()
+      step(0.5)
+      // What the clip moved is back where it was before the clip
+      equal('stopped', [handle.playing, place(object('Door'))], [null, [0, 0, 0]])
+    })
+    play([{ name: 'Door', active: false, components: [animation('Slide')] }], (step, object) => {
+      step(0.5)
+      equal('an inactive object waits', place(object('Door')), [0, 0, 0])
+      object('Door').visible = true
+      step(0.5)
+      equal('and starts when it is active', place(object('Door')), [1, 0, 0])
+    })
+  })
+
+  test('a relative clip', () => {
+    play([{ name: 'Door', position: [5, 0, 0], rotation: [0, 30, 0], components: [animation('Open', { loop: 'once' })] }], (step, object) => {
+      step(0.5)
+      equal('from the turn it had', turn(object('Door')), [0, 75, 0])
+      step(1)
+      equal('to the end', turn(object('Door')), [0, 120, 0])
+      equal('its place is its own', place(object('Door')), [5, 0, 0])
+    })
+  })
+
+  test('tracks', () => {
+    const entities = [{ name: 'Robot', components: [animation('Parts')], children: [{ name: 'Arm', children: [{ name: 'Hand' }] }] }]
+    play(entities, (step, object) => {
+      step(0.5)
+      equal('an object by its path', place(object('Hand')), [0, 2, 0])
+      equal('one number for an even scale', rounded(object('Arm').scale.toArray()), [2, 2, 2])
+      equal('a turn past 180 degrees', turn(object('Robot')), [0, 180, 0])
+      equal('active before its key', object('Arm').visible, true)
+      step(1.25)
+      equal('and after it', object('Arm').visible, false)
+      equal('the clip is as long as it says: the last keys hold', place(object('Hand')), [0, 4, 0])
+      step(0.5)
+      equal('then it starts over', [object('Arm').visible, place(object('Hand'))], [true, [0, 1, 0]])
+    })
+    const { warn } = console
+    const warnings: string[] = []
+    console.warn = (text: string) => warnings.push(text)
+    try {
+      play([{ name: 'Robot', components: [animation('Parts')] }], (step, object) => {
+        step(0.5)
+        // The tracks that name nothing are left out, the rest plays
+        equal('a missing object does not stop the clip', turn(object('Robot')), [0, 180, 0])
+      })
+    } finally {
+      console.warn = warn
+    }
+    ok('and is told about', warnings.length === 1 && warnings[0].includes('no object "Arm/Hand"'))
+    play([{ name: 'Box', components: [animation('Eased', { loop: 'once' })] }], (step, object) => {
+      step(0.5)
+      // "out" is ahead of an even move half way; "step" has not jumped yet
+      equal('easing', place(object('Box')), [0.75, 0, 0])
+      step(0.6)
+      equal('at the end', place(object('Box')), [1, 1, 0])
+    })
+  })
+
+  test('an animator', () => {
+    play([{ name: 'Hero', components: [{ type: 'animator', animator: 'mover', params: { speed: 0 } }] }], (step, object) => {
+      const hero = object('Hero')
+      step(0.1)
+      const animator = animatorOf(hero)!
+      equal('the start state and its clip', [animator.state, place(hero)], ['Idle', [0, 0, 0]])
+      animator.set('speed', 1)
+      step(0.1)
+      equal('a param leads on', [animator.state, place(hero)], ['Walk', [0, 1, 0]])
+      animator.trigger('jump')
+      step(0.1)
+      equal('from any state', animator.state, 'Jump')
+      equal('the trigger is spent', animator.get('jump'), false)
+      step(0.2)
+      ok('the clip of the state plays', hero.position.y > 2 && hero.position.y < 3)
+      step(0.5)
+      // Jump ends, Idle follows, and the speed that was set leads on to Walk at once
+      equal('after the end of the clip', [animator.state, place(hero)], ['Walk', [0, 1, 0]])
+      animator.set('speed', 0)
+      step(0.1)
+      equal('and back', animator.state, 'Idle')
+      equal('by hand', [animator.go('Jump'), animator.state, animator.go('Nothing')], [true, 'Jump', false])
+      ok('the time in the state', animator.time === 0)
+    })
+    play([{ name: 'Hero', components: [{ type: 'animator', animator: 'mover', params: { speed: 5 } }] }], (step, object) => {
+      step(0.1)
+      equal('the params the component gives', animatorOf(object('Hero'))?.state, 'Walk')
+    })
+  })
+
+  test('the check of clips and animators', () => {
+    equal('those of this test are fine', validateScripts(registry), [])
+    const bad = new Registry()
+    bad.registerExports({
+      a: defineClip({ name: 'A', tracks: [{ property: 'colour' as 'position', keys: [{ time: 0, value: 1 }] }] }),
+      b: defineClip({ name: 'B', tracks: [{ property: 'position', keys: [{ time: 0, value: 1 }] }, { property: 'active', keys: [] }] }),
+      c: defineClip({ name: 'C', tracks: [{ property: 'position.y', keys: [{ time: -1, value: [0, 0, 0], ease: 'bounce' as 'in' }] }] }),
+      d: defineAnimator({ name: 'D', start: 'Go', states: { Idle: { clip: '' } }, transitions: [{ from: 'Run', to: 'Fly' }] }),
+    })
+    const found = validateScripts(bad)
+    for (const text of [
+      'clip "A", track 1: unknown property "colour"', 'clip "B", track 1, key 1: the value of "position" must be [x, y, z]', 'clip "B", track 2: keys must be',
+      'clip "C", track 1, key 1: time must be', 'clip "C", track 1, key 1: ease must be', 'clip "C", track 1, key 1: the value of "position.y" must be a number',
+      'animator "D": start: there is no state "Go"', 'animator "D", state "Idle": clip must be', 'transition 1: to: there is no state "Fly"', 'transition 1: from: there is no state "Run"',
+    ]) ok(`"${text}" in ${JSON.stringify(found)}`, found.some((problem) => problem.includes(text)))
+    equal('nothing else', found.length, 10)
+    const scene = (component: object) => validateScene(parseScene({ version: 3, entities: [{ name: 'It', components: [component] }] }), registry)
+    ok('a scene that names a clip that is not there', scene(animation('Nothing')).some((problem) => problem.includes('there is no clip "Nothing"')))
+    ok('or an animator', scene({ type: 'animator', animator: 'nobody' }).length === 1)
+    ok('or a param it does not have', scene({ type: 'animator', animator: 'mover', params: { height: 1 } }).length === 1)
+  })
 }
 
 // The root of a prefab as it is read from JSON, with the ids of `like` (they are made up at reading)

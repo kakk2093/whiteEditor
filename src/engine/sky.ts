@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { paramDefaults } from "./Registry";
 import type { ParamDef } from "./Registry";
+import { marked } from "./shaderErrors";
 import { uniformDeclaration, uniformNames, uniformValues } from "./shaderParams";
 import type { Params } from "./types";
 
@@ -120,7 +121,7 @@ export class SkyBaker {
             const declarations = Object.entries(params).map(([name, d]) => uniformDeclaration(d, uniformNames(name, d))).join("\n");
             this.material = new THREE.ShaderMaterial({
                 vertexShader: VERTEX,
-                fragmentShader: `${HEADER}\n${declarations}\n${def.shader}\n${FOOTER}`,
+                fragmentShader: `${HEADER}\n${declarations}\n${marked(`sky "${def.name}"`, def.shader)}\n${FOOTER}`,
                 uniforms,
                 side: THREE.BackSide,
                 depthTest: false,

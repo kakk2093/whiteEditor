@@ -275,6 +275,9 @@ export function projectsPlugin(dir = 'projects'): Plugin {
 
         if (!exists) throw new HttpError(404, `Project "${project}" not found`)
 
+        // GET /__api/projects/demo/base -> where the page gets the files of the project from: "/projects/demo/"
+        if (section === 'base' && !item) return `/${toPosix(path.relative(server.config.root, projectDir))}/`
+
         if (section === 'scripts' && !item) {
           const scriptsDir = path.join(projectDir, 'scripts')
           const files = await fs.readdir(scriptsDir, { recursive: true }).catch(() => [] as string[])

@@ -72,6 +72,13 @@ export function buildGame(project: string, scene: string): Promise<{ scene: stri
     return request(`${project}/build?scene=${encodeURIComponent(scene)}`, { method: "POST" });
 }
 
+// The address of the assets/ folder of the project: "/projects/demo/assets/". The server tells where its
+// projects are (the checks of the editor keep theirs elsewhere).
+export async function assetsUrl(project: string): Promise<string> {
+    // A server started before it could tell keeps its projects in the usual place
+    return `${await request(`${project}/base`).catch(() => `/projects/${project}/`)}assets/`;
+}
+
 // Builds the registry of the project: imports every file from scripts/ and reads the material assets
 export async function loadRegistry(project: string) {
     const registry = new Registry();
@@ -102,12 +109,13 @@ export async function loadRegistry(project: string) {
     // A project without scripts of its own: all of them were the shared ones
     if (shared && own.length === 0) registry.markShared();
 
+    const assets = await assetsUrl(project);
     // The time in the address gets an image that was edited past the cache of the browser
-    registry.setTextures(`/projects/${project}/assets/`, await request(`${project}/assets`), `?t=${Date.now()}`);
-    registry.setFonts(`/projects/${project}/assets/`, await request(`${project}/assets?kind=font`), `?t=${Date.now()}`);
-    registry.setSounds(`/projects/${project}/assets/`, await request(`${project}/assets?kind=sound`), `?t=${Date.now()}`);
+    registry.setTextures(assets, await request(`${project}/assets`), `?t=${Date.now()}`);
+    registry.setFonts(assets, await request(`${project}/assets?kind=font`), `?t=${Date.now()}`);
+    registry.setSounds(assets, await request(`${project}/assets?kind=sound`), `?t=${Date.now()}`);
     // No time in the address: a .gltf names its other files next to itself, and they are asked for without one
-    registry.setModelFiles(`/projects/${project}/assets/`, await request(`${project}/assets?kind=gltf`));
+    registry.setModelFiles(assets, await request(`${project}/assets?kind=gltf`));
     try {
         registry.setSettings(parseSettings(await request(`${project}/settings`)));
     } catch (e) {

@@ -8,6 +8,7 @@ import { DEFAULT_LAYER } from "./settings";
 import type { ParamDef, Registry } from "./Registry";
 import { MAX_COLORS } from "./shaderParams";
 import type { ComponentData, EntityData, ParamValue, PrefabData, SceneData } from "./types";
+import { CLIP_PROPERTIES } from "./animation";
 
 function checkValue(def: ParamDef, value: unknown, registry: Registry): string | null {
     switch (def.type) {
@@ -41,6 +42,7 @@ function checkValue(def: ParamDef, value: unknown, registry: Registry): string |
                 if (value === DEFAULT_LAYER) return null;
                 return `there is no layer "${value}" in project.json (layers: ${[DEFAULT_LAYER, ...registry.settings.layers].join(", ")})`;
             }
+            if (def.kind === "clip") return `there is no clip "${value}" in the scripts (clips: ${registry.assetNames("clip").join(", ") || "none"})`;
             if (def.kind === "font") return `there is no font "${value}" in assets/ (fonts: ${registry.fontNames().join(", ") || "none"})`;
             if (def.kind === "gltf") return `there is no model "${value}" in assets/ (models: ${registry.modelFileNames().join(", ") || "none"})`;
             if (def.kind === "sound") return `there is no sound "${value}" in assets/ (sounds: ${registry.soundNames().join(", ") || "none"})`;
@@ -386,5 +388,68 @@ export function validateScene(data: SceneData, registry: Registry): string[] {
     registry.setObjects(entityNames(data.entities, registry));
     const ids = new Set<string>();
     for (const entity of data.entities) checkEntity(entity, "", registry, ids, problems);
+    return problems;
+}
+
+// Problems of what the scripts define that show without a scene: the clips and the animators
+export function validateScripts(registry: Registry): string[] {
+    const problems: string[] = [];
+    const eases = ["linear", "in", "out", "inOut", "step"];
+    for (const clip of registry.clips()) {
+        const at = `clip "${clip.name}"`;
+        if (clip.length !== undefined && !(typeof clip.length === "number" && clip.length > 0)) problems.push(`${at}: length must be a number of seconds above zero`);
+        if (!Array.isArray(clip.tracks) || clip.tracks.length === 0) {
+            problems.push(`${at}: tracks must be a list with at least one track: { property: "position", keys: [...] }`);
+            continue;
+        }
+        clip.tracks.forEach((track, i) => {
+            const where = `${at}, track ${i + 1}${track?.object ? ` ("${track.object}")` : ""}`;
+            if (typeof track !== "object" || track === null) return problems.push(`${where}: must be an object: { property: "position", keys: [...] }`);
+            if (track.object !== undefined && typeof track.object !== "string") problems.push(`${where}: object must be a path of names, like "Arm/Hand"`);
+            if (!(CLIP_PROPERTIES as readonly string[]).includes(track.property)) {
+                return problems.push(`${where}: unknown property "${track.property}" (known: ${CLIP_PROPERTIES.join(", ")})`);
+            }
+            if (!Array.isArray(track.keys) || track.keys.length === 0) return problems.push(`${where}: keys must be a list with at least one key: { time: 0, value: ... }`);
+            const whole = !track.property.includes(".") && track.property !== "active";
+            track.keys.forEach((key, n) => {
+                const here = `${where}, key ${n + 1}`;
+                if (typeof key !== "object" || key === null) return problems.push(`${here}: must be an object: { time: 0, value: ... }`);
+                if (typeof key.time !== "number" || Number.isNaN(key.time) || key.time < 0) problems.push(`${here}: time must be a number of seconds, zero or more`);
+                if (key.ease !== undefined && !eases.includes(key.ease)) problems.push(`${here}: ease must be one of: ${eases.join(", ")}`);
+                if (track.property === "active") {
+                    if (typeof key.value !== "boolean") problems.push(`${here}: the value of "active" must be true or false`);
+                } else if (whole) {
+                    // One number for the whole "scale" is an even size
+                    if (!isVec3(key.value) && !(track.property === "scale" && typeof key.value === "number")) {
+                        problems.push(`${here}: the value of "${track.property}" must be [x, y, z]${track.property === "scale" ? " or one number" : ` (for one axis the property is "${track.property}.y")`}`);
+                    }
+                } else if (typeof key.value !== "number" || Number.isNaN(key.value)) {
+                    problems.push(`${here}: the value of "${track.property}" must be a number`);
+                }
+            });
+        });
+    }
+    for (const animator of registry.animators()) {
+        const at = `animator "${animator.name}"`;
+        const states = Object.keys(animator.states ?? {});
+        if (states.length === 0) {
+            problems.push(`${at}: states must name at least one state: { Idle: { clip: "Idle" } }`);
+            continue;
+        }
+        if (!states.includes(animator.start)) problems.push(`${at}: start: there is no state "${animator.start}" (states: ${states.join(", ")})`);
+        for (const [name, state] of Object.entries(animator.states)) {
+            if (typeof state?.clip !== "string" || !state.clip) problems.push(`${at}, state "${name}": clip must be the name of a clip`);
+        }
+        (animator.transitions ?? []).forEach((transition, i) => {
+            const where = `${at}, transition ${i + 1}`;
+            if (!states.includes(transition.to)) problems.push(`${where}: to: there is no state "${transition.to}" (states: ${states.join(", ")})`);
+            const from = transition.from === undefined ? [] : Array.isArray(transition.from) ? transition.from : [transition.from];
+            for (const name of from) {
+                if (name !== "*" && !states.includes(name)) problems.push(`${where}: from: there is no state "${name}" (states: ${states.join(", ")})`);
+            }
+            if (transition.after !== undefined && transition.after !== "end" && typeof transition.after !== "number") problems.push(`${where}: after must be a number of seconds or "end"`);
+            if (transition.when !== undefined && typeof transition.when !== "function") problems.push(`${where}: when must be a function: (params) => params.speed > 0`);
+        });
+    }
     return problems;
 }

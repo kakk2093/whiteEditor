@@ -9,12 +9,11 @@
 // WebGL needs a browser, so a headless Chrome or Edge is started for a moment (set WHITE_BROWSER to the
 // path of another one). A small Vite server gives it the engine, the project scripts and the scene; the
 // page draws one picture with the engine's renderStill() and sends it back.
-import { spawn } from 'node:child_process'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createServer } from 'vite'
+import { findBrowser, openPage } from './browser.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -116,22 +115,6 @@ const out = path.resolve(flags.out ?? path.join(projectDir, 'renders', `${scene}
 
 // ---------- the browser ----------
 
-function findBrowser() {
-  const candidates = [
-    process.env.WHITE_BROWSER,
-    'C:/Program Files/Google/Chrome/Application/chrome.exe',
-    'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
-    'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
-    'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-    '/usr/bin/google-chrome',
-    '/usr/bin/chromium',
-    '/usr/bin/chromium-browser',
-    '/usr/bin/microsoft-edge',
-  ]
-  return candidates.find((file) => file && fs.existsSync(file))
-}
 const browser = findBrowser()
 if (!browser) fail('No Chrome or Edge found. Set WHITE_BROWSER to the path of a Chromium-based browser.', 1)
 
@@ -257,32 +240,18 @@ const server = await createServer({
   ],
 })
 
-let child
-let profile
+let page
 let timeout
 try {
   await server.listen()
   const { port } = server.httpServer.address()
 
-  // A profile of its own, so that it is a separate browser and not a tab of the one the user has open
-  profile = fs.mkdtempSync(path.join(os.tmpdir(), 'white-render-'))
-  child = spawn(browser, [
-    '--headless=new',
-    `--user-data-dir=${profile}`,
-    '--no-first-run',
-    '--no-default-browser-check',
-    '--disable-extensions',
-    '--mute-audio',
-    '--ignore-gpu-blocklist',
-    '--enable-unsafe-swiftshader',
-    `--window-size=${options.width ?? 960},${options.height ?? 540}`,
-    `http://127.0.0.1:${port}/__render.html`,
-  ], { stdio: 'ignore' })
+  page = openPage(browser, `http://127.0.0.1:${port}/__render.html`, { width: options.width, height: options.height })
 
   const started = Date.now()
   const result = await Promise.race([
     finished,
-    new Promise((resolve) => child.once('exit', (code) => resolve({ error: `the browser closed before the picture was ready (exit code ${code})` }))),
+    page.exited.then((code) => ({ error: `the browser closed before the picture was ready (exit code ${code})` })),
     new Promise((resolve) => { timeout = setTimeout(() => resolve({ error: 'no picture after 60 seconds' }), 60000) }),
   ])
 
@@ -312,8 +281,6 @@ try {
   process.exitCode = 1
 } finally {
   clearTimeout(timeout)
-  child?.kill()
+  page?.close()
   await server.close()
-  // The browser lets go of its files a moment after it is killed
-  if (profile) setTimeout(() => fs.rm(profile, { recursive: true, force: true }, () => {}), 500)
 }

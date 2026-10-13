@@ -1,5 +1,5 @@
 import {
-    applyToPrefab, FONT_FILE, MODEL_FILE, parsePrefab, parseScene, renameLayerIn, resolveLook, SHARED_PROJECT, SOUND_FILE, validateLook, validateMaterial, validatePrefab, validateScene
+    applyToPrefab, FONT_FILE, MODEL_FILE, parsePrefab, parseScene, renameLayerIn, resolveLook, SHARED_PROJECT, SOUND_FILE, validateLook, validateMaterial, validatePrefab, validateScene, validateScripts
 } from "../../engine";
 import type { LookData, MaterialData, ProjectSettings, SceneData } from "../../engine";
 import { renameInEntities, renameInScene } from "./references";
@@ -17,6 +17,7 @@ import {
     loadRegistry,
     readAsset,
     readFolders,
+    assetsUrl,
     revealFile,
     uploadImage,
     writeAsset,
@@ -256,6 +257,7 @@ export async function validateProject() {
             }
         }
     };
+    for (const problem of validateScripts(registry)) problems.push(`scripts: ${problem}`);
     await each("materials", (_, data) => validateMaterial(data, registry));
     await each("looks", (name, data) => validateLook(name, data as LookData, registry));
     await each("prefabs", (name, data) => validatePrefab(name, parsePrefab(data), registry));
@@ -599,7 +601,7 @@ async function renamed(what: string, names: () => string[], from: string, to: st
 
 // The file of assets/ as it is on disk; null if there is none
 async function assetFile(project: string, name: string): Promise<Blob | null> {
-    const response = await fetch(`/projects/${project}/assets/${name}?t=${Date.now()}`).catch(() => null);
+    const response = await fetch(`${await assetsUrl(project)}${name}?t=${Date.now()}`).catch(() => null);
     // A missing file is answered with the page of the editor, not with an error
     return response?.ok && !(response.headers.get("content-type") ?? "").includes("text/html") ? response.blob() : null;
 }

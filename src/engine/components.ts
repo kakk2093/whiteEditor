@@ -35,6 +35,9 @@ export interface ComponentDef {
     source?: ComponentSource;
     // An entity may have several, one per source name; every other type is allowed once
     multiple?: boolean;
+    // What a field of type "string" can be picked from, if that is known: the Inspector then shows a list.
+    // null: not known (yet); `loaded` is called when it becomes known.
+    choices?: (field: string, component: ComponentData, registry: Registry, loaded: () => void) => string[] | null;
 }
 
 function createGeometry(shape: string): THREE.BufferGeometry {
@@ -88,7 +91,7 @@ function createLight(f: Params): THREE.Light {
 }
 
 // An object that draws nothing and only carries the fields of its component, for whoever looks for them
-function marker(key: string, fields: Params) {
+function marker(key: string, fields: object) {
     const object = new THREE.Object3D();
     object.userData[key] = fields;
     return object;
@@ -480,6 +483,37 @@ export const componentDefs: Record<string, ComponentDef> = {
             speed: { type: "number", default: 1, min: 0, step: 0.1 },
         },
         create: (f, registry) => createModelFile(f as unknown as ModelFileFields, f.file ? registry.loadModelFile(f.file as string) : null),
+        // The clips of the file, once it is loaded
+        choices: (field, component, registry, loaded) => (field === "animation" && component.file ? registry.modelClipNames(component.file as string, loaded) : null),
+    },
+    // Plays a clip of the scripts (defineClip) on the entity; see animation.ts
+    animation: {
+        label: "Animation",
+        fields: {
+            clip: { type: "asset", kind: "clip", default: "" },
+            // Starts with the scene (or when the entity appears); off, it waits for self.animation().play()
+            autoplay: { type: "boolean", default: true },
+            // After its end the clip starts over, stops on its last pose, or goes there and back
+            loop: { type: "select", default: "repeat", options: ["repeat", "once", "yoyo"] },
+            speed: { type: "number", default: 1, min: 0, step: 0.1 },
+        },
+        create: (f) => marker("animation", f),
+    },
+    // The states of the entity and their clips, from a project script (defineAnimator); see animation.ts
+    animator: {
+        label: "Animator",
+        fields: {},
+        // The values its params start with
+        create: (_fields, registry, component) => marker("animator", {
+            animator: component.animator as string,
+            params: { ...paramDefaults(registry.getAnimator(component.animator as string)?.params ?? {}), ...(component.params as Params | undefined) },
+        }),
+        source: {
+            key: "animator",
+            what: "animator",
+            get: (registry, name) => registry.getAnimator(name),
+            list: (registry) => registry.animators(),
+        },
     },
     // A model built by a project script (defineModel)
     model: {

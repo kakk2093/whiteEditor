@@ -146,6 +146,9 @@ try {
     for (const problem of engine.validatePrefab(name, prefab, registry)) problems.push(`prefabs/${name}.json: ${problem}`)
   }
 
+  // What the scripts define that can be wrong by itself: the clips and the animators
+  for (const problem of engine.validateScripts(registry)) problems.push(`scripts: ${problem}`)
+
   // What a browser has and this command has not: a scene (or a behavior) that needs it is not a mistake
   const needsBrowser = (message) => /\b(document|window|navigator|HTMLElement|Image|AudioContext|localStorage|requestAnimationFrame) is not defined/.test(message)
 
@@ -189,7 +192,7 @@ try {
   if (fs.existsSync(foldersFile)) {
     try {
       const folders = JSON.parse(fs.readFileSync(foldersFile, 'utf-8'))
-      const sections = ['scenes', 'materials', 'prefabs', 'looks', 'textures', 'sounds']
+      const sections = ['scenes', 'materials', 'prefabs', 'looks', 'textures', 'sounds', 'models']
       if (!folders || typeof folders !== 'object' || Array.isArray(folders)) throw new Error('must be an object')
       for (const [section, tree] of Object.entries(folders)) {
         if (!sections.includes(section)) {
