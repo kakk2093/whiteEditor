@@ -4,14 +4,14 @@ import { builtinEffects, builtinSurfaces, defaultMaterialData, MODEL_FILE, SHARE
 import {
     addToLook, setSceneSky, createFolder, createLook, createMaterial, createPrefab, deleteFolder, deleteLook, shareLook, deleteMaterial, deletePrefab,
     applySound, copyText, deleteScene, deleteTexture, duplicateAsset, moveAssetToFolder, newScene, openPrefab, openScene, renameAsset, renameFolder,
-    renameScene, showInExplorer, uploadFiles
+    renameScene, showInExplorer, uploadFiles, addTerrainToScene, createBiome, createTerrainAsset, deleteGround, duplicateGround, renameGround, setTerrainGenerator
 } from "./core/actions";
 import { confirmAt, openContextMenu } from "./contextMenu";
 import type { ContextItem } from "./contextMenu";
 import { ENTITY_DRAG_TYPE, getDraggedAsset, instantiateModel, instantiatePrefab, setDraggedAsset } from "./core/dnd";
 import { folderName, folderPaths, parentFolder, placement } from "./core/folders";
 import type { FolderSection } from "./core/folders";
-import { sceneStore } from "./core/SceneStore";
+import { getComponent, sceneStore } from "./core/SceneStore";
 import type { AssetRef } from "./core/SceneStore";
 import { useSceneStore } from "./core/useSceneStore";
 import type { Layout } from "./layout";
@@ -22,7 +22,7 @@ import type { IconName } from "./ui";
 type Kind = AssetRef["kind"];
 
 // A kind of assets, a row at the top of the tree; "script" gathers what the scripts define besides models
-type TabKey = "scene" | "material" | "texture" | "sound" | "prefab" | "model" | "look" | "script";
+type TabKey = "scene" | "material" | "texture" | "sound" | "prefab" | "model" | "look" | "terrain" | "biome" | "script";
 
 const TABS: { key: TabKey; title: string; icon: IconName; hint: string }[] = [
     { key: "scene", title: "Scenes", icon: "scene", hint: "Double-click a scene to open it · right-click for more" },
@@ -32,6 +32,8 @@ const TABS: { key: TabKey; title: string; icon: IconName; hint: string }[] = [
     { key: "prefab", title: "Prefabs", icon: "prefab", hint: "Drag into the scene · double-click to edit · drop an object here to make a prefab" },
     { key: "model", title: "Models", icon: "script", hint: "Model files of assets/ (glTF: .glb, .gltf) and models built by code in scripts/ · drop model files here to add · drag or double-click to add to the scene" },
     { key: "look", title: "Looks", icon: "look", hint: "Render styles · click to edit · double-click or drag into the scene to use" },
+    { key: "terrain", title: "Terrains", icon: "cube", hint: "The grounds of the worlds: grids of heights with their paint and props · double-click to add to the scene · the brush is on the Terrain component of an object (Edit)" },
+    { key: "biome", title: "Biomes", icon: "look", hint: "Kinds of land for the generator of the terrains: shape, paint, props · click to edit · double-click to give it to the selected terrain" },
     { key: "script", title: "Scripts", icon: "script", hint: "Behaviors, effects, surfaces, skies, clips and animators · click to see what they are · drag a behavior onto an object · double-click a clip or an animator to give it to the selected object" }
 ];
 
@@ -49,6 +51,8 @@ const ICONS: Record<Kind, IconName> = {
     surface: "cube",
     clip: "script",
     animator: "script",
+    terrain: "cube",
+    biome: "look",
 };
 
 // The tabs whose assets can be laid out in folders, and the name of each in folders.json.
@@ -70,7 +74,7 @@ type Naming =
     | { what: "scene"; into?: string }
     | { what: "folder"; parent: string | null; from?: string }
     // Another name for an asset
-    | { what: "rename"; kind: "scene" | "material" | "look" | "prefab"; from: string };
+    | { what: "rename"; kind: "scene" | "material" | "look" | "prefab" | "terrain" | "biome"; from: string };
 
 // Where the files of each kind are, inside the project folder
 const DIRS: Record<TabKey, string> = {
@@ -78,6 +82,8 @@ const DIRS: Record<TabKey, string> = {
     material: "materials",
     prefab: "prefabs",
     look: "looks",
+    terrain: "terrains",
+    biome: "biomes",
     texture: "assets",
     sound: "assets",
     model: "scripts",
@@ -87,7 +93,7 @@ const DIRS: Record<TabKey, string> = {
 // The file of an asset inside the project folder. What scripts define has no file of its own: for it this is
 // the scripts folder; null for what is built into the engine.
 function fileOf(item: Item): string | null {
-    if (item.kind === "scene" || item.kind === "material" || item.kind === "prefab" || item.kind === "look") return `${DIRS[item.kind]}/${item.name}.json`;
+    if (item.kind === "scene" || item.kind === "material" || item.kind === "prefab" || item.kind === "look" || item.kind === "terrain" || item.kind === "biome") return `${DIRS[item.kind]}/${item.name}.json`;
     if (item.kind === "texture" || item.kind === "sound" || (item.kind === "model" && MODEL_FILE.test(item.name))) return `assets/${item.name}`;
     return item.note?.includes("built-in") ? null : "scripts";
 }
@@ -144,6 +150,13 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
         }
         // A look of the project "shared" is every project's; an edit here makes a copy of it for this project
         if (key === "look") return registry.lookNames().map((name) => ({ kind: "look", name, label: name, ...(registry.isSharedLook(name) ? { note: "shared" } : {}) }));
+        if (key === "terrain") {
+            return registry.terrainNames().map((name): Item => {
+                const data = registry.getTerrain(name)!;
+                return { kind: "terrain", name, label: name, note: `${(data.heights[0].length - 1) * data.cell} x ${(data.heights.length - 1) * data.cell} m` };
+            });
+        }
+        if (key === "biome") return registry.biomeNames().map((name): Item => ({ kind: "biome", name, label: name, color: registry.getBiome(name)?.ground ?? "#6f9a4a" }));
         if (key === "texture") return registry.textureNames().map((name) => ({ kind: "texture", name, label: name, image: registry.textureUrl(name) }));
         if (key === "sound") return registry.soundNames().map((name) => ({ kind: "sound", name, label: name }));
         if (key === "script") {
@@ -227,6 +240,8 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
         if (tabKey === "scene") menu.push({ label: "New Scene…", icon: "plus", run: () => setNaming({ what: "scene", into: into ?? undefined }) });
         if (tabKey === "material") menu.push({ label: "New Material", icon: "plus", run: () => createIn(into, createMaterial) });
         if (tabKey === "look") menu.push({ label: "New Look", icon: "plus", run: () => createIn(into, createLook) });
+        if (tabKey === "terrain") menu.push({ label: "New Terrain", icon: "plus", run: () => { createTerrainAsset(); } });
+        if (tabKey === "biome") menu.push({ label: "New Biome", icon: "plus", run: () => { createBiome(); } });
         if (section) menu.push({ label: "New Folder…", icon: "folder", run: () => setNaming({ what: "folder", parent: into }) });
         return menu;
     };
@@ -250,8 +265,23 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
         preview.play().catch(() => store.update({ status: `${name} cannot be played` }));
     };
 
+    // A biome becomes the one the terrain of the selected object is generated by
+    const giveBiome = (name: string, objects = store.selectedIds) => {
+        const entity = objects.length === 1 ? store.findEntity(objects[0]) : null;
+        const terrain = entity && (getComponent(entity, "terrain")?.terrain as string | undefined);
+        if (!entity || !terrain || !registry.getTerrain(terrain)) {
+            store.update({ status: "Select an object with a Terrain to give the biome to" });
+            return;
+        }
+        setTerrainGenerator(terrain, { biome: name });
+        store.select(entity.id);
+        store.update({ status: `${terrain} is generated by the biome ${name} from now on: press Generate, or lay it with the Generate brush` });
+    };
+
     // What a double click does
     const activate = (item: Item) => {
+        if (item.kind === "terrain") addTerrainToScene(item.name);
+        if (item.kind === "biome") giveBiome(item.name);
         if (item.kind === "scene") openScene(item.name);
         if (item.kind === "prefab") openPrefab(item.name);
         if (item.kind === "model") instantiateModel(item.name);
@@ -296,6 +326,14 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
                 menu.push({ label: "Move to Shared", icon: "folder", run: () => shareLook(name) });
             }
             menu.push({ label: "Delete", icon: "trash", danger: true, run: () => deleteLook(name) });
+        } else if (kind === "terrain") {
+            menu.push({ label: "Add to Scene", icon: "plus", run: () => addTerrainToScene(name) });
+            menu.push({ label: "Duplicate", icon: "copy", run: () => duplicateGround("terrain", name) });
+            menu.push({ label: "Delete", icon: "trash", danger: true, run: () => deleteGround("terrain", name) });
+        } else if (kind === "biome") {
+            menu.push({ label: "Use for the Selected Terrain", icon: "plus", run: () => giveBiome(name, objects) });
+            menu.push({ label: "Duplicate", icon: "copy", run: () => duplicateGround("biome", name) });
+            menu.push({ label: "Delete", icon: "trash", danger: true, run: () => deleteGround("biome", name) });
         } else if (kind === "texture") {
             menu.push({ label: "Delete…", icon: "trash", danger: true, run: sure(() => deleteTexture(name)) });
         } else if (kind === "sound") {
@@ -330,14 +368,14 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
                 }
             });
         }
-        if (kind === "material" || kind === "prefab" || kind === "behavior" || kind === "model" || kind === "clip" || kind === "animator") {
+        if (kind === "material" || kind === "prefab" || kind === "behavior" || kind === "model" || kind === "clip" || kind === "animator" || kind === "terrain") {
             const users = store.usersOf(kind, name);
             more.push({
                 label: users.length > 0 ? `Select in Scene (${users.length})` : "Not Used in This Scene",
                 run: () => (users.length > 0 ? store.selectMany(users.map((entity) => entity.id)) : store.update({ status: `Nothing in this scene uses ${name}` }))
             });
         }
-        if (kind === "scene" || kind === "material" || kind === "look" || kind === "prefab") {
+        if (kind === "scene" || kind === "material" || kind === "look" || kind === "prefab" || kind === "terrain" || kind === "biome") {
             more.push({ label: "Rename…", run: () => setNaming({ what: "rename", kind, from: name }) });
         }
         const file = fileOf(item);
@@ -398,7 +436,7 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
                 key={`${kind}:${item.name}`}
                 className={`tile ${selected ? "selected" : ""} ${current ? "current" : ""}`}
                 title={current ? `${item.label} (${kind === "look" || kind === "sky" ? "used by the scene" : "open"})` : item.label}
-                draggable={kind !== "scene" && kind !== "effect" && kind !== "surface" && kind !== "sky" && kind !== "clip" && kind !== "animator"}
+                draggable={kind !== "scene" && kind !== "effect" && kind !== "surface" && kind !== "sky" && kind !== "clip" && kind !== "animator" && kind !== "terrain" && kind !== "biome"}
                 onDragStart={(e) => setDraggedAsset(e, { kind, name: item.name })}
                 onClick={() => store.selectAsset({ kind, name: item.name })}
                 onDoubleClick={() => activate(item)}
@@ -597,6 +635,16 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
                             No prefabs yet. Select an object and press <b>Create Prefab</b> in the Inspector, or drag it here from the Hierarchy.
                         </div>
                     )}
+                    {all.length === 0 && tabKey === "terrain" && (
+                        <div className="empty">
+                            No terrains yet. Press <b>+</b> above, or add a <b>Terrain</b> component to an object and press New Terrain there.
+                        </div>
+                    )}
+                    {all.length === 0 && tabKey === "biome" && (
+                        <div className="empty">
+                            No biomes yet. Press <b>+</b> above: a biome is a kind of land (its shape, paint and props) that the Generate of a terrain makes.
+                        </div>
+                    )}
                     {all.length === 0 && tabKey === "model" && (
                         <div className="empty">
                             No models. Drop a <b>.glb</b> file here, or export <b>defineModel(...)</b> from a file in the project's scripts/ folder.
@@ -630,6 +678,7 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
                         setNaming(null);
                         // Everything that refers to the asset by name is rewritten with it
                         if (naming.kind === "scene") renameScene(naming.from, name);
+                        else if (naming.kind === "terrain" || naming.kind === "biome") renameGround(naming.kind, naming.from, name);
                         else renameAsset(naming.kind, naming.from, name);
                     }}
                 />

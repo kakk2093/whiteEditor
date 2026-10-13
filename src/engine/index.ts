@@ -21,6 +21,8 @@ export * from "./clipAction";
 export * from "./animation";
 export * from "./terrain";
 export * from "./generate";
+export * from "./scatter";
+export * from "./water";
 export * from "./physics";
 export * from "./ui";
 export * from "./runtime";

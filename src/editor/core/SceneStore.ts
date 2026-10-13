@@ -47,7 +47,8 @@ export type SettingsPage = "project" | "scene" | "editor" | "controls";
 export interface AssetRef {
     // The last four are not files: what the scripts of the project (and the engine) define
     // "texture" is an image file of assets/, named with its extension; "sound" an audio file of it
-    kind: "material" | "model" | "scene" | "prefab" | "look" | "texture" | "sound" | "behavior" | "effect" | "surface" | "sky" | "clip" | "animator";
+    // "terrain" is a ground (terrains/), "biome" a kind of land for its generator (biomes/)
+    kind: "material" | "model" | "scene" | "prefab" | "look" | "texture" | "sound" | "behavior" | "effect" | "surface" | "sky" | "clip" | "animator" | "terrain" | "biome";
     name: string;
 }
 
@@ -115,20 +116,26 @@ interface Target {
 }
 
 // The brush of "Edit Terrain". `strength`: meters per second for raise and lower, how fast the others work.
-// "generate" makes the ground under the brush what the generator of the terrain gives there.
+// "generate" makes the ground under the brush what the generator of the terrain gives there. "plant" strews
+// copies of `prefab` (no nearer to each other than `spacing` meters, from `sizeMin` to `sizeMax` times its
+// size), "erase" takes the props away.
 // `color`: the place in the palette of the terrain that "paint" puts down.
 export interface TerrainBrushSettings {
-    tool: "raise" | "lower" | "smooth" | "flatten" | "paint" | "generate";
+    tool: "raise" | "lower" | "smooth" | "flatten" | "paint" | "generate" | "plant" | "erase";
     radius: number;
     strength: number;
     color: number;
+    prefab: string;
+    spacing: number;
+    sizeMin: number;
+    sizeMax: number;
 }
 
 // A change of a material or a look, as a step of undo: what the asset was and what it became.
 // null means there was (or is) no such asset: the step created or deleted it.
 export interface AssetStep {
     // "folders" and "settings" are one file each (folders.json, project.json): their name is the same word
-    section: "materials" | "looks" | "scenes" | "prefabs" | "terrains" | "folders" | "settings";
+    section: "materials" | "looks" | "scenes" | "prefabs" | "terrains" | "biomes" | "folders" | "settings";
     name: string;
     before: unknown | null;
     after: unknown | null;
@@ -1586,7 +1593,7 @@ class SceneStore {
     // instead of turning the camera (see terrainBrush.ts)
     terrainEdit = false;
 
-    brush: TerrainBrushSettings = { tool: "raise", radius: 4, strength: 4, color: 0 };
+    brush: TerrainBrushSettings = { tool: "raise", radius: 4, strength: 4, color: 0, prefab: "", spacing: 3, sizeMin: 0.8, sizeMax: 1.2 };
 
     // The terrain of the selected entity: the name of its asset ("" for none) and its mesh; null if the
     // selected entity has no Terrain component of its own
@@ -1817,6 +1824,7 @@ class SceneStore {
             const uses = kind === "prefab"
                 ? entity.prefab === name
                 : entity.components.some((c) => (kind === "material" && c.type === "mesh" && c.material === name)
+                    || (kind === "terrain" && c.type === "terrain" && c.terrain === name)
                     || (kind === "sound" && c.type === "sound" && c.sound === name)
                     || (kind === "behavior" && c.type === "script" && c.script === name)
                     || (kind === "clip" && c.type === "animation" && c.clip === name)

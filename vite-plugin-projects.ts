@@ -15,7 +15,7 @@ import { buildGame } from './tools/buildGame'
 //   POST   /__api/projects/demo/build?scene=main -> builds the game into build/, see tools/buildGame.ts
 //   GET    /__game/demo/                         -> the built game
 //   DELETE /__api/projects/demo/scenes/main      -> removes scenes/main.json
-//   ...and the same for the other JSON asset folders: materials, prefabs, looks, terrains
+//   ...and the same for the other JSON asset folders: materials, prefabs, looks, terrains, biomes
 //   GET    /__api/projects/demo/scripts          -> ["/projects/demo/scripts/models.ts", ...]
 // Script changes are sent to the editor as the "white:scripts-changed" event instead of a page reload.
 // JSON assets changed by anything but this API (VS Code, an AI agent) are sent as "white:asset-changed".
@@ -26,7 +26,7 @@ const NAME = /^[\w-]+$/
 const IMAGE_NAME = /^[\w-]+\.(png|jpe?g|webp|mp3|ogg|wav|ttf|otf|woff2?|glb|gltf|bin)$/i
 
 // Folders whose files are JSON assets addressed by name
-const JSON_SECTIONS = ['scenes', 'materials', 'prefabs', 'looks', 'terrains']
+const JSON_SECTIONS = ['scenes', 'materials', 'prefabs', 'looks', 'terrains', 'biomes']
 
 const TSCONFIG = `{
   "compilerOptions": {

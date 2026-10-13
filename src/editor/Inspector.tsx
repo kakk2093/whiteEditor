@@ -19,7 +19,7 @@ import { useSceneStore } from "./core/useSceneStore";
 import { entityIcon } from "./entityIcon";
 import { humanize } from "./humanize";
 import { Icon, Menu } from "./ui";
-import { TerrainTools } from "./TerrainTools";
+import { BiomeEditor, TerrainTools } from "./TerrainTools";
 import type { MenuSection } from "./ui";
 
 const TRANSFORMS: { property: TransformProperty; title: string }[] = [
@@ -1087,6 +1087,53 @@ function AssetInspector({ asset }: { asset: AssetRef }) {
     const { registry } = store;
 
     if (asset.kind === "look") return <LookInspector name={asset.name} />;
+    if (asset.kind === "biome") {
+        const biome = registry.getBiome(asset.name);
+        const users = registry.terrainNames().filter((name) => registry.getTerrain(name)?.generator?.biome === asset.name || registry.getTerrain(name)?.biomes?.includes(asset.name));
+        if (!biome) return <div className="empty">This biome is gone.</div>;
+        return (
+            <>
+                <div className="section">
+                    <div className="section-body">
+                        <BiomeEditor name={asset.name} biome={biome} />
+                    </div>
+                </div>
+                <div className="note">
+                    A kind of land for the generator of the terrains. A terrain names it in its Generate (or double-click it
+                    here with the terrain selected); the ground changes when it is generated again.
+                </div>
+                <Section title="Terrains that use it">
+                    <div className="muted">{users.length > 0 ? users.join(", ") : "No terrain uses it."}</div>
+                </Section>
+            </>
+        );
+    }
+    if (asset.kind === "terrain") {
+        const data = registry.getTerrain(asset.name);
+        const users = sceneStore.usersOf("terrain", asset.name).map((entity) => entity.name);
+        if (!data) return <div className="empty">This terrain is gone.</div>;
+        const props = (data.scatter ?? []).reduce((sum, layer) => sum + layer.items.length, 0);
+        return (
+            <>
+                <div className="section">
+                    <div className="section-header">{asset.name}</div>
+                    <div className="section-body">
+                        <div className="field"><label>Size</label><div className="control">{(data.heights[0].length - 1) * data.cell} x {(data.heights.length - 1) * data.cell} m</div></div>
+                        <div className="field"><label>Heights</label><div className="control">{data.heights[0].length} x {data.heights.length}, every {data.cell} m</div></div>
+                        <div className="field"><label>Props</label><div className="control">{props}{(data.scatter ?? []).map((layer) => `, ${layer.prefab}: ${layer.items.length}`).join("")}</div></div>
+                        <div className="field"><label>Biomes</label><div className="control">{data.biomes?.join(", ") || "none"}</div></div>
+                    </div>
+                </div>
+                <div className="note">
+                    The ground of a world. It is shaped, painted, planted and generated on an object that shows it: add it to
+                    the scene (double-click) and press Edit on its Terrain component.
+                </div>
+                <Section title="Objects of this scene">
+                    <div className="muted">{users.length > 0 ? users.join(", ") : "No object shows it."}</div>
+                </Section>
+            </>
+        );
+    }
     if (asset.kind === "texture") {
         const users = registry.materialNames().filter((name) => registry.getMaterialData(name)?.texture === asset.name);
         return (

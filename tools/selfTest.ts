@@ -8,7 +8,11 @@ import {
 import { Registry } from '../src/engine/Registry'
 import { brushRegion, brushTerrain, cloneTerrain, fillTerrainGeometry, flatTerrain, terrainRange, isPainted, rayTerrain, resizeTerrain, terrainGeometry, terrainHeight, terrainSize, validateTerrain } from '../src/engine/terrain'
 import type { TerrainData } from '../src/engine/terrain'
-import { defaultGenerator, generatedHeight, generateTerrain, generatorOf, noise2D } from '../src/engine/generate'
+import { biomeShares, defaultGenerator, generateByMap, generatedHeight, generateTerrain, generatorOf, noise2D, validateBiome } from '../src/engine/generate'
+import type { BiomeData } from '../src/engine/generate'
+import { createScatter, eraseScatter, plantScatter, scatterColliders, scatterCount, updateScatter } from '../src/engine/scatter'
+import { zoneAt } from '../src/engine/environment'
+import { submergedAt } from '../src/engine/water'
 import { parsePrefab, parseScene } from '../src/engine/types'
 import type { EntityData, EntityOverride } from '../src/engine/types'
 import { validatePrefab, validateScene, validateScripts } from '../src/engine/validate'
@@ -750,6 +754,251 @@ function terrainTests(
     equal('a file with settings', validateTerrain({ ...flatTerrain(2, 1), generator: { seed: 9, paint: false } }), [])
     ok('a setting it does not have', validateTerrain({ ...flatTerrain(2, 1), generator: { hills: 3 } })[0]?.includes('unknown field "hills"'))
     ok('a setting of the wrong kind', validateTerrain({ ...flatTerrain(2, 1), generator: { seed: 'a' } })[0]?.includes('generator.seed'))
+  })
+
+  test('the props of a terrain', () => {
+    // A tree: a trunk with a crown on it, and a collider as thick as the trunk
+    const TREE = {
+      version: 3,
+      root: {
+        name: 'Tree',
+        components: [{ type: 'collider', shape: 'capsule', radius: 0.4, height: 3, centerY: 1.5 }],
+        children: [
+          { name: 'Trunk', position: [0, 1, 0], scale: [0.5, 2, 0.5], components: [{ type: 'mesh', shape: 'cylinder' }] },
+          { name: 'Crown', position: [0, 3, 0], scale: [2, 2, 2], components: [{ type: 'mesh', shape: 'sphere' }] },
+        ],
+      },
+    }
+    const forest = new Registry().setTerrain('Ground', GROUND)
+    forest.setPrefab('Tree', parsePrefab(TREE).root)
+    forest.setPrefab('Bush', parsePrefab({ version: 3, root: { name: 'Bush', components: [{ type: 'mesh', shape: 'sphere' }] } }).root)
+    // Always the same "random" numbers
+    const dice = () => {
+      let seed = 12345
+      return () => {
+        seed = (Math.imul(seed, 1103515245) + 12345) >>> 0
+        return seed / 4294967296
+      }
+    }
+
+    const planted = cloneTerrain(GROUND)
+    const put = plantScatter(planted, 'Tree', -8, 0, 6, 200, { spacing: 2, sizeMin: 0.8, sizeMax: 1.2, random: dice() })
+    const trees = planted.scatter?.[0].items ?? []
+    ok(`planted: as many as fit (${put})`, put > 12 && put < 40 && trees.length === put)
+    ok('all within the brush', trees.every(([x, z]) => Math.hypot(x + 8, z) <= 6.01))
+    ok('no two nearer than the spacing', trees.every((a, i) => trees.every((b, j) => i === j || Math.hypot(a[0] - b[0], a[1] - b[1]) >= 2)))
+    ok('each of its own size and turn', trees.every(([, , turn, size]) => size >= 0.8 && size <= 1.2 && turn >= 0 && turn <= 360) && new Set(trees.map((item) => item[2])).size > 5)
+    equal('a second pass finds no room', plantScatter(planted, 'Tree', -8, 0, 6, 200, { spacing: 2, random: dice() }), 0)
+    equal('off the ground nothing is planted', plantScatter(planted, 'Tree', 200, 0, 6, 50, { random: dice() }), 0)
+    plantScatter(planted, 'Bush', -8, 0, 6, 30, { spacing: 1, random: dice() })
+    equal('another prefab is another list', planted.scatter?.map((layer) => layer.prefab), ['Tree', 'Bush'])
+    equal('a good file', validateTerrain(planted, { prefabs: ['Tree', 'Bush'] }), [])
+    ok('a prefab the project does not have', validateTerrain(planted, { prefabs: ['Tree'] })[0]?.includes('prefab "Bush" does not exist'))
+    ok('a copy that is not four numbers', validateTerrain({ ...GROUND, scatter: [{ prefab: 'Tree', items: [[1, 2, 3]] }] })[0]?.includes('items[0]'))
+    ok('a prefab listed twice', validateTerrain({ ...GROUND, scatter: [{ prefab: 'Tree', items: [] }, { prefab: 'Tree', items: [] }] })[0]?.includes('more than once'))
+    equal('GROUND itself has none', [GROUND.scatter, scatterCount(planted) > put], [undefined, true])
+
+    const bushes = planted.scatter?.[1].items.length ?? 0
+    const gone = eraseScatter(planted, -8, 0, 3, 'Tree')
+    ok(`erased: the trees under the brush (${gone})`, gone > 2 && trees.length - gone === planted.scatter?.[0].items.length)
+    equal('the bushes stay', planted.scatter?.[1].items.length, bushes)
+    eraseScatter(planted, -8, 0, 100)
+    equal('erased: everything', [planted.scatter, scatterCount(planted)], [[], 0])
+
+    // Drawn: every mesh of the prefab once for all its copies, each copy on the ground
+    const drawn: TerrainData = { ...cloneTerrain(GROUND), scatter: [{ prefab: 'Tree', items: [[5, 0, 0, 1], [-5, 3, 90, 2], [100, 0, 0, 1]] }] }
+    const group = createScatter(forest, drawn)
+    const meshes = group.children as THREE.InstancedMesh[]
+    equal('two meshes of the tree, two copies on the ground (the third is off it)', [meshes.length, meshes[0].count, meshes[1].count], [2, 2, 2])
+    const placed = new THREE.Matrix4()
+    const where = (mesh: THREE.InstancedMesh, n: number) => {
+      mesh.getMatrixAt(n, placed)
+      return new THREE.Vector3().setFromMatrixPosition(placed).toArray().map((value) => Math.round(value * 100) / 100)
+    }
+    equal('the trunk of the first stands on the slope', where(meshes[0], 0), [5, 3, 0])
+    equal('the crown of the second, twice the size', where(meshes[1], 1), [-5, 6, 3])
+    // The ground goes up: so do the props
+    const raised = cloneTerrain(drawn)
+    brushTerrain(raised, 'raise', -5, 3, 3, 4)
+    const holder = new THREE.Group().add(group)
+    updateScatter(holder, forest, raised)
+    equal('they go up with the ground', where(meshes[1], 1), [-5, 10, 3])
+    const resized = resizeTerrain(drawn, 8, 8, 1)
+    equal('a smaller ground keeps the props that still stand on it', resized.scatter, undefined)
+    equal('and a bigger one all that stood on it', resizeTerrain(drawn, 60, 60, 1).scatter?.[0].items.length, 2)
+    equal('one collider for a copy on the ground', scatterColliders(forest, drawn).length, 2)
+
+    // In the game: a tree stops what walks, a ray hits it
+    const scene = { version: 3, entities: [{ name: 'Ground', components: [{ type: 'terrain', terrain: 'Woods' }] }, { name: 'Player', position: [-12, 0.6, 0], components: [capsule] }] }
+    forest.setTerrain('Woods', { ...cloneTerrain(GROUND), scatter: [{ prefab: 'Tree', items: [[-8, 0, 0, 1], [-8, 10, 0, 1]] }, { prefab: 'Bush', items: [[-10, 0, 0, 1]] }] })
+    const game = new Game(forest, parseScene(scene))
+    game.sound.enabled = false
+    try {
+      game.start()
+      game.update(1 / 60)
+      const player = game.root.getObjectByName('Player')!
+      for (let i = 0; i < 30; i++) game.runtime.fall(player, 1 / 60)
+      walk(game, player, 3, 3)
+      // The tree is 0.4 thick and the player 0.3: they meet 0.7 apart. The bush on the way has no collider.
+      near('a tree stops what walks into it', player.position.x, -8.7, 0.03)
+      for (let i = 0; i < 120; i++) game.runtime.move(player, 0, 0, 0.05)
+      for (let i = 0; i < 120; i++) game.runtime.move(player, 0.05, 0, 0)
+      ok(`and can be walked around (x = ${player.position.x.toFixed(2)})`, player.position.x > -4)
+      const hit = game.runtime.raycast([-12, 1.5, 0], [1, 0, 0])
+      near('a ray hits the tree', hit?.point.x ?? NaN, -8.4, 0.01)
+      equal('it is the terrain that it hits', hit?.object.name, 'Ground')
+      near('a ray that passes it goes on to the slope', game.runtime.raycast([-12, 1.5, 5], [1, 0, 0])?.point.x ?? NaN, 3.75, 0.01)
+      equal('a short ray does not reach it', game.runtime.raycast([-12, 1.5, 0], [1, 0, 0], { distance: 3 }), null)
+    } finally {
+      game.dispose()
+    }
+  })
+
+  test('a biome', () => {
+    const settings = { ...defaultGenerator, seed: 11 }
+    // Wooded hills that lie 20 m up: trees where it is not steep, a few rocks anywhere
+    const WOODS: BiomeData = {
+      base: 20,
+      height: 16,
+      size: 50,
+      ground: '#335522',
+      rock: '#777777',
+      rockSlope: 0.45,
+      lowBelow: -1000,
+      props: [{ prefab: 'Tree', spacing: 4, maxSlope: 0.3 }, { prefab: 'Rock', spacing: 12, cover: 0.5, sizeMin: 1, sizeMax: 3 }],
+    }
+    const make = (at = { x: 0, z: 0 }) => {
+      const data = flatTerrain(64, 1)
+      generateTerrain(data, settings, at, undefined, WOODS)
+      return data
+    }
+    const land = make()
+    const [low, high] = terrainRange(land)
+    ok(`the land lies as high as the biome says (from ${low.toFixed(1)} to ${high.toFixed(1)})`, low > 8 && high < 34 && (low + high) / 2 > 15)
+    equal('its colors are added to the palette of the terrain', land.palette?.slice(5), ['#335522', '#777777'])
+    const painted = new Set(land.colors?.flat())
+    ok(`and the ground is painted with them (kinds: ${[...painted].join(', ')})`, painted.has(5) && painted.has(6) && !painted.has(0))
+    const trees = land.scatter?.find((layer) => layer.prefab === 'Tree')?.items ?? []
+    const rocks = land.scatter?.find((layer) => layer.prefab === 'Rock')?.items ?? []
+    ok(`trees grow on it (${trees.length}), and fewer rocks (${rocks.length})`, trees.length > 60 && trees.length < 300 && rocks.length > 2 && rocks.length < trees.length / 4)
+    const slopeAt = ([x, z]: number[]) => Math.hypot(generatedHeight({ ...settings, ...WOODS } as never, x + 1, z) - generatedHeight({ ...settings, ...WOODS } as never, x - 1, z), generatedHeight({ ...settings, ...WOODS } as never, x, z + 1) - generatedHeight({ ...settings, ...WOODS } as never, x, z - 1)) / 2
+    ok('no tree where it is too steep for it', trees.every((item) => slopeAt(item) <= 0.3 + 1e-9))
+    ok('rocks are from one to three times their size', rocks.every((item) => item[3] >= 1 && item[3] <= 3))
+    equal('the same again gives the same land', [make().scatter, make().heights[10]], [land.scatter, land.heights[10]])
+    equal('a good file with it', validateTerrain(land, { prefabs: ['Tree', 'Rock'] }), [])
+    // A neighbor to the east: the trees along the common edge are not planted twice, nor left out
+    const east = make({ x: 64, z: 0 })
+    const inWorld = (data: TerrainData, shift: number) => (data.scatter?.find((layer) => layer.prefab === 'Tree')?.items ?? []).map(([x, z]) => `${(x + shift).toFixed(1)},${z.toFixed(1)}`)
+    const both = [...inWorld(land, 0), ...inWorld(east, 64)]
+    ok('neighbors do not plant the same tree twice', new Set(both).size >= both.length - 1)
+
+    // The brush lays the biome on a part of another land: there and only there
+    const mixed = flatTerrain(64, 1)
+    mixed.scatter = [{ prefab: 'Bush', items: [[0, 0, 0, 1], [25, 25, 0, 1]] }]
+    generateTerrain(mixed, settings, { x: 0, z: 0 }, { x: 0, z: 0, radius: 12, amount: 1 }, WOODS)
+    near('under the brush the land is the biome', mixed.heights[32][32], land.heights[32][32], 1e-9)
+    equal('past it the ground is as it was', [mixed.heights[32][50], mixed.colors?.[2][2]], [0, 0])
+    equal('the props that stood under the brush are gone, the others stay', mixed.scatter?.find((layer) => layer.prefab === 'Bush')?.items, [[25, 25, 0, 1]])
+    const core = (mixed.scatter?.find((layer) => layer.prefab === 'Tree')?.items ?? [])
+    ok(`and the trees of the biome stand there (${core.length})`, core.length > 2 && core.every(([x, z]) => Math.hypot(x, z) <= 12 * 0.7 + 0.01))
+    ok('the same trees as when the whole land is made', core.every((item) => trees.some((tree) => tree[0] === item[0] && tree[1] === item[1])))
+    const bare = flatTerrain(16, 1)
+    bare.scatter = [{ prefab: 'Bush', items: [[0, 0, 0, 1]] }]
+    generateTerrain(bare, settings, { x: 0, z: 0 }, undefined, { height: 2 })
+    equal('a biome without props clears the land', bare.scatter, undefined)
+    const kept = flatTerrain(16, 1)
+    kept.scatter = [{ prefab: 'Bush', items: [[0, 0, 0, 1]] }]
+    generateTerrain(kept, settings, { x: 0, z: 0 })
+    equal('without a biome the props are left alone', kept.scatter?.[0].items.length, 1)
+
+    equal('a good biome', validateBiome(WOODS, { prefabs: ['Tree', 'Rock'] }), [])
+    ok('a prefab the project does not have', validateBiome(WOODS, { prefabs: ['Tree'] })[0]?.includes('prefab "Rock" does not exist'))
+    ok('a field a biome does not have', validateBiome({ hills: 3 })[0]?.includes('unknown field "hills"'))
+    ok('a color that is not one', validateBiome({ ground: 'green' })[0]?.includes('ground'))
+    ok('a field the props do not have', validateBiome({ props: [{ prefab: 'Tree', density: 2 }] })[0]?.includes('unknown field "density"'))
+    ok('a biome the project does not have', validateTerrain({ ...flatTerrain(2, 1), generator: { biome: 'Moon' } }, { biomes: ['Woods'] })[0]?.includes('biome "Moon" does not exist'))
+    equal('a terrain that names a biome', validateTerrain({ ...flatTerrain(2, 1), generator: { biome: 'Woods', seed: 3 } }, { biomes: ['Woods'] }), [])
+  })
+
+  test('the map of the biomes', () => {
+    // A plateau 30 m up with trees, and a marsh below zero with reeds
+    const BIOMES: Record<string, BiomeData> = {
+      Plateau: { base: 30, height: 4, size: 40, ground: '#556644', lowBelow: -1000, rockSlope: 100, props: [{ prefab: 'Tree', spacing: 5, maxSlope: 10 }] },
+      Marsh: { base: -4, height: 2, size: 30, ground: '#334422', lowBelow: -1000, rockSlope: 100, props: [{ prefab: 'Reeds', spacing: 3, maxSlope: 10 }] },
+    }
+    const biomeOf = (name: string) => BIOMES[name]
+    const settings = { ...defaultGenerator, seed: 4 }
+    const lay = (data: TerrainData, biome: string, x: number, z: number, radius: number) =>
+      generateTerrain(data, { ...settings, biome }, { x: 0, z: 0 }, { x, z, radius, amount: 1 }, BIOMES[biome])
+    const ground = flatTerrain(96, 1)
+    equal('a ground without a map is not made by it', [generateByMap(ground, settings, { x: 0, z: 0 }, biomeOf), ground.biomeMap], [false, undefined])
+    lay(ground, 'Plateau', -24, 0, 24)
+    lay(ground, 'Marsh', 24, 0, 24)
+    equal('the brush writes down where it has laid which biome', [ground.biomes, ground.biomeMap?.[48][24], ground.biomeMap?.[48][72], ground.biomeMap?.[2][2]], [['Plateau', 'Marsh'], 0, 1, -1])
+    const shares = biomeShares(ground)
+    ok(`most of the ground is still nobody's (${[...shares].map(([name, count]) => `${name || 'none'} ${count}`).join(', ')})`, (shares.get('') ?? 0) > (shares.get('Plateau') ?? 0) && (shares.get('Plateau') ?? 0) > 400)
+    equal('a good file with a map', validateTerrain(ground, { prefabs: ['Tree', 'Reeds'], biomes: ['Plateau', 'Marsh'] }), [])
+    ok('a biome the project does not have', validateTerrain(ground, { biomes: ['Plateau'] })[0]?.includes('biome "Marsh" does not exist'))
+    ok('a place of the map past the list', validateTerrain({ ...flatTerrain(1, 1), biomes: ['A'], biomeMap: [[0, 1], [0, -1]] })[0]?.includes('biomeMap: row 1'))
+    ok('a map of another size', validateTerrain({ ...flatTerrain(1, 1), biomes: ['A'], biomeMap: [[0, 0]] })[0]?.includes('as many rows'))
+
+    // By hand, after the brush: a mound on nobody's ground with a bush on it, a pit on the plateau with a bush in it
+    brushTerrain(ground, 'raise', 0, -40, 4, 6)
+    brushTerrain(ground, 'lower', -24, 0, 3, 9)
+    ground.scatter = [...(ground.scatter ?? []), { prefab: 'Bush', items: [[0, -40, 0, 1], [-24, 0, 0, 1]] }]
+    const mound = ground.heights[8][48]
+    ok('made again by its map', generateByMap(ground, settings, { x: 0, z: 0 }, biomeOf))
+    near('the plateau is the plateau again: the pit is gone', ground.heights[48][24], generatedHeight({ ...settings, ...BIOMES.Plateau } as never, -24, 0), 0.01)
+    near('the marsh is the marsh', ground.heights[48][72], generatedHeight({ ...settings, ...BIOMES.Marsh } as never, 24, 0), 0.01)
+    equal('what no biome has made stays as the hand left it', [ground.heights[8][48], ground.heights[2][2]], [mound, 0])
+    const between = ground.heights[48][48]
+    ok(`between the two the land goes over from one into the other (${between.toFixed(1)} m)`, between > -3 && between < 29)
+    const edge = [ground.heights[48][46], ground.heights[48][47], ground.heights[48][49], ground.heights[48][50]]
+    ok(`without a cliff (${edge.map((h) => h.toFixed(1)).join(', ')})`, edge.every((h, n) => n === 0 || Math.abs(h - edge[n - 1]) < 12))
+    const standing = (prefab: string) => ground.scatter?.find((layer) => layer.prefab === prefab)?.items ?? []
+    ok(`trees on the plateau only (${standing('Tree').length})`, standing('Tree').length > 20 && standing('Tree').every(([x]) => x < 2))
+    ok(`reeds in the marsh only (${standing('Reeds').length})`, standing('Reeds').length > 50 && standing('Reeds').every(([x]) => x > -2))
+    equal('the bush on nobody\'s ground stays, the one on the plateau goes', standing('Bush'), [[0, -40, 0, 1]])
+    const again = cloneTerrain(ground)
+    generateByMap(again, settings, { x: 0, z: 0 }, biomeOf)
+    equal('once more changes nothing', [again.heights[48], again.scatter], [ground.heights[48], ground.scatter])
+
+    // A biome that is gone from the project: its land is nobody's
+    const orphan = cloneTerrain(ground)
+    brushTerrain(orphan, 'raise', 24, 0, 3, 5)
+    const bump = orphan.heights[48][72]
+    generateByMap(orphan, settings, { x: 0, z: 0 }, (name) => (name === 'Plateau' ? BIOMES.Plateau : undefined))
+    equal('the land of a biome that is gone is left alone', orphan.heights[48][72], bump)
+
+    const wider = resizeTerrain(ground, 120, 96, 1)
+    equal('a bigger ground keeps its map; what is new is nobody\'s', [wider.biomes, wider.biomeMap?.[48][36], wider.biomeMap?.[48][0], wider.biomeMap?.length], [['Plateau', 'Marsh'], 0, -1, 97])
+  })
+
+  test('water', () => {
+    // A lake 20 x 10 m whose surface is 2 m up, 6 m deep; the test ground under it, a diver in it
+    const LAKE = { name: 'Lake', position: [-10, 2, 0], components: [{ type: 'water', sizeX: 20, sizeZ: 10, depth: 6, underColor: '#102030', visibility: 9 }] }
+    const scene = parseScene({ version: 3, entities: [TERRAIN, LAKE, { ...PLAYER, position: [-10, 3, 0] }, { name: 'Diver', position: [-12, 0.5, 2], components: [{ type: 'script', script: 'diver' }] }] })
+    equal('a scene with it', validateScene(scene, registry), ['/Diver [script:diver]: behavior "diver" is not defined in scripts/ (known: none)'])
+    scene.entities.pop()
+    const game = new Game(registry, scene)
+    game.sound.enabled = false
+    try {
+      game.start()
+      game.update(1 / 60)
+      const at = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z)
+      equal('how deep a point is under its surface', [submergedAt(game.root, at(-10, 0.5, 0)), submergedAt(game.root, at(-10, 2.5, 0))], [1.5, 0])
+      equal('beside the water, and deeper than it goes, there is none', [submergedAt(game.root, at(5, 0, 0)), submergedAt(game.root, at(-10, -5, 0)), submergedAt(game.root, at(-10, 0, 6))], [0, 0, 0])
+      const under = zoneAt(game.root, at(-10, 1, 0))
+      equal('under the surface the scene is under water', [under?.fogColor, under?.fogFar, under?.sky, under?.fog], ['#102030', 9, false, true])
+      equal('over it, and beside it, it is not', [zoneAt(game.root, at(-10, 2.2, 0)), zoneAt(game.root, at(-25, 1, 0))], [null, null])
+      // The water stops nothing: what falls into it lands on the bottom
+      const player = game.root.getObjectByName('Player')!
+      for (let i = 0; i < 60; i++) game.runtime.fall(player, 1 / 60)
+      near('what falls into it stands on the bottom', player.position.y, 0.5, 0.01)
+      near('and is that deep in it', submergedAt(game.root, player.position), 1.5, 0.01)
+    } finally {
+      game.dispose()
+    }
   })
 
   test('walking on a terrain', () => {

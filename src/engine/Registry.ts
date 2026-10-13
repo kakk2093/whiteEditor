@@ -18,6 +18,7 @@ import type { ProjectSettings } from "./settings";
 import { builtinSurfaces, isSurfaceDef } from "./surface";
 import type { SurfaceDef } from "./surface";
 import type { TerrainData } from "./terrain";
+import type { BiomeData } from "./generate";
 import type { EntityData, Params, ParamValue, Vec3 } from "./types";
 import { loadFont } from "./ui";
 import type { UiElement } from "./ui";
@@ -27,7 +28,8 @@ import type { UiElement } from "./ui";
 // "sky" is a sky made by code: a defineSky() of scripts/
 // "clip" is an animation clip: a defineClip() of scripts/
 // "terrain" is a grid of heights: a file of terrains/
-export type AssetKind = "material" | "look" | "prefab" | "texture" | "layer" | "scene" | "sound" | "font" | "object" | "gltf" | "sky" | "clip" | "terrain";
+// "biome" is a kind of land for the generator of the terrains: a file of biomes/
+export type AssetKind = "material" | "look" | "prefab" | "texture" | "layer" | "scene" | "sound" | "font" | "object" | "gltf" | "sky" | "clip" | "terrain" | "biome";
 
 export type ParamDef = (
     | { type: "number"; default: number; min?: number; max?: number; step?: number }
@@ -191,6 +193,9 @@ export interface BehaviorSelf<P = Params, S = unknown> {
     jump: (speed: number) => void;
     // true if the object stands on a solid collider
     grounded: () => boolean;
+    // How deep this object (or the one given) is under the surface of a Water, meters, by its own place (its
+    // middle, or wherever its origin is); 0 if it is in no water. For swimming, slowing down, splashes.
+    submerged: (object?: THREE.Object3D) => number;
     // Replaces the running scene with another scene of the project, once this frame is over: everything of
     // this scene is destroyed (the behaviors get their destroy()), the other one starts from its file.
     loadScene: (name: string) => void;
@@ -342,6 +347,27 @@ export class Registry {
 
     // The terrain assets: grids of heights
     private terrainData = new Map<string, TerrainData>();
+
+    // The biome assets: what the generator of the terrains makes a land by. Only the editor needs them:
+    // a game has the ground that was made.
+    private biomeData = new Map<string, BiomeData>();
+
+    setBiome(name: string, data: BiomeData) {
+        this.biomeData.set(name, data);
+        return this;
+    }
+
+    removeBiome(name: string) {
+        this.biomeData.delete(name);
+    }
+
+    getBiome(name: string) {
+        return this.biomeData.get(name);
+    }
+
+    biomeNames() {
+        return [...this.biomeData.keys()].sort();
+    }
 
     // Used by meshes that have no material assigned
     private defaultMaterial = createSharedMaterial();
@@ -698,6 +724,7 @@ export class Registry {
         if (kind === "sky") return [...this.skyDefs.keys()];
         if (kind === "clip") return [...this.clipDefs.keys()].sort();
         if (kind === "terrain") return this.terrainNames();
+        if (kind === "biome") return this.biomeNames();
         if (kind === "font") return this.fontNames();
         if (kind === "scene") return this.scenes;
         if (kind === "texture") return this.textureNames();

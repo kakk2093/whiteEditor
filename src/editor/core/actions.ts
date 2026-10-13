@@ -1,7 +1,7 @@
 import {
-    applyToPrefab, cloneTerrain, DEFAULT_PALETTE, flatTerrain, generateTerrain, generatorOf, FONT_FILE, isPainted, MODEL_FILE, parsePrefab, parseScene, parseTerrain, resizeTerrain, validateTerrain, renameLayerIn, resolveLook, SHARED_PROJECT, SOUND_FILE, validateLook, validateMaterial, validatePrefab, validateScene, validateScripts
+    applyToPrefab, cloneTerrain, DEFAULT_PALETTE, defaultBiome, flatTerrain, generateByMap, validateBiome, generateTerrain, generatorOf, FONT_FILE, isPainted, MODEL_FILE, parsePrefab, parseScene, parseTerrain, resizeTerrain, validateTerrain, renameLayerIn, resolveLook, SHARED_PROJECT, SOUND_FILE, validateLook, validateMaterial, validatePrefab, validateScene, validateScripts
 } from "../../engine";
-import type { LookData, TerrainData, MaterialData, ProjectSettings, SceneData } from "../../engine";
+import type { BiomeData, LookData, TerrainData, MaterialData, ProjectSettings, SceneData } from "../../engine";
 import { renameInEntities, renameInScene } from "./references";
 import { changeFolder, moveToFolder, parseFolders, removeFolderTree, renameFolderTree, renameInFolders } from "./folders";
 import type { Folders, FolderSection } from "./folders";
@@ -259,7 +259,8 @@ export async function validateProject() {
     };
     for (const problem of validateScripts(registry)) problems.push(`scripts: ${problem}`);
     await each("materials", (_, data) => validateMaterial(data, registry));
-    await each("terrains", (_, data) => validateTerrain(data));
+    await each("terrains", (_, data) => validateTerrain(data, { prefabs: registry.prefabNames(), biomes: registry.biomeNames() }));
+    await each("biomes", (_, data) => validateBiome(data, { prefabs: registry.prefabNames() }));
     await each("looks", (name, data) => validateLook(name, data as LookData, registry));
     await each("prefabs", (name, data) => validatePrefab(name, parsePrefab(data), registry));
     await each("scenes", (_, data) => validateScene(parseScene(data), registry));
@@ -521,6 +522,15 @@ export async function assetChangedOnDisk(project: string, section: AssetSection,
                 if (sceneStore.selectedAsset?.kind === "look" && sceneStore.selectedAsset.name === name) sceneStore.selectAsset(null);
             }
             sceneStore.update({ status: `Look ${name} updated from disk` });
+        }
+
+        if (section === "biomes") {
+            const { registry } = sceneStore;
+            if ((await listAssets(project, "biomes")).includes(name)) registry.setBiome(name, (await readAsset(project, "biomes", name)) as BiomeData);
+            else registry.removeBiome(name);
+            // Nothing is made anew: the ground changes when it is generated again
+            sceneStore.changed();
+            sceneStore.update({ status: `Biome ${name} updated from disk` });
         }
 
         if (section === "terrains") {
@@ -806,6 +816,19 @@ sceneStore.assetHandler = (section, name, data) => {
         done.then(async () => sceneStore.update({ scenes: await listAssets(project, "scenes") })).catch(report);
         return;
     }
+    if (section === "biomes") {
+        clearTimeout(pendingWrites.get(`biomes/${name}`));
+        pendingWrites.delete(`biomes/${name}`);
+        if (data === null) {
+            deleteAsset(project, section, name).catch(report);
+            registry.removeBiome(name);
+        } else {
+            writeAsset(project, section, name, data).catch(report);
+            registry.setBiome(name, data as BiomeData);
+        }
+        sceneStore.changed();
+        return;
+    }
     if (section === "terrains") {
         clearTimeout(pendingWrites.get(`terrains/${name}`));
         pendingWrites.delete(`terrains/${name}`);
@@ -994,6 +1017,7 @@ export async function createTerrainAsset(entity?: string) {
         registry.setTerrain(name, data);
         sceneStore.recordAsset("terrains", name, null, data, false);
         if (entity) sceneStore.setComponentField(entity, "terrain", "terrain", name);
+        else sceneStore.selectAsset({ kind: "terrain", name });
         sceneStore.update({ status: `Created terrains/${name}.json` });
         return name;
     } catch (e) {
@@ -1042,9 +1066,166 @@ export function resizeTerrainAsset(name: string, width: number, depth: number, c
     updateTerrain(name, resizeTerrain(data, columns, rows, cell), false);
 }
 
+// A new object of the scene that shows the terrain
+export function addTerrainToScene(name: string) {
+    if (sceneStore.editingPrefab || blockedByPlay()) return;
+    const entity = sceneStore.addEntity(name, [{ type: "terrain", terrain: name }]);
+    sceneStore.select(entity.id);
+}
+
+// A copy of a terrain or of a biome under a free name; a step of undo
+export async function duplicateGround(kind: "terrain" | "biome", name: string) {
+    const { project, registry } = sceneStore;
+    const section = kind === "terrain" ? "terrains" : "biomes";
+    try {
+        const source = kind === "terrain" ? registry.getTerrain(name) : registry.getBiome(name);
+        if (!source) return;
+        const data = structuredClone(source);
+        const copy = freeName(name, kind === "terrain" ? registry.terrainNames() : registry.biomeNames());
+        await writeAsset(project, section, copy, data);
+        if (kind === "terrain") registry.setTerrain(copy, data as TerrainData);
+        else registry.setBiome(copy, data as BiomeData);
+        sceneStore.recordAsset(section, copy, null, data, false);
+        sceneStore.selectAsset({ kind, name: copy });
+        sceneStore.update({ status: `Created ${section}/${copy}.json` });
+    } catch (e) {
+        report(e);
+    }
+}
+
+// Deletes a terrain or a biome; a step of undo. The Terrain components that named the terrain show the
+// level piece, the terrains that named the biome are generated as plain hills.
+export async function deleteGround(kind: "terrain" | "biome", name: string) {
+    const { project, registry } = sceneStore;
+    const section = kind === "terrain" ? "terrains" : "biomes";
+    const data = kind === "terrain" ? registry.getTerrain(name) : registry.getBiome(name);
+    if (!data || blockedByPlay()) return;
+    try {
+        clearTimeout(pendingWrites.get(`${section}/${name}`));
+        pendingWrites.delete(`${section}/${name}`);
+        await deleteAsset(project, section, name);
+        sceneStore.recordAsset(section, name, data, null, false);
+        if (kind === "terrain") registry.removeTerrain(name);
+        else registry.removeBiome(name);
+        sceneStore.selectAsset(null);
+        if (kind === "terrain") sceneStore.setRegistry(registry);
+        else sceneStore.changed();
+        sceneStore.update({ status: `Deleted ${section}/${name}.json` });
+    } catch (e) {
+        report(e);
+    }
+}
+
+// Gives a terrain or a biome another name, and puts the new name wherever the old one stood: for a terrain
+// the Terrain components of every scene and prefab, for a biome the terrains that name it. Undone by
+// renaming back.
+export async function renameGround(kind: "terrain" | "biome", from: string, to: string) {
+    const names = () => (kind === "terrain" ? sceneStore.registry.terrainNames() : sceneStore.registry.biomeNames());
+    await renamed(`${kind} ${from} renamed to ${to}`, names, from, to, (a, b) => renameGroundNow(kind, a, b));
+}
+
+async function renameGroundNow(kind: "terrain" | "biome", from: string, to: string) {
+    const { project, registry } = sceneStore;
+    const section = kind === "terrain" ? "terrains" : "biomes";
+    const names = kind === "terrain" ? registry.terrainNames() : registry.biomeNames();
+    if (to === from || !names.includes(from) || !nameIsFree(kind, names, from, to)) return;
+    if (sceneStore.editingPrefab) {
+        sceneStore.update({ status: "Go back to the scene to rename an asset" });
+        return;
+    }
+    if (blockedByPlay()) return;
+    try {
+        clearTimeout(pendingWrites.get(`${section}/${from}`));
+        pendingWrites.delete(`${section}/${from}`);
+        let files = 0;
+        if (kind === "terrain") {
+            const data = registry.getTerrain(from)!;
+            await writeAsset(project, section, to, data);
+            registry.setTerrain(to, data);
+            registry.removeTerrain(from);
+            if (to.toLowerCase() !== from.toLowerCase()) await deleteAsset(project, section, from);
+            for (const name of registry.prefabNames()) {
+                const prefab = structuredClone(registry.getPrefab(name)!);
+                if (!renameInEntities(registry, [prefab], "terrain", from, to)) continue;
+                registry.setPrefab(name, prefab);
+                await writeAsset(project, "prefabs", name, { version: 3, root: prefab });
+                files++;
+            }
+            for (const name of await listAssets(project, "scenes")) {
+                const scene = (await readAsset(project, "scenes", name)) as SceneData;
+                if (!renameInScene(registry, scene, "terrain", from, to)) continue;
+                await writeAsset(project, "scenes", name, scene);
+                files++;
+            }
+            sceneStore.renameReferences((scene) => renameInScene(registry, scene, "terrain", from, to), section, from, to);
+        } else {
+            const data = registry.getBiome(from)!;
+            await writeAsset(project, section, to, data);
+            registry.setBiome(to, data);
+            registry.removeBiome(from);
+            if (to.toLowerCase() !== from.toLowerCase()) await deleteAsset(project, section, from);
+            // The terrains that are made by it, or have it lying somewhere on them
+            for (const name of registry.terrainNames()) {
+                const terrain = registry.getTerrain(name)!;
+                if (terrain.generator?.biome !== from && !terrain.biomes?.includes(from)) continue;
+                const next: TerrainData = {
+                    ...terrain,
+                    ...(terrain.generator ? { generator: { ...terrain.generator, ...(terrain.generator.biome === from ? { biome: to } : {}) } } : {}),
+                    ...(terrain.biomes ? { biomes: terrain.biomes.map((biome) => (biome === from ? to : biome)) } : {}),
+                };
+                clearTimeout(pendingWrites.get(`terrains/${name}`));
+                pendingWrites.delete(`terrains/${name}`);
+                registry.setTerrain(name, next);
+                await writeAsset(project, "terrains", name, next);
+                files++;
+            }
+        }
+        sceneStore.setRegistry(registry);
+        sceneStore.selectAsset({ kind, name: to });
+        sceneStore.update({ status: `Renamed ${section}/${from} to ${to}${files > 0 ? `; ${files} file(s) that use it updated` : ""}` });
+    } catch (e) {
+        report(e);
+    }
+}
+
+// A new biome, with the usual values of a land of hills; with `terrain`, that terrain names it at once
+export async function createBiome(terrain?: string) {
+    const { project, registry } = sceneStore;
+    try {
+        const name = freeName("Biome", registry.biomeNames());
+        const data: BiomeData = { ...defaultBiome };
+        await writeAsset(project, "biomes", name, data);
+        registry.setBiome(name, data);
+        sceneStore.recordAsset("biomes", name, null, data, false);
+        if (terrain) setTerrainGenerator(terrain, { biome: name });
+        else sceneStore.selectAsset({ kind: "biome", name });
+        sceneStore.update({ status: `Created biomes/${name}.json` });
+        return name;
+    } catch (e) {
+        report(e);
+        return null;
+    }
+}
+
+// Changes a biome. The ground of the terrains that name it stays as it is until it is generated again.
+export function updateBiome(name: string, data: BiomeData) {
+    const { project, registry } = sceneStore;
+    const before = registry.getBiome(name);
+    if (!before) return;
+    sceneStore.recordAsset("biomes", name, before, data);
+    registry.setBiome(name, data);
+    sceneStore.changed();
+    const key = `biomes/${name}`;
+    clearTimeout(pendingWrites.get(key));
+    pendingWrites.set(key, setTimeout(() => {
+        pendingWrites.delete(key);
+        writeAsset(project, "biomes", name, data).catch(report);
+    }, 300));
+}
+
 // Changes the settings the terrain is generated with (they are kept in its file). The ground itself stays
 // as it is until it is generated again.
-export function setTerrainGenerator(name: string, change: Record<string, number | boolean>) {
+export function setTerrainGenerator(name: string, change: Record<string, number | boolean | string>) {
     const { registry } = sceneStore;
     const before = registry.getTerrain(name);
     if (!before) return;
@@ -1059,11 +1240,19 @@ export function setTerrainGenerator(name: string, change: Record<string, number 
 
 // Makes the whole ground of a terrain anew by its settings: one step of undo. `at` is where the middle of
 // the terrain stands in the world: the same settings give neighbors that meet without a seam.
-export function generateTerrainAsset(name: string, at: { x: number; z: number } = { x: 0, z: 0 }) {
-    const before = sceneStore.registry.getTerrain(name);
+// A ground that remembers where its biomes lie is made by that map: every part by its own biome, and what
+// no biome has made stays. `fill`: all of it becomes the biome the terrain names now, whatever lay there.
+export function generateTerrainAsset(name: string, at: { x: number; z: number } = { x: 0, z: 0 }, fill = false) {
+    const { registry } = sceneStore;
+    const before = registry.getTerrain(name);
     if (!before) return;
     const data = cloneTerrain(before);
-    generateTerrain(data, generatorOf(data), at);
+    const settings = generatorOf(data);
+    if (fill) {
+        delete data.biomes;
+        delete data.biomeMap;
+    }
+    if (!generateByMap(data, settings, at, (biome) => registry.getBiome(biome))) generateTerrain(data, settings, at, undefined, registry.getBiome(settings.biome));
     // Centimeters are enough, and keep the file readable
     for (const row of data.heights) {
         for (let i = 0; i < row.length; i++) row[i] = Math.round(row[i] * 100) / 100;

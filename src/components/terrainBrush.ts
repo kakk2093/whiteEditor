@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { brushRegion, brushTerrain, DEFAULT_PALETTE, generateTerrain, generatorOf, fillTerrainGeometry, forgetTerrainRange, isPainted, rayTerrain, terrainHeight } from "../engine";
+import { brushRegion, brushTerrain, DEFAULT_PALETTE, eraseScatter, generateTerrain, generatorOf, plantScatter, updateScatter, fillTerrainGeometry, forgetTerrainRange, isPainted, rayTerrain, terrainHeight } from "../engine";
 import type { TerrainData, TerrainMarker, TerrainRegion } from "../engine";
 import { strokeTerrain } from "../editor/core/actions";
 import { EDITOR_LAYER, sceneStore } from "../editor/core/SceneStore";
@@ -57,6 +57,8 @@ export class TerrainBrush {
         colors: Set<number>;
         // All of the ground the stroke has reached so far
         region: TerrainRegion | null;
+        // "plant": the part of a prop that is due, carried over from frame to frame
+        due: number;
     } | null = null;
 
     constructor(camera: THREE.Camera, dom: HTMLElement, controls: OrbitControls) {
@@ -119,14 +121,24 @@ export class TerrainBrush {
         const data: TerrainData = { ...target.data, heights: [...target.data.heights], ...(target.data.colors ? { colors: [...target.data.colors] } : {}) };
         const colors = new Set<number>();
         // The first paint of a ground that had none: all of it is the first color of the usual palette
-        if ((sceneStore.brush.tool === "paint" || (sceneStore.brush.tool === "generate" && generatorOf(data).paint)) && !isPainted(data)) {
+        if ((sceneStore.brush.tool === "paint" || (sceneStore.brush.tool === "generate" && (generatorOf(data).paint || generatorOf(data).biome))) && !isPainted(data)) {
             data.palette = data.palette?.length ? data.palette : [...DEFAULT_PALETTE];
             data.colors = data.heights.map((row) => row.map(() => 0));
             data.colors.forEach((_, j) => colors.add(j));
         }
         const meshes = sceneStore.terrainMeshes(target.name);
         for (const mesh of meshes) (mesh.userData.terrain as TerrainMarker).data = data;
-        this.stroke = { name: target.name, before: target.data, data, meshes, level: at.y, changed: false, heights: new Set(), colors, region: null };
+        // The lists of the props are the stroke's own from the start: they are short
+        const { tool } = sceneStore.brush;
+        // A biome may add its colors to the palette, and is written into the map of the biomes
+        if (tool === "generate") {
+            if (data.palette) data.palette = [...data.palette];
+            if (data.biomes) data.biomes = [...data.biomes];
+            if (data.biomeMap) data.biomeMap = data.biomeMap.map((row) => [...row]);
+        }
+        if ((tool === "plant" || tool === "erase") && data.scatter) data.scatter = data.scatter.map((layer) => ({ prefab: layer.prefab, items: [...layer.items] }));
+        // The first touch plants at once
+        this.stroke = { name: target.name, before: target.data, data, meshes, level: at.y, changed: false, heights: new Set(), colors, region: null, due: 1 };
         this.grabbed = true;
         this.controls.enabled = false;
         this.dom.setPointerCapture(e.pointerId);
@@ -158,7 +170,7 @@ export class TerrainBrush {
             for (let i = 0; i < row.length; i++) row[i] = Math.round(row[i] * 100) / 100;
         }
         forgetTerrainRange(stroke.data);
-        this.show(stroke.meshes, stroke.data, stroke.region ?? undefined);
+        if (stroke.region) this.show(stroke.meshes, stroke.data, stroke.region);
         strokeTerrain(stroke.name, stroke.before, stroke.data);
         // Painted for the first time: the material of the ground is another one from now on
         if (isPainted(stroke.data) !== isPainted(stroke.before)) sceneStore.setRegistry(sceneStore.registry);
@@ -166,7 +178,16 @@ export class TerrainBrush {
 
     // `region`: only that part of the ground has changed
     private show(meshes: THREE.Mesh[], data: TerrainData, region?: TerrainRegion) {
-        for (const mesh of meshes) fillTerrainGeometry(mesh.geometry, data, (mesh.userData.terrain as TerrainMarker).flat, region);
+        for (const mesh of meshes) {
+            fillTerrainGeometry(mesh.geometry, data, (mesh.userData.terrain as TerrainMarker).flat, region);
+            // The props stand on the ground: they go up and down with it (and a biome puts its own)
+            updateScatter(mesh, sceneStore.registry, data);
+        }
+    }
+
+    // The props have changed, the ground has not
+    private showProps(meshes: THREE.Mesh[], data: TerrainData) {
+        for (const mesh of meshes) updateScatter(mesh, sceneStore.registry, data);
     }
 
     // Call every frame: the ring follows the mouse, a stroke in progress works the ground under it
@@ -178,7 +199,21 @@ export class TerrainBrush {
         if (!target || !data || !at) return;
         const { tool, radius, strength, color } = sceneStore.brush;
 
-        if (this.stroke) {
+        if (this.stroke && (tool === "plant" || tool === "erase")) {
+            const { stroke } = this;
+            const { prefab, spacing, sizeMin, sizeMax } = sceneStore.brush;
+            // Shift turns planting into taking away what was planted of that prefab
+            if (tool === "erase" || this.shift) {
+                if (eraseScatter(data, at.x, at.z, radius, tool === "erase" ? undefined : prefab) > 0) stroke.changed = true;
+            } else if (prefab) {
+                // So many tries a second for every 100 square meters of the brush; the spacing does the rest
+                stroke.due += strength * dt * Math.max(1, (Math.PI * radius * radius) / 100);
+                const tries = Math.floor(stroke.due);
+                stroke.due -= tries;
+                if (tries > 0 && plantScatter(data, prefab, at.x, at.z, radius, tries, { spacing, sizeMin, sizeMax }) > 0) stroke.changed = true;
+            }
+            if (stroke.changed) this.showProps(stroke.meshes, data);
+        } else if (this.stroke && tool !== "plant" && tool !== "erase") {
             const used = this.shift && tool === "raise" ? "lower" : this.shift && tool === "lower" ? "raise" : tool;
             const amount = used === "raise" || used === "lower" ? strength * dt : strength * SETTLE * dt;
             const region = brushRegion(data, at.x, at.z, radius);
@@ -194,7 +229,7 @@ export class TerrainBrush {
                 }
                 const middle = target.mesh.getWorldPosition(new THREE.Vector3());
                 const changed = used === "generate"
-                    ? !!generateTerrain(data, generatorOf(data), middle, { x: at.x, z: at.z, radius, amount })
+                    ? !!generateTerrain(data, generatorOf(data), middle, { x: at.x, z: at.z, radius, amount }, sceneStore.registry.getBiome(generatorOf(data).biome))
                     : brushTerrain(data, used, at.x, at.z, radius, amount, { level: stroke.level, color });
                 if (changed) {
                     stroke.changed = true;

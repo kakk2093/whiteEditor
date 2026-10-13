@@ -1,0 +1,18 @@
+{
+  "base": 0,
+  "height": 12,
+  "size": 60,
+  "detail": 0.6,
+  "ground": "#6f9a4a",
+  "rock": "#8b8d8f",
+  "rockSlope": 0.7,
+  "low": "#d6c58f",
+  "lowBelow": -3,
+  "high": "#eef2f5",
+  "highAbove": 100,
+  "props": [
+    {
+      "prefab": "GameObject"
+    }
+  ]
+}

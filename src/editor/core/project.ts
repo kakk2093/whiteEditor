@@ -1,11 +1,11 @@
 import { parsePrefab, parseSettings, parseTerrain, Registry, serializeSettings, SHARED_PROJECT } from "../../engine";
-import type { LookData, ProjectSettings } from "../../engine";
+import type { BiomeData, LookData, ProjectSettings } from "../../engine";
 
 // Talks to the dev-server API from vite-plugin-projects.ts
 const API = "/__api/projects";
 
 // Folders of a project that hold JSON assets
-export type AssetSection = "scenes" | "materials" | "prefabs" | "looks" | "terrains";
+export type AssetSection = "scenes" | "materials" | "prefabs" | "looks" | "terrains" | "biomes";
 
 async function request(path: string, init?: RequestInit) {
     const res = await fetch(path ? `${API}/${path}` : API, init);
@@ -135,6 +135,9 @@ export async function loadRegistry(project: string) {
         } catch (e) {
             errors.push(`terrains/${name}.json: ${e instanceof Error ? e.message : String(e)}`);
         }
+    }
+    for (const name of await listAssets(project, "biomes").catch(() => [] as string[])) {
+        registry.setBiome(name, (await readAsset(project, "biomes", name)) as BiomeData);
     }
     for (const name of await listAssets(project, "prefabs")) {
         try {

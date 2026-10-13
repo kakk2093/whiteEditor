@@ -10,6 +10,8 @@ import { updateModelFiles } from "./gltf";
 import { Physics } from "./physics";
 import type { BehaviorDef, BehaviorSelf, Ease, FindQuery, RayHit, RayOptions, Registry, Running, SoundSource, TweenOptions, VectorLike } from "./Registry";
 import { layerOf } from "./settings";
+import { scatterColliders } from "./scatter";
+import { submergedAt } from "./water";
 import { rayTerrain, terrainHeight, terrainRange, terrainSize } from "./terrain";
 import type { TerrainData, TerrainMarker } from "./terrain";
 import { SoundPlayer } from "./sound";
@@ -159,6 +161,45 @@ function inTerrain(body: Body, ground: Body) {
     }
     return false;
 }
+
+// The fields of a Collider component that say what shape it is
+interface ColliderShape {
+    shape: string;
+    sizeX: number;
+    sizeY: number;
+    sizeZ: number;
+    radius: number;
+    height: number;
+}
+
+// The shape of a collider with these fields under this matrix: a box (turned or not) or an upright capsule
+function shapeOf(f: ColliderShape, matrix: THREE.Matrix4): Pick<Body, "box" | "oriented" | "capsule"> {
+    if (f.shape === "sphere" || f.shape === "capsule") {
+        const scale = new THREE.Vector3().setFromMatrixScale(matrix);
+        const center = new THREE.Vector3().setFromMatrixPosition(matrix);
+        if (f.shape === "sphere") return { capsule: { bottom: center, top: center, radius: f.radius * Math.max(scale.x, scale.y, scale.z) } };
+        // The line of the capsule ends where its round ends begin
+        const radius = f.radius * Math.max(scale.x, scale.z);
+        const half = Math.max(0, (f.height * scale.y) / 2 - radius);
+        return { capsule: { bottom: center.clone().setY(center.y - half), top: center.clone().setY(center.y + half), radius } };
+    }
+    const half = new THREE.Vector3(f.sizeX, f.sizeY, f.sizeZ).multiplyScalar(0.5);
+    const oriented = orientedBox(matrix, half);
+    return { box: new THREE.Box3(half.clone().negate(), half).applyMatrix4(matrix), ...(oriented ? { oriented } : {}) };
+}
+
+// The box along the axes of the world a collider fits in
+function boundsOf(body: Body): THREE.Box3 {
+    if (body.box) return body.box.clone();
+    const { bottom, top, radius } = body.capsule!;
+    return new THREE.Box3(new THREE.Vector3(bottom.x - radius, bottom.y - radius, bottom.z - radius), new THREE.Vector3(top.x + radius, top.y + radius, top.z + radius));
+}
+
+// The side of the squares the props of a terrain are kept by, meters
+const PROP_SQUARE = 8;
+
+// How far around a moving collider the props are looked at, meters: more than it goes in a frame
+const PROP_MARGIN = 6;
 
 // How far apart two stretches of one line are; 0 if they overlap
 const gap = (min1: number, max1: number, min2: number, max2: number) => Math.max(0, min1 - max2, min2 - max1);
@@ -422,6 +463,7 @@ export class Runtime {
                 fall: (dt, gravity) => this.fall(obj, dt, gravity),
                 jump: (speed) => this.speeds.set(obj, speed),
                 grounded: () => this.grounded(obj),
+                submerged: (object = obj) => submergedAt(this.root, object.getWorldPosition(new THREE.Vector3()), (entity) => this.isActive(entity)),
                 loadScene: (scene) => this.loadScene(scene),
                 playSound: (sound, options) => this.sound.play(sound, options),
                 playMusic: (sound, options) => this.sound.playMusic(sound, options),
@@ -497,33 +539,59 @@ export class Runtime {
         const marker = object.children.find((child) => child.userData.collider);
         if (!marker) return undefined;
         // The fields of the collider component, defaults filled in
-        const f = marker.userData.collider as { shape: string; sizeX: number; sizeY: number; sizeZ: number; radius: number; height: number; solid: boolean };
-        const { shape, solid } = f;
-        const layer = layerOf((f as { layer?: unknown }).layer);
+        const f = marker.userData.collider as ColliderShape & { solid: boolean; layer?: unknown };
         const weight = object.children.find((child) => child.userData.body)?.userData.body as { mass?: number } | undefined;
-        const dynamic = weight !== undefined;
-        const mass = weight?.mass ?? 0;
-        if (shape === "sphere" || shape === "capsule") {
-            const scale = new THREE.Vector3().setFromMatrixScale(marker.matrixWorld);
-            const center = new THREE.Vector3().setFromMatrixPosition(marker.matrixWorld);
-            if (shape === "sphere") {
-                return { object, solid, layer, dynamic, mass, capsule: { bottom: center, top: center, radius: f.radius * Math.max(scale.x, scale.y, scale.z) } };
+        return { object, solid: f.solid, layer: layerOf(f.layer), dynamic: weight !== undefined, mass: weight?.mass ?? 0, ...shapeOf(f, marker.matrixWorld) };
+    }
+
+    // The props of the terrains (see scatter.ts): the colliders of their copies, made once for a ground
+    // and kept by the square of the world they stand in. They are many, so nobody goes through all of them.
+    private props = new Map<TerrainData, { squares: Map<string, Body[]>; reach: number }>();
+
+    // The colliders of the props of a terrain that may touch what is inside `box`
+    private propsNear(ground: Body, box: THREE.Box3): Body[] {
+        const { data, origin } = ground.terrain!;
+        if (!data.scatter?.length) return [];
+        let kept = this.props.get(data);
+        if (!kept) {
+            kept = { squares: new Map(), reach: 0 };
+            const placed = new THREE.Matrix4();
+            const size = new THREE.Vector3();
+            for (const { fields, matrix } of scatterColliders(this.registry, data)) {
+                placed.makeTranslation(origin.x, origin.y, origin.z).multiply(matrix);
+                const body: Body = { object: ground.object, solid: true, layer: layerOf(fields.layer), dynamic: false, mass: 0, ...shapeOf(fields as unknown as ColliderShape, placed) };
+                const around = boundsOf(body);
+                const middle = around.getCenter(new THREE.Vector3());
+                kept.reach = Math.max(kept.reach, around.getSize(size).length() / 2);
+                const key = `${Math.floor(middle.x / PROP_SQUARE)},${Math.floor(middle.z / PROP_SQUARE)}`;
+                if (!kept.squares.has(key)) kept.squares.set(key, []);
+                kept.squares.get(key)!.push(body);
             }
-            // The line of the capsule ends where its round ends begin
-            const radius = f.radius * Math.max(scale.x, scale.z);
-            const half = Math.max(0, (f.height * scale.y) / 2 - radius);
-            return {
-                object,
-                solid,
-                layer,
-                dynamic,
-                mass,
-                capsule: { bottom: center.clone().setY(center.y - half), top: center.clone().setY(center.y + half), radius },
-            };
+            this.props.set(data, kept);
         }
-        const half = new THREE.Vector3(f.sizeX, f.sizeY, f.sizeZ).multiplyScalar(0.5);
-        const oriented = orientedBox(marker.matrixWorld, half);
-        return { object, solid, layer, dynamic, mass, box: new THREE.Box3(half.clone().negate(), half).applyMatrix4(marker.matrixWorld), ...(oriented ? { oriented } : {}) };
+        const found: Body[] = [];
+        const fromX = Math.floor((box.min.x - kept.reach) / PROP_SQUARE);
+        const toX = Math.floor((box.max.x + kept.reach) / PROP_SQUARE);
+        const fromZ = Math.floor((box.min.z - kept.reach) / PROP_SQUARE);
+        const toZ = Math.floor((box.max.z + kept.reach) / PROP_SQUARE);
+        // A box as big as the world: every square that has something, not every square there could be
+        if ((toX - fromX + 1) * (toZ - fromZ + 1) > kept.squares.size) {
+            for (const [key, bodies] of kept.squares) {
+                const [x, z] = key.split(",").map(Number);
+                if (x >= fromX && x <= toX && z >= fromZ && z <= toZ) found.push(...bodies);
+            }
+            return found;
+        }
+        for (let x = fromX; x <= toX; x++) {
+            for (let z = fromZ; z <= toZ; z++) found.push(...(kept.squares.get(`${x},${z}`) ?? []));
+        }
+        return found;
+    }
+
+    // The props around a collider that it may run into: of every terrain, within a few meters of it
+    private propsAround(mine: Body, bodies: Body[], margin: number): Body[] {
+        const box = boundsOf(mine).expandByScalar(margin);
+        return bodies.filter((body) => body.terrain).flatMap((ground) => this.propsNear(ground, box));
     }
 
     // The ground of a Terrain component, from its mesh: where it is now
@@ -701,7 +769,8 @@ export class Runtime {
         if (!mine?.solid) return undefined;
         const inside = new Set<THREE.Object3D>();
         object.traverse((obj) => inside.add(obj));
-        const others = this.bodies().filter(
+        const all = this.bodies();
+        const others = [...all, ...this.propsAround(mine, all, PROP_MARGIN)].filter(
             (body) => body.solid && !inside.has(body.object) && this.registry.layersCollide(mine.layer, body.layer)
         );
         // What it is stuck in already does not hold it: otherwise it could never get out
@@ -735,7 +804,8 @@ export class Runtime {
         if (!mine?.solid) return null;
         const inside = new Set<THREE.Object3D>();
         object.traverse((obj) => inside.add(obj));
-        const others = this.bodies().filter(
+        const all = this.bodies();
+        const others = [...all, ...this.propsAround(mine, all, 1)].filter(
             (body) => body.solid && !body.dynamic && !inside.has(body.object) && this.registry.layersCollide(mine.layer, body.layer) && !overlaps(mine, body)
         );
         object.position.y -= GROUND_REACH;
@@ -846,7 +916,25 @@ export class Runtime {
         options.ignore?.traverse((obj) => skipped.add(obj));
 
         let best: RayHit | null = null;
-        for (const body of this.bodies()) {
+        const bodies = this.bodies();
+        // The props of the terrains the ray passes over: those of the squares along its way
+        const along3 = new THREE.Ray(from, along);
+        const enter = new THREE.Vector3();
+        for (const ground of bodies.filter((body) => body.terrain?.data.scatter?.length)) {
+            // A prop may stand higher than the highest ground
+            const over = ground.box!.clone().expandByVector(new THREE.Vector3(0, 100, 0));
+            if (!over.containsPoint(from) && !along3.intersectBox(over, enter)) continue;
+            const start = over.containsPoint(from) ? 0 : enter.distanceTo(from);
+            const end = Math.min(reach, start + over.getSize(new THREE.Vector3()).length());
+            const way = new THREE.Box3();
+            const seen = new Set<Body>();
+            for (let at = start; at <= end; at += PROP_SQUARE) {
+                way.setFromPoints([along3.at(at, new THREE.Vector3()), along3.at(Math.min(end, at + PROP_SQUARE), new THREE.Vector3())]);
+                for (const prop of this.propsNear(ground, way)) seen.add(prop);
+            }
+            bodies.push(...seen);
+        }
+        for (const body of bodies) {
             if (skipped.has(body.object) || (!body.solid && !options.triggers)) continue;
             if (options.layers && !options.layers.includes(body.layer)) continue;
             const hit = rayBody(from, along, body, reach);

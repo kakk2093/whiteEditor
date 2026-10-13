@@ -154,6 +154,22 @@ try {
       problems.push(`prefabs/${name}.json: ${e.message}`)
     }
   }
+  // The biomes: what the generator of the terrains makes a land by
+  for (const name of jsonNames('biomes')) {
+    try {
+      const biome = readJson('biomes', name)
+      registry.setBiome(name, biome)
+      for (const problem of engine.validateBiome(biome, { prefabs: registry.prefabNames() })) problems.push(`biomes/${name}.json: ${problem}`)
+    } catch (e) {
+      problems.push(`biomes/${name}.json: ${e.message}`)
+    }
+  }
+  // The props of the terrains are copies of the prefabs, and their generators name the biomes
+  for (const name of registry.terrainNames()) {
+    const terrain = registry.getTerrain(name)
+    for (const problem of engine.validateScatter(terrain.scatter ?? [], registry.prefabNames())) problems.push(`terrains/${name}.json: ${problem}`)
+    for (const problem of terrain.generator ? engine.validateGenerator(terrain.generator, { biomes: registry.biomeNames() }) : []) problems.push(`terrains/${name}.json: ${problem}`)
+  }
   for (const [name, prefab] of prefabs) {
     for (const problem of engine.validatePrefab(name, prefab, registry)) problems.push(`prefabs/${name}.json: ${problem}`)
   }

@@ -11,6 +11,9 @@ import { createModelFile } from "./gltf";
 import type { ModelFileFields } from "./gltf";
 import { createTerrain, flatTerrain, isPainted } from "./terrain";
 import type { TerrainFields } from "./terrain";
+import { createScatter } from "./scatter";
+import { createWater } from "./water";
+import type { WaterFields } from "./water";
 
 // What a component can take from the project's scripts/: a code model, a behavior
 export interface SourceDef {
@@ -210,8 +213,33 @@ export const componentDefs: Record<string, ComponentDef> = {
         },
         create: (f, registry) => {
             const data = registry.getTerrain(f.terrain as string) ?? DEFAULT_TERRAIN;
-            return createTerrain(f as unknown as TerrainFields, data, registry.getGroundMaterial(f.material as string, isPainted(data)));
+            const mesh = createTerrain(f as unknown as TerrainFields, data, registry.getGroundMaterial(f.material as string, isPainted(data)));
+            // The props that stand on it
+            if (data.scatter?.length) mesh.add(createScatter(registry, data));
+            return mesh;
         },
+    },
+    // A level surface of water (see water.ts): a lake, a marsh, a sea. The entity stands at the surface. It
+    // stops nothing; while the camera is under it, the scene is seen as under water.
+    water: {
+        label: "Water",
+        fields: {
+            // Meters across, in the units of the entity
+            sizeX: { type: "number", default: 64, min: 0.01, step: 1 },
+            sizeZ: { type: "number", default: 64, min: 0.01, step: 1 },
+            // How far down from the surface it is water, meters: below that the scene is as it is on land
+            depth: { type: "number", default: 20, min: 0.01, step: 1 },
+            color: { type: "color", default: "#2a6f8a" },
+            // 1 hides what is in the water
+            opacity: { type: "number", default: 0.75, min: 0, max: 1, step: 0.05 },
+            // Seen from under the surface: the color of the water all around, how far one sees in it (meters),
+            // how much light there is, and the look (none keeps the look of the scene)
+            underColor: { type: "color", default: "#0b4a5c" },
+            visibility: { type: "number", default: 14, min: 0.5, step: 1 },
+            underLight: { type: "number", default: 0.7, min: 0, step: 0.1 },
+            look: { type: "asset", kind: "look", default: "" },
+        },
+        create: (f) => createWater(f as unknown as WaterFields),
     },
     // A box of the world with an environment of its own (see environment.ts): while the camera is inside
     // it, the scene has the fog, the light and the look written here. Under water, a cave, a room.

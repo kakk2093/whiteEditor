@@ -1543,3 +1543,21 @@ kbd {
     border-top: 1px solid var(--border);
     font-weight: 600;
 }
+
+.terrain-props {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 4px 0 4px 8px;
+    border-left: 2px solid var(--border);
+}
+
+.terrain-props-title {
+    display: flex;
+    align-items: center;
+    color: var(--muted);
+}
+
+.terrain-props-title .spacer {
+    flex: 1;
+}

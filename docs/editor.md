@@ -271,3 +271,29 @@ Play, панели, undo, выделение, меню, настройки. Ук
   зерно и генерирует (два шага undo: зерно и земля). Шестая кисть — Generate (`brush.tool === "generate"`):
   в `terrainBrush.ts` вместо `brushTerrain` зовётся `generateTerrain` с областью кисти; строки высот и цветов
   копируются при первом касании, как у остальных кистей.
+- **Кисти Plant и Erase** (14.10.2026). Ещё два инструмента `sceneStore.brush.tool` и поля `prefab`, `spacing`,
+  `sizeMin`, `sizeMax`. В `terrainBrush.ts` у них своя ветка `frame`: Plant зовёт `plantScatter` с числом
+  попыток `strength × dt ×` площадь кисти в сотках (дробная часть копится в `stroke.due`, первое касание сажает
+  сразу), с Shift — `eraseScatter` только этого префаба; Erase убирает пропсы всех префабов. Списки пропсов
+  копируются в начале мазка целиком (они короткие), после касания — `updateScatter` у мешей. Кисти высоты тоже
+  зовут `updateScatter`, если пропсы есть: они поднимаются вместе с землёй. Мазок — тот же шаг undo
+  (`strokeTerrain`). В панели: список префабов проекта, Spacing, Size (от и до), строка «N props on this terrain».
+- **Биом в панели рельефа** (14.10.2026). В разделе Generate поле Biome (список биомов проекта) и кнопка New Biome
+  (`createBiome(terrain)`: файл с обычными значениями, сразу ставится рельефу). У выбранного биома тут же его
+  редактор (`BiomeEditor` в `TerrainTools.tsx`): поля из `biomeFields`, список Props из `biomePropFields` с Add
+  Props и «×». Правка — `updateBiome(name, data)`: реестр, шаг undo (соседние сливаются), файл через 300 мс; землю
+  она не меняет. Откат и правка с диска — раздел `biomes` в `assetHandler` и `assetChangedOnDisk`. Отдельного
+  места для биомов (вкладки в панели Project) нет: биом виден только через рельеф, который его называет.
+- **Вкладки Terrains и Biomes в панели Project** (14.10.2026). `AssetRef.kind` дополнен `"terrain"` и `"biome"`.
+  Рельеф: «+» → New Terrain (`createTerrainAsset()` без объекта — ассет выбирается), двойной щелчок или Add to
+  Scene — `addTerrainToScene` (новый объект с компонентом Terrain), Duplicate (`duplicateGround`), Delete
+  (`deleteGround`, шаг undo), Rename (`renameGround`: файл, реестр, компоненты `terrain` во всех сценах и
+  префабах через `renameInScene` / `renameInEntities` с видом `"terrain"`, история — `renameReferences`), Select
+  in Scene. Биом: New Biome, двойной щелчок или Use for the Selected Terrain (ставит `generator.biome` рельефу
+  выбранного объекта), Duplicate, Delete, Rename (переписывает `generator.biome` и список `biomes` в рельефах).
+  Inspector выбранного биома — тот же `BiomeEditor`, что в панели рельефа, плюс «Terrains that use it»; рельефа —
+  размер, число высот, пропсы, биомы, объекты сцены. Папок у этих вкладок нет (`FOLDERS` их не знает), тайлы не
+  перетаскиваются.
+- **Карта биомов в панели рельефа** (14.10.2026). Под кнопками Generate строка «On this ground: Meadow 60%, Swamp
+  25%, no biome 15%». Generate у земли с картой пересобирает её по карте (`generateTerrainAsset(name, at)`);
+  рядом появляется Fill — вся земля становится выбранным биомом (`fill = true`: карта сбрасывается).

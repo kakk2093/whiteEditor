@@ -19,7 +19,23 @@ export interface TerrainData {
     // As many rows of as many numbers as `heights` has
     colors?: number[][];
     // The settings the ground is generated with (see generate.ts); what is not named has its usual value
-    generator?: Record<string, number | boolean>;
+    generator?: Record<string, number | boolean | string>;
+    // The props that stand on the ground (see scatter.ts): for every prefab, its copies
+    scatter?: ScatterLayer[];
+    // Which biome lies where (see generate.ts): the names of the biomes of this ground, and for every height
+    // the number of its biome in that list; -1 is ground no biome has made, which the generator leaves alone
+    biomes?: string[];
+    biomeMap?: number[][];
+}
+
+// A copy of a prefab on the ground: x and z in meters from the middle of the terrain, how far it is turned
+// around the vertical (degrees) and how many times the size of the prefab it is. It stands as high as the
+// ground is there.
+export type ScatterItem = [x: number, z: number, turn: number, size: number];
+
+export interface ScatterLayer {
+    prefab: string;
+    items: ScatterItem[];
 }
 
 // The fields of the Terrain component, defaults filled in (see components.ts)
@@ -63,6 +79,9 @@ export function cloneTerrain(data: TerrainData): TerrainData {
         ...(data.palette ? { palette: [...data.palette] } : {}),
         ...(data.colors ? { colors: data.colors.map((row) => [...row]) } : {}),
         ...(data.generator ? { generator: { ...data.generator } } : {}),
+        ...(data.scatter ? { scatter: data.scatter.map((layer) => ({ prefab: layer.prefab, items: [...layer.items] })) } : {}),
+        ...(data.biomes ? { biomes: [...data.biomes] } : {}),
+        ...(data.biomeMap ? { biomeMap: data.biomeMap.map((row) => [...row]) } : {}),
     };
 }
 
@@ -72,10 +91,12 @@ export function cloneTerrain(data: TerrainData): TerrainData {
 export function resizeTerrain(data: TerrainData, columns: number, rows: number, cell: number): TerrainData {
     const heights: number[][] = [];
     const colors: number[][] = [];
+    const biomeMap: number[][] = [];
     const [width, depth] = terrainSize(data);
     for (let j = 0; j <= rows; j++) {
         const row: number[] = [];
         const paint: number[] = [];
+        const lands: number[] = [];
         for (let i = 0; i <= columns; i++) {
             const x = (i - columns / 2) * cell;
             const z = (j - rows / 2) * cell;
@@ -86,11 +107,23 @@ export function resizeTerrain(data: TerrainData, columns: number, rows: number, 
             const oi = Math.round((nearX + width / 2) / data.cell);
             const oj = Math.round((nearZ + depth / 2) / data.cell);
             paint.push(data.colors?.[oj]?.[oi] ?? 0);
+            // New ground past the old edge is nobody's: a biome is laid on it by hand
+            lands.push(nearX === x && nearZ === z ? data.biomeMap?.[oj]?.[oi] ?? -1 : -1);
         }
         heights.push(row);
         colors.push(paint);
+        biomeMap.push(lands);
     }
-    return { cell, heights, ...(data.palette ? { palette: [...data.palette] } : {}), ...(data.colors ? { colors } : {}), ...(data.generator ? { generator: { ...data.generator } } : {}) };
+    const resized: TerrainData = {
+        cell,
+        heights,
+        ...(data.palette ? { palette: [...data.palette] } : {}),
+        ...(data.colors ? { colors } : {}),
+        ...(data.generator ? { generator: { ...data.generator } } : {}),
+        ...(data.biomes && data.biomeMap ? { biomes: [...data.biomes], biomeMap } : {}),
+    };
+    const scatter = fitScatter(data.scatter, resized);
+    return scatter?.length ? { ...resized, scatter } : resized;
 }
 
 // A flat piece: what a Terrain component shows while it names no asset, and what a new asset starts as
@@ -228,12 +261,15 @@ export function rayTerrain(data: TerrainData, origin: THREE.Vector3, direction: 
 }
 
 // Problems of a terrain asset (terrains/<name>.json as it is on disk)
-export function validateTerrain(data: unknown): string[] {
+// `known`: the names of the prefabs and of the biomes of the project, if they are known: its props and its
+// generator may name only those
+export function validateTerrain(data: unknown, known: { prefabs?: string[]; biomes?: string[] } = {}): string[] {
     if (typeof data !== "object" || data === null || Array.isArray(data)) return ["must be an object: { \"cell\": 1, \"heights\": [[0, 0], [0, 0]] }"];
     const problems: string[] = [];
-    const { cell, heights, palette, colors, generator, ...rest } = data as Record<string, unknown>;
-    for (const key of Object.keys(rest)) problems.push(`unknown field "${key}" (known: cell, heights, palette, colors, generator)`);
-    if (generator !== undefined) problems.push(...validateGenerator(generator));
+    const { cell, heights, palette, colors, generator, scatter, biomes, biomeMap, ...rest } = data as Record<string, unknown>;
+    for (const key of Object.keys(rest)) problems.push(`unknown field "${key}" (known: cell, heights, palette, colors, generator, scatter, biomes, biomeMap)`);
+    if (scatter !== undefined) problems.push(...validateScatter(scatter, known.prefabs));
+    if (generator !== undefined) problems.push(...validateGenerator(generator, known));
     if (typeof cell !== "number" || !(cell > 0)) problems.push("cell: must be a number of meters above zero");
     if (!Array.isArray(heights) || heights.length < 2) {
         problems.push("heights: must be a list of at least 2 rows, each a list of numbers");
@@ -251,6 +287,28 @@ export function validateTerrain(data: unknown): string[] {
         if (row.length !== length) {
             problems.push(`heights: row ${j + 1} has ${row.length} numbers, the first one has ${length}: every row must be as long`);
             break;
+        }
+    }
+    if (biomes !== undefined || biomeMap !== undefined) {
+        const names = Array.isArray(biomes) && biomes.every((name) => typeof name === "string") ? (biomes as string[]) : null;
+        if (!names) problems.push('biomes: must be a list of the names of biomes, e.g. ["Meadow", "Swamp"]');
+        for (const name of names ?? []) {
+            if (known.biomes && !known.biomes.includes(name)) problems.push(`biomes: biome "${name}" does not exist (known: ${known.biomes.join(", ") || "none"})`);
+        }
+        if (!Array.isArray(biomeMap) || biomeMap.length !== heights.length) {
+            problems.push(`biomeMap: must have as many rows as heights (${heights.length})`);
+        } else {
+            for (let j = 0; j < biomeMap.length; j++) {
+                const row: unknown = biomeMap[j];
+                if (!Array.isArray(row) || row.length !== length) {
+                    problems.push(`biomeMap: row ${j + 1} must have as many numbers as a row of heights (${length})`);
+                    break;
+                }
+                if (row.some((n) => !Number.isInteger(n) || n < -1 || n >= (names?.length ?? 0))) {
+                    problems.push(`biomeMap: row ${j + 1}: every number must be a place in "biomes" (0 to ${(names?.length ?? 0) - 1}), or -1 for none`);
+                    break;
+                }
+            }
         }
     }
     const kinds = Array.isArray(palette) ? palette.length : 0;
@@ -286,8 +344,16 @@ export function validateTerrain(data: unknown): string[] {
 export function parseTerrain(json: unknown): TerrainData {
     const problems = validateTerrain(json);
     if (problems.length > 0) throw new Error(problems[0]);
-    const { cell, heights, palette, colors, generator } = json as TerrainData;
-    return { cell, heights, ...(palette ? { palette } : {}), ...(colors ? { colors } : {}), ...(generator ? { generator } : {}) };
+    const { cell, heights, palette, colors, generator, scatter, biomes, biomeMap } = json as TerrainData;
+    return {
+        cell,
+        heights,
+        ...(palette ? { palette } : {}),
+        ...(colors ? { colors } : {}),
+        ...(generator ? { generator } : {}),
+        ...(scatter ? { scatter } : {}),
+        ...(biomes && biomeMap ? { biomes, biomeMap } : {}),
+    };
 }
 
 // A part of the grid of a ground: the heights from column `fromI` to `toI` and from row `fromJ` to `toJ`
@@ -535,4 +601,34 @@ export function brushTerrain(data: TerrainData, tool: TerrainTool, x: number, z:
         }
     }
     return changed;
+}
+
+// The props of a ground of another size: those that still stand on it
+export function fitScatter(scatter: ScatterLayer[] | undefined, data: TerrainData): ScatterLayer[] | undefined {
+    if (!scatter) return undefined;
+    const [width, depth] = terrainSize(data);
+    return scatter
+        .map((layer) => ({ prefab: layer.prefab, items: layer.items.filter((item) => Math.abs(item[0]) <= width / 2 && Math.abs(item[1]) <= depth / 2) }))
+        .filter((layer) => layer.items.length > 0);
+}
+
+// Problems of the `scatter` of a terrain file; `prefabs` are the names it may use, if they are known
+export function validateScatter(scatter: unknown, prefabs?: string[]): string[] {
+    if (!Array.isArray(scatter)) return ['scatter: must be a list: [{ "prefab": "Pine", "items": [[x, z, turn, size], ...] }]'];
+    const problems: string[] = [];
+    const seen = new Set<unknown>();
+    scatter.forEach((layer: Partial<ScatterLayer> | null, n) => {
+        const at = `scatter[${n}]`;
+        if (typeof layer !== "object" || layer === null || typeof layer.prefab !== "string" || !layer.prefab) {
+            problems.push(`${at}: must be { "prefab": "<name>", "items": [...] }`);
+            return;
+        }
+        if (seen.has(layer.prefab)) problems.push(`${at}: prefab "${layer.prefab}" is listed more than once`);
+        seen.add(layer.prefab);
+        if (prefabs && !prefabs.includes(layer.prefab)) problems.push(`${at}: prefab "${layer.prefab}" does not exist (known: ${prefabs.join(", ") || "none"})`);
+        const bad = Array.isArray(layer.items) ? layer.items.findIndex((item) => !Array.isArray(item) || item.length !== 4 || item.some((value) => typeof value !== "number" || !Number.isFinite(value))) : 0;
+        if (!Array.isArray(layer.items)) problems.push(`${at}.items: must be a list of [x, z, turn, size]`);
+        else if (bad >= 0) problems.push(`${at}.items[${bad}]: must be four numbers: [x, z, turn, size]`);
+    });
+    return problems;
 }
