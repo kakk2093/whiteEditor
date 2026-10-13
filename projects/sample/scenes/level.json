@@ -1,26 +1,31 @@
 {
   "version": 3,
   "environment": {
+    "background": "#222222",
     "sky": true,
     "skyTop": "#3f7fd6",
     "skyHorizon": "#bfe3ff",
     "skyGround": "#6c7a66",
+    "skyImage": "",
+    "skyShader": "",
+    "skyRotation": 0,
+    "skyLight": 0,
+    "ambientColor": "#ffffff",
     "ambientIntensity": 0.75,
-    "look": "Toy"
+    "fog": false,
+    "fogColor": "#222222",
+    "fogNear": 5,
+    "fogFar": 50,
+    "look": "Glow",
+    "skyParams": {}
   },
   "entities": [
     {
+      "id": "4045b265",
       "name": "Camera",
-      "position": [
-        -4,
-        5.5,
-        10
-      ],
-      "rotation": [
-        -24,
-        0,
-        0
-      ],
+      "position": [-4, 5.5, 10],
+      "rotation": [-24, 0, 0],
+      "scale": [1, 1, 1],
       "components": [
         {
           "type": "camera",
@@ -30,20 +35,15 @@
           "type": "script",
           "script": "chase"
         }
-      ]
+      ],
+      "children": []
     },
     {
+      "id": "2316fee1",
       "name": "Sun",
-      "position": [
-        4,
-        8,
-        5
-      ],
-      "rotation": [
-        -55,
-        25,
-        0
-      ],
+      "position": [4, 8, 5],
+      "rotation": [-55, 25, 0],
+      "scale": [1, 1, 1],
       "components": [
         {
           "type": "light",
@@ -51,16 +51,16 @@
           "castShadow": true,
           "intensity": 1.6
         }
-      ]
+      ],
+      "children": []
     },
     {
+      "id": "e57dd945",
       "name": "Player",
       "tag": "player",
-      "position": [
-        -4,
-        1,
-        0
-      ],
+      "position": [-4, 1, 0],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
       "components": [
         {
           "type": "mesh",
@@ -78,20 +78,15 @@
           "type": "script",
           "script": "hero"
         }
-      ]
+      ],
+      "children": []
     },
     {
+      "id": "c15e762d",
       "name": "Ground A",
-      "position": [
-        0,
-        -0.5,
-        0
-      ],
-      "scale": [
-        12,
-        1,
-        6
-      ],
+      "position": [0, -0.5, 0],
+      "rotation": [0, 0, 0],
+      "scale": [12, 1, 6],
       "components": [
         {
           "type": "mesh",
@@ -100,25 +95,15 @@
         {
           "type": "collider"
         }
-      ]
+      ],
+      "children": []
     },
     {
+      "id": "e0dc3a1e",
       "name": "Coin 1",
-      "position": [
-        -2,
-        0.8,
-        0
-      ],
-      "rotation": [
-        90,
-        0,
-        0
-      ],
-      "scale": [
-        0.6,
-        0.12,
-        0.6
-      ],
+      "position": [-2, 0.8, 0],
+      "rotation": [90, 0, 0],
+      "scale": [0.6, 0.12, 0.6],
       "components": [
         {
           "type": "mesh",
@@ -136,15 +121,15 @@
           "type": "script",
           "script": "coin"
         }
-      ]
+      ],
+      "children": []
     },
     {
+      "id": "38abe55b",
       "name": "Crate 1",
-      "position": [
-        0,
-        0.5,
-        0
-      ],
+      "position": [0, 0.5, 0],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
       "components": [
         {
           "type": "mesh",
@@ -157,36 +142,40 @@
           "type": "body",
           "mass": 0.6
         }
-      ]
+      ],
+      "children": []
     },
     {
+      "id": "ffbffd79",
       "name": "Crate 2",
-      "position": [
-        0,
-        1.5,
-        0
-      ],
+      "position": [0, 1.5, 0],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
       "components": [
         {
           "type": "mesh",
           "material": "Wood"
         },
         {
-          "type": "collider"
+          "type": "collider",
+          "solid": true,
+          "sizeX": 1,
+          "layer": "",
+          "shape": "box"
         },
         {
           "type": "body",
           "mass": 0.6
         }
-      ]
+      ],
+      "children": []
     },
     {
+      "id": "1e36880c",
       "name": "Crate 3",
-      "position": [
-        0,
-        0.5,
-        1.1
-      ],
+      "position": [0, 0.5074, 1.1],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
       "components": [
         {
           "type": "mesh",
@@ -199,20 +188,15 @@
           "type": "body",
           "mass": 0.6
         }
-      ]
+      ],
+      "children": []
     },
     {
+      "id": "463caa36",
       "name": "Ledge",
-      "position": [
-        3,
-        0.125,
-        0
-      ],
-      "scale": [
-        1.5,
-        0.25,
-        6
-      ],
+      "position": [3, 0.125, 0],
+      "rotation": [0, 0, 0],
+      "scale": [1.5, 0.25, 6],
       "components": [
         {
           "type": "mesh",
@@ -221,25 +205,15 @@
         {
           "type": "collider"
         }
-      ]
+      ],
+      "children": []
     },
     {
+      "id": "09bf3ba9",
       "name": "Coin 2",
-      "position": [
-        3,
-        1.05,
-        0
-      ],
-      "rotation": [
-        90,
-        0,
-        0
-      ],
-      "scale": [
-        0.6,
-        0.12,
-        0.6
-      ],
+      "position": [3, 1.05, 0],
+      "rotation": [90, 0, 0],
+      "scale": [0.6, 0.12, 0.6],
       "components": [
         {
           "type": "mesh",
@@ -257,20 +231,15 @@
           "type": "script",
           "script": "coin"
         }
-      ]
+      ],
+      "children": []
     },
     {
+      "id": "a3791fa7",
       "name": "Spikes",
-      "position": [
-        4.9,
-        0.4,
-        -2
-      ],
-      "scale": [
-        0.8,
-        0.8,
-        0.8
-      ],
+      "position": [4.9, 0.4, -2],
+      "rotation": [0, 0, 0],
+      "scale": [0.8, 0.8, 0.8],
       "components": [
         {
           "type": "mesh",
@@ -289,20 +258,15 @@
             "seconds": 1.6
           }
         }
-      ]
+      ],
+      "children": []
     },
     {
+      "id": "008d42a5",
       "name": "Ground B",
-      "position": [
-        11,
-        -0.5,
-        0
-      ],
-      "scale": [
-        6,
-        1,
-        6
-      ],
+      "position": [11, -0.5, 0],
+      "rotation": [0, 0, 0],
+      "scale": [6, 1, 6],
       "components": [
         {
           "type": "mesh",
@@ -311,25 +275,15 @@
         {
           "type": "collider"
         }
-      ]
+      ],
+      "children": []
     },
     {
+      "id": "04ac5fa0",
       "name": "Coin 3",
-      "position": [
-        9.5,
-        0.8,
-        0
-      ],
-      "rotation": [
-        90,
-        0,
-        0
-      ],
-      "scale": [
-        0.6,
-        0.12,
-        0.6
-      ],
+      "position": [9.5, 0.8, 0],
+      "rotation": [90, 0, 0],
+      "scale": [0.6, 0.12, 0.6],
       "components": [
         {
           "type": "mesh",
@@ -347,20 +301,15 @@
           "type": "script",
           "script": "coin"
         }
-      ]
+      ],
+      "children": []
     },
     {
+      "id": "96f96428",
       "name": "Lift",
-      "position": [
-        12.5,
-        0.1,
-        0
-      ],
-      "scale": [
-        2,
-        0.2,
-        2
-      ],
+      "position": [12.5, 0.1, 0],
+      "rotation": [0, 0, 0],
+      "scale": [2, 0.2, 2],
       "components": [
         {
           "type": "mesh",
@@ -377,20 +326,15 @@
             "seconds": 3
           }
         }
-      ]
+      ],
+      "children": []
     },
     {
+      "id": "989e9ae8",
       "name": "Tower",
-      "position": [
-        15.5,
-        1.5,
-        0
-      ],
-      "scale": [
-        3,
-        3,
-        4
-      ],
+      "position": [15.5, 1.5, 0],
+      "rotation": [0, 0, 0],
+      "scale": [3, 3, 4],
       "components": [
         {
           "type": "mesh",
@@ -399,25 +343,15 @@
         {
           "type": "collider"
         }
-      ]
+      ],
+      "children": []
     },
     {
+      "id": "0d6788c4",
       "name": "Coin 4",
-      "position": [
-        15,
-        3.8,
-        0
-      ],
-      "rotation": [
-        90,
-        0,
-        0
-      ],
-      "scale": [
-        0.6,
-        0.12,
-        0.6
-      ],
+      "position": [15, 3.8, 0],
+      "rotation": [90, 0, 0],
+      "scale": [0.6, 0.12, 0.6],
       "components": [
         {
           "type": "mesh",
@@ -435,20 +369,15 @@
           "type": "script",
           "script": "coin"
         }
-      ]
+      ],
+      "children": []
     },
     {
+      "id": "8524c92f",
       "name": "Exit",
-      "position": [
-        16.4,
-        4,
-        0
-      ],
-      "scale": [
-        0.3,
-        2,
-        1.4
-      ],
+      "position": [16.4, 4, 0],
+      "rotation": [0, 0, 0],
+      "scale": [0.3, 2, 1.4],
       "components": [
         {
           "type": "mesh",
@@ -465,15 +394,15 @@
             "scene": "win"
           }
         }
-      ]
+      ],
+      "children": []
     },
     {
+      "id": "4f0812f7",
       "name": "Sparks",
-      "position": [
-        0,
-        -20,
-        0
-      ],
+      "position": [0, -20, 0],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
       "components": [
         {
           "type": "particles",
@@ -489,10 +418,15 @@
           "colorEnd": "#ffb020",
           "additive": true
         }
-      ]
+      ],
+      "children": []
     },
     {
+      "id": "bc0307cc",
       "name": "HUD",
+      "position": [0, 0, 0],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
       "components": [
         {
           "type": "canvas"
@@ -500,7 +434,11 @@
       ],
       "children": [
         {
+          "id": "9e054fe4",
           "name": "Coins",
+          "position": [0, 0, 0],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1],
           "components": [
             {
               "type": "ui",
@@ -522,27 +460,34 @@
               "type": "script",
               "script": "hud"
             }
-          ]
+          ],
+          "children": []
         },
         {
+          "id": "ff0fca94",
           "name": "Hint",
+          "position": [0, 0, 0],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1],
           "components": [
             {
               "type": "ui",
               "anchor": "bottom",
               "y": -14,
-              "width": 700,
-              "height": 28
+              "width": 694,
+              "height": 41,
+              "x": -3
             },
             {
               "type": "text",
               "text": "Push the crates, jump the gap, ride the lift",
-              "size": 16,
+              "size": 26,
               "color": "#e8f0ff",
               "outline": 2,
               "outlineColor": "#1a2233"
             }
-          ]
+          ],
+          "children": []
         }
       ]
     }

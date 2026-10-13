@@ -134,6 +134,9 @@ export class Physics {
             fixedRotation: b?.lockRotation ?? false,
             collisionFilterGroup: group,
             collisionFilterMask: mask,
+            // Only what the physics moves may fall asleep: a sleeping body pushes nothing, and what a behavior
+            // moves (a player who stood still for a moment) must push the bodies in its way when it goes on
+            allowSleep: !!b,
             sleepSpeedLimit: 0.15,
             sleepTimeLimit: 0.5,
         });

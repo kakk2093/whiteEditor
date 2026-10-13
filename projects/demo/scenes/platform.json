@@ -1,75 +1,241 @@
 {
   "version": 3,
-  "environment": { "sky": true, "ambientIntensity": 0.8 },
+  "environment": {
+    "background": "#222222",
+    "sky": true,
+    "skyTop": "#2f6fc4",
+    "skyHorizon": "#bfd9ee",
+    "skyGround": "#6b6156",
+    "skyImage": "",
+    "skyShader": "",
+    "skyRotation": 0,
+    "skyLight": 0,
+    "ambientColor": "#ffffff",
+    "ambientIntensity": 0.8,
+    "fog": false,
+    "fogColor": "#222222",
+    "fogNear": 5,
+    "fogFar": 50,
+    "look": "",
+    "skyParams": {}
+  },
   "entities": [
-    { "name": "Camera", "position": [0.5, 6, 12], "rotation": [-25, 0, 0], "components": [{ "type": "camera" }] },
     {
+      "id": "d18f407d",
+      "name": "Camera",
+      "position": [0.5, 6, 12],
+      "rotation": [-25, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "camera"
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "e9b7aba8",
       "name": "Sun",
       "position": [3, 6, 4],
       "rotation": [-50, 30, 0],
-      "components": [{ "type": "light", "kind": "directional", "castShadow": true }]
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "light",
+          "kind": "directional",
+          "castShadow": true
+        }
+      ],
+      "children": []
     },
     {
+      "id": "3663a0ae",
       "name": "Floor",
       "position": [0, -0.5, 0],
+      "rotation": [0, 0, 0],
       "scale": [16, 1, 12],
-      "components": [{ "type": "mesh", "material": "Tiles" }, { "type": "collider" }]
+      "components": [
+        {
+          "type": "mesh",
+          "material": "Tiles"
+        },
+        {
+          "type": "collider"
+        }
+      ],
+      "children": []
     },
     {
+      "id": "bb25c299",
       "name": "Player",
       "tag": "player",
       "position": [-6, 1, 2],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
       "components": [
-        { "type": "mesh", "shape": "capsule" },
-        { "type": "collider", "shape": "capsule", "radius": 0.5, "height": 2, "layer": "Player" },
-        { "type": "script", "script": "walker" }
-      ]
+        {
+          "type": "mesh",
+          "shape": "capsule"
+        },
+        {
+          "type": "collider",
+          "shape": "capsule",
+          "radius": 0.5,
+          "height": 2,
+          "layer": "Player"
+        },
+        {
+          "type": "script",
+          "script": "walker"
+        }
+      ],
+      "children": []
     },
     {
+      "id": "18a57648",
       "name": "Ledge",
       "position": [-3, 0.125, 2],
+      "rotation": [0, 0, 0],
       "scale": [2, 0.25, 2],
-      "components": [{ "type": "mesh", "material": "Stone" }, { "type": "collider" }]
+      "components": [
+        {
+          "type": "mesh",
+          "material": "Stone"
+        },
+        {
+          "type": "collider"
+        }
+      ],
+      "children": []
     },
     {
+      "id": "fc33e830",
       "name": "Block",
       "position": [-1, 0.5, 2],
+      "rotation": [0, 0, 0],
       "scale": [2, 1, 2],
-      "components": [{ "type": "mesh", "material": "Bricks" }, { "type": "collider" }]
+      "components": [
+        {
+          "type": "mesh",
+          "material": "Bricks"
+        },
+        {
+          "type": "collider"
+        }
+      ],
+      "children": []
     },
     {
+      "id": "15868402",
       "name": "Ghost Wall",
       "position": [2.5, 1, 2],
+      "rotation": [0, 0, 0],
       "scale": [0.3, 2, 4],
-      "components": [{ "type": "mesh", "material": "Glowing" }, { "type": "collider", "layer": "Ghost" }]
+      "components": [
+        {
+          "type": "mesh",
+          "material": "Glowing"
+        },
+        {
+          "type": "collider",
+          "layer": "Ghost"
+        }
+      ],
+      "children": []
     },
     {
+      "id": "df3dd3e7",
       "name": "Wall",
       "position": [-3, 1, -1.5],
+      "rotation": [0, 0, 0],
       "scale": [5, 2, 0.3],
-      "components": [{ "type": "mesh", "material": "Bricks" }, { "type": "collider" }]
+      "components": [
+        {
+          "type": "mesh",
+          "material": "Bricks"
+        },
+        {
+          "type": "collider"
+        }
+      ],
+      "children": []
     },
     {
+      "id": "bce2b382",
       "name": "Watcher",
-      "position": [-3, 2.6, -5],
+      "position": [-3, 2.5867, -5],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
       "components": [
-        { "type": "label", "text": "...", "size": 0.4 },
-        { "type": "script", "script": "watcher" }
+        {
+          "type": "label",
+          "text": "...",
+          "size": 1.25
+        },
+        {
+          "type": "script",
+          "script": "watcher"
+        }
       ],
       "children": [
-        { "name": "Eye", "position": [0, -0.7, 0], "scale": [0.6, 0.6, 0.6], "components": [{ "type": "mesh", "shape": "sphere", "material": "Gold" }] }
+        {
+          "id": "4babdf7f",
+          "name": "Eye",
+          "position": [0, -1.1927, 0],
+          "rotation": [0, 0, 0],
+          "scale": [0.6, 0.6, 0.6],
+          "components": [
+            {
+              "type": "mesh",
+              "shape": "sphere",
+              "material": "Gold"
+            }
+          ],
+          "children": []
+        }
       ]
     },
     {
+      "id": "720e5d15",
       "name": "Portal",
       "position": [6, 2.5, 2],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
       "components": [
-        { "type": "collider", "sizeY": 2, "centerY": -1.5, "solid": false },
-        { "type": "label", "text": "Visit", "size": 0.4 },
-        { "type": "script", "script": "portal", "params": { "scene": "platform" } }
+        {
+          "type": "collider",
+          "sizeY": 2,
+          "centerY": -1.5,
+          "solid": false
+        },
+        {
+          "type": "label",
+          "text": "Visit",
+          "size": 0.4
+        },
+        {
+          "type": "script",
+          "script": "portal",
+          "params": {
+            "scene": "platform"
+          }
+        }
       ],
       "children": [
-        { "name": "Frame", "position": [0, -1.5, 0], "scale": [0.2, 2, 1.4], "components": [{ "type": "mesh", "material": "Gold" }] }
+        {
+          "id": "b46d5fdc",
+          "name": "Frame",
+          "position": [0, -1.5, 0],
+          "rotation": [0, 0, 0],
+          "scale": [0.2, 2, 1.4],
+          "components": [
+            {
+              "type": "mesh",
+              "material": "Gold"
+            }
+          ],
+          "children": []
+        }
       ]
     }
   ]

@@ -1,23 +1,140 @@
 {
   "version": 3,
-  "environment": { "sky": true, "ambientIntensity": 0.7, "look": "PixelArt" },
+  "environment": {
+    "background": "#222222",
+    "sky": true,
+    "skyTop": "#2f6fc4",
+    "skyHorizon": "#bfd9ee",
+    "skyGround": "#6b6156",
+    "skyImage": "",
+    "skyShader": "",
+    "skyRotation": 0,
+    "skyLight": 0,
+    "ambientColor": "#ffffff",
+    "ambientIntensity": 0.7,
+    "fog": false,
+    "fogColor": "#222222",
+    "fogNear": 5,
+    "fogFar": 50,
+    "look": "PixelArtDark",
+    "skyParams": {}
+  },
   "entities": [
-    { "name": "Camera", "position": [0, 2.4, 7], "rotation": [-14, 0, 0], "components": [{ "type": "camera" }] },
     {
+      "id": "db94aa66",
+      "name": "Camera",
+      "position": [0, 2.4, 7],
+      "rotation": [-14, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "camera"
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "8fc0ef68",
       "name": "Sun",
       "position": [3, 6, 4],
       "rotation": [-50, 30, 0],
-      "components": [{ "type": "light", "kind": "directional", "castShadow": true, "shadowSoftness": 3 }]
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "light",
+          "kind": "directional",
+          "castShadow": true,
+          "shadowSoftness": 3
+        }
+      ],
+      "children": []
     },
-    { "name": "Floor", "position": [0, -0.5, 0], "scale": [14, 1, 14], "components": [{ "type": "mesh", "material": "Ground" }, { "type": "collider" }] },
     {
+      "id": "fff44771",
+      "name": "Floor",
+      "position": [0, -0.5, 0],
+      "rotation": [0, 0, 0],
+      "scale": [14, 1, 14],
+      "components": [
+        {
+          "type": "mesh",
+          "material": "Ground"
+        },
+        {
+          "type": "collider"
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "5f86f2af",
       "name": "Cube",
       "position": [-2.2, 0.75, 0],
+      "rotation": [0, 0, 0],
       "scale": [1.5, 1.5, 1.5],
-      "components": [{ "type": "mesh", "material": "Warm" }, { "type": "script", "script": "spin", "params": { "speed": 40 } }]
+      "components": [
+        {
+          "type": "mesh",
+          "material": "Warm"
+        },
+        {
+          "type": "script",
+          "script": "spin",
+          "params": {
+            "speed": 40
+          }
+        }
+      ],
+      "children": []
     },
-    { "name": "Ball", "position": [0, 0.9, 0], "scale": [1.8, 1.8, 1.8], "components": [{ "type": "mesh", "shape": "sphere", "material": "Cool" }] },
-    { "name": "Pillar", "position": [2.2, 1.2, -0.5], "scale": [0.9, 2.4, 0.9], "components": [{ "type": "mesh", "shape": "cylinder", "material": "Warm" }] },
-    { "name": "Lamp", "position": [1.2, 0.4, 1.6], "scale": [0.8, 0.8, 0.8], "components": [{ "type": "mesh", "shape": "sphere", "material": "Lamp" }, { "type": "script", "script": "bob" }] }
+    {
+      "id": "7040b579",
+      "name": "Ball",
+      "position": [0, 0.9, 0],
+      "rotation": [0, 0, 0],
+      "scale": [1.8, 1.8, 1.8],
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "sphere",
+          "material": "Cool"
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "0ebef27a",
+      "name": "Pillar",
+      "position": [2.2, 1.2, -0.5],
+      "rotation": [0, 0, 0],
+      "scale": [0.9, 2.4, 0.9],
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "cylinder",
+          "material": "Warm"
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "981e04df",
+      "name": "Lamp",
+      "position": [1.2, 0.4, 1.6],
+      "rotation": [0, 0, 0],
+      "scale": [0.8, 0.8, 0.8],
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "sphere",
+          "material": "Lamp"
+        },
+        {
+          "type": "script",
+          "script": "bob"
+        }
+      ],
+      "children": []
+    }
   ]
 }

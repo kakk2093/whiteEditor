@@ -28,8 +28,11 @@ export interface LookSettings {
     // what stands still does not flicker while it moves; the rest of the move is made by shifting the picture
     pixelSnap: boolean;
     // With pixelSize above 1: the interface of the game is drawn in the same big pixels as the picture.
-    // Off, it stays sharp at the full size of the screen.
+    // Off (the default), it stays sharp at the full size of the screen.
     pixelUi: boolean;
+    // The same for the text in the world (Label components): off, it is drawn over the finished picture,
+    // sharp, and the effects do not touch it
+    pixelText: boolean;
 }
 
 export interface LookData extends Partial<LookSettings> {
@@ -47,7 +50,8 @@ export const lookFields: Record<keyof LookSettings, ParamDef> = {
     toneMapping: { type: "select", default: "none", options: ["none", "reinhard", "aces"] },
     exposure: { type: "number", default: 1, min: 0, step: 0.1 },
     pixelSnap: { type: "boolean", default: true },
-    pixelUi: { type: "boolean", default: true },
+    pixelUi: { type: "boolean", default: false },
+    pixelText: { type: "boolean", default: false },
 };
 
 // A look with everything it extends folded in
@@ -358,6 +362,7 @@ export function resolveLook(registry: Registry, name: string, seen: string[] = [
         exposure: lookFields.exposure.default as number,
         pixelSnap: lookFields.pixelSnap.default as boolean,
         pixelUi: lookFields.pixelUi.default as boolean,
+        pixelText: lookFields.pixelText.default as boolean,
         surfaces: [],
         effects: [],
     };
@@ -368,6 +373,7 @@ export function resolveLook(registry: Registry, name: string, seen: string[] = [
         exposure: data.exposure ?? base.exposure,
         pixelSnap: data.pixelSnap ?? base.pixelSnap,
         pixelUi: data.pixelUi ?? base.pixelUi,
+        pixelText: data.pixelText ?? base.pixelText,
         surfaces: mergeEntries(base.surfaces, data.surfaces ?? [], "surface"),
         effects: mergeEntries(base.effects, data.effects ?? [], "effect"),
     };

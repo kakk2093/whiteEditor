@@ -7,7 +7,7 @@
     "skyHorizon": "#bfd9ee",
     "skyGround": "#6b6156",
     "skyImage": "",
-    "skyShader": "stars",
+    "skyShader": "",
     "skyRotation": 0,
     "skyLight": 1,
     "ambientColor": "#ffffff",

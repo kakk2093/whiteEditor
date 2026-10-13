@@ -1,0 +1,20 @@
+{
+  "pixelSize": 4,
+  "surfaces": [
+    {
+      "surface": "vertexSnap",
+      "size": 1
+    },
+    {
+      "surface": "flat"
+    }
+  ],
+  "effects": [
+    {
+      "effect": "palette",
+      "levels": 32,
+      "dither": 1
+    }
+  ],
+  "pixelText": false
+}

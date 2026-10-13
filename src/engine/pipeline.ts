@@ -132,6 +132,20 @@ const nearest = (list: number[], value: number) => list.reduce((best, one) => (M
 
 const TONE_MAPPINGS = ["none", "reinhard", "aces"];
 
+// Writes the depth of the picture of the scene into the depth of the canvas, and no color: what is drawn
+// over the picture afterwards is hidden by what stands in front of it
+const DEPTH_COPY = `
+uniform sampler2D tDepth;
+uniform vec2 offset;
+varying vec2 vUv;
+void main() {
+    gl_FragDepth = texture2D(tDepth, vUv + offset).r;
+    gl_FragColor = vec4(0.0);
+}`;
+
+// The layer the text of the world is on for the moment it is drawn alone, over the finished picture
+const TEXT_LAYER = 30;
+
 interface Pass {
     def: EffectDef;
     material: THREE.ShaderMaterial;
@@ -174,6 +188,14 @@ export class RenderPipeline {
     private targets = [createTarget(false), createTarget(false)];
 
     private normalMaterial = new THREE.MeshNormalMaterial();
+
+    private depthCopy = new THREE.ShaderMaterial({
+        vertexShader: VERTEX,
+        fragmentShader: DEPTH_COPY,
+        uniforms: { tDepth: { value: null }, offset: { value: new THREE.Vector2() } },
+        colorWrite: false,
+        depthFunc: THREE.AlwaysDepth,
+    });
 
     // The glowing surfaces alone, and the picture with their glow added
     private glowTarget = createTarget(true);
@@ -482,6 +504,34 @@ export class RenderPipeline {
         renderer.autoClear = autoClear;
     }
 
+    // The text of the world (Label components) over the finished picture, at the full size of the canvas:
+    // in a look with big pixels it stays sharp. What stands in front of a text still hides it: the depth of
+    // the picture that is drawn already goes to the canvas first (one rectangle, not the scene again), so the
+    // edge of what hides a text has the big pixels of the picture. `texts` are hidden when this is called.
+    private drawText(scene: THREE.Scene, camera: THREE.Camera, texts: THREE.Object3D[], offset: THREE.Vector2) {
+        const { renderer } = this;
+        const { autoClear } = renderer;
+        const { background } = scene;
+        renderer.autoClear = false;
+        scene.background = null;
+        this.depthCopy.uniforms.tDepth.value = this.sceneTarget.depthTexture;
+        (this.depthCopy.uniforms.offset.value as THREE.Vector2).copy(offset);
+        this.drawQuad(this.depthCopy, null);
+
+        const masks = texts.map((text) => text.layers.mask);
+        const seen = camera.layers.mask;
+        for (const text of texts) {
+            text.visible = true;
+            text.layers.set(TEXT_LAYER);
+        }
+        camera.layers.set(TEXT_LAYER);
+        renderer.render(scene, camera);
+        camera.layers.mask = seen;
+        texts.forEach((text, i) => (text.layers.mask = masks[i]));
+        scene.background = background;
+        renderer.autoClear = autoClear;
+    }
+
     // dt (seconds) moves the `time` the effects see; `ui` is the interface of the game to draw on top
     render(scene: THREE.Scene, camera: THREE.Camera, dt = 0, ui?: UiLayer | null) {
         const { renderer, look } = this;
@@ -503,6 +553,16 @@ export class RenderPipeline {
             renderer.render(scene, camera);
             if (ui) this.drawUi(ui);
             return;
+        }
+
+        // In big pixels a text is unreadable: unless the look asks for it, the text of the world is left out
+        // of the picture and drawn over it at the end
+        const texts: THREE.Object3D[] = [];
+        if (look && look.pixelSize > 1 && !look.pixelText) {
+            scene.traverseVisible((object) => {
+                if (object.userData.label && object.layers.test(camera.layers)) texts.push(object);
+            });
+            texts.forEach((text) => (text.visible = false));
         }
 
         // A picture of full size keeps the smooth edges it has when drawn straight onto the canvas. Not when an
@@ -576,6 +636,7 @@ export class RenderPipeline {
         this.outputMaterial.uniforms.exposure.value = look?.exposure ?? 1;
         (this.outputMaterial.uniforms.offset.value as THREE.Vector2).copy(snap?.offset ?? new THREE.Vector2());
         this.drawQuad(this.outputMaterial, null);
+        if (texts.length > 0) this.drawText(scene, camera, texts, this.outputMaterial.uniforms.offset.value as THREE.Vector2);
         if (ui) this.drawUi(ui);
     }
 
@@ -587,6 +648,7 @@ export class RenderPipeline {
         this.glowMaterials.clear();
         this.glowPass.dispose();
         this.glowSumPass.dispose();
+        this.depthCopy.dispose();
         this.sky.dispose();
         this.blurPass.dispose();
         [this.sceneTarget, this.normalTarget, this.glowTarget, this.litTarget, this.glowSumTarget, ...this.blurTargets, ...this.targets].forEach((target) => {
