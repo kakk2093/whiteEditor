@@ -206,6 +206,8 @@ export function renderStill(registry: Registry, data: SceneData, options: StillO
         camera = new THREE.PerspectiveCamera(options.camera.fov ?? 60, width / height, 0.1, 1000);
         camera.position.fromArray(options.camera.position);
         camera.lookAt(new THREE.Vector3(...options.camera.target));
+        // The pieces of a world around the place it looks from
+        game.updateWorlds(camera.position);
     } else if (game.camera) {
         kind = "scene";
         // A behavior may have switched to another camera

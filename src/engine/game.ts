@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { disposeObject, rebuildComponentObject } from "./components";
-import { applyEnvironment, blendEnvironment, defaultEnvironment, withZone, zoneAt } from "./environment";
+import { applyEnvironment, blendEnvironment, defaultEnvironment, SKY_COLORS, withZone, zoneAt } from "./environment";
 import { Input } from "./input";
 import type { EnvironmentData } from "./environment";
 import { applyTransform, loadScene } from "./loadScene";
@@ -9,6 +9,7 @@ import { Runtime } from "./runtime";
 import { SoundPlayer } from "./sound";
 import type { EntityData, SceneData } from "./types";
 import { UiLayer } from "./ui";
+import { updateWorlds } from "./world";
 
 // What a camera component makes
 export type SceneCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
@@ -55,6 +56,9 @@ function findListener(obj: THREE.Object3D): THREE.Object3D | null {
 //   const game = new Game(registry, parseScene(json));
 //   game.input.attach(canvas); game.resize(width, height); game.start();
 //   every frame: game.update(dt); if (game.camera) renderer.render(game.scene, game.camera);
+// Seconds between two steps of the colors of the sky on their way into a zone (see Game.look)
+const SKY_STEP = 0.15;
+
 export class Game {
     readonly scene = new THREE.Scene();
 
@@ -76,6 +80,11 @@ export class Game {
     private shown: EnvironmentData;
 
     private shownKey = "";
+
+    // The colors of the sky as they are drawn now, and the seconds until they may take their next step (see look())
+    private sky: string[] | null = null;
+
+    private skyWait = 0;
 
     // The interface of the game: whoever draws the scene gives it to the pipeline (pipeline.render(..., game.ui))
     readonly ui: UiLayer;
@@ -117,6 +126,8 @@ export class Game {
             if (id) this.objects.set(id, obj);
         });
         this.camera = findCamera(this.root);
+        // The pieces of a world around the camera are there from the start
+        this.updateWorlds();
         this.ui = new UiLayer(registry, this.root);
         this.sound = sound ?? new SoundPlayer(registry);
         this.ownSound = !sound;
@@ -158,7 +169,8 @@ export class Game {
         this.input.poll();
         // The buttons first: a click is known to the behaviors in the same frame
         for (const event of this.ui.update(this.aspect, this.input)) this.runtime.uiEvent(event);
-        this.runtime.update(dt);
+        // The ground the camera is on is still being loaded: the game waits for it
+        if (!this.updateWorlds().waiting) this.runtime.update(dt);
         this.input.endFrame();
         // A behavior may have spawned, destroyed or switched off the camera
         this.camera = findCamera(this.root);
@@ -173,6 +185,12 @@ export class Game {
         return this.shown.look;
     }
 
+    // The pieces of the worlds of the scene near the camera are shown, the far ones are taken away (see
+    // world.ts); without a camera all of them are there
+    updateWorlds(point?: THREE.Vector3) {
+        return updateWorlds(this.root, point ?? (this.camera ? this.camera.getWorldPosition(new THREE.Vector3()) : null));
+    }
+
     // The environment follows the camera into the zones and out of them
     private look(dt: number) {
         let zone = null;
@@ -185,10 +203,19 @@ export class Game {
         const blend = zone ? zone.blend : this.leaving;
         this.leaving = zone ? zone.blend : this.leaving;
         this.shown = blendEnvironment(this.shown, target, blend > 0 ? Math.min(1, (dt * 3) / blend) : 1);
-        const key = JSON.stringify(this.shown);
+        // A sky is drawn anew for other colors, and so is the light it gives: on their way to the colors of a
+        // zone they go in a few steps, not every frame
+        this.skyWait -= dt;
+        const colors = SKY_COLORS.map((name) => this.shown[name]);
+        if (!this.sky || this.skyWait <= 0 || SKY_COLORS.every((name) => this.shown[name] === target[name])) {
+            if (this.sky?.join() !== colors.join()) this.skyWait = SKY_STEP;
+            this.sky = colors;
+        }
+        const drawn: EnvironmentData = { ...this.shown, skyTop: this.sky[0], skyHorizon: this.sky[1], skyGround: this.sky[2] };
+        const key = JSON.stringify(drawn);
         if (key === this.shownKey) return;
         this.shownKey = key;
-        applyEnvironment(this.scene, this.shown, this.registry);
+        applyEnvironment(this.scene, drawn, this.registry);
     }
 
     // The sounds are heard by the entity with a Sound Listener, by the camera if there is none

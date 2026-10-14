@@ -19,7 +19,7 @@ import { useSceneStore } from "./core/useSceneStore";
 import { entityIcon } from "./entityIcon";
 import { humanize } from "./humanize";
 import { Icon, Menu } from "./ui";
-import { BiomeEditor, TerrainTools } from "./TerrainTools";
+import { BiomeEditor, TerrainTools, WorldTools } from "./TerrainTools";
 import type { MenuSection } from "./ui";
 
 const TRANSFORMS: { property: TransformProperty; title: string }[] = [
@@ -425,7 +425,7 @@ function ComponentSection({ entities, components }: { entities: EntityData[]; co
             title={added ? <span className="overridden" title="Added in this instance: the prefab does not have this component">{title}</span> : title}
             onRemove={() => each((id) => store.removeComponent(id, key))}
             removeTitle={single ? undefined : "Remove the component from all the selected objects"}
-            extra={single && component.type === "terrain" && !store.playing ? (
+            extra={single && (component.type === "terrain" || component.type === "world") && !store.playing ? (
                 <button
                     className={`btn ghost ${store.terrainEdit ? "active" : ""}`}
                     title="Edit Terrain: work the ground in the viewport with a brush — raise, lower, smooth, flatten, paint"
@@ -461,6 +461,7 @@ function ComponentSection({ entities, components }: { entities: EntityData[]; co
             )}
 
             {single && component.type === "terrain" && <TerrainTools entity={entity} component={component} />}
+            {single && component.type === "world" && <WorldTools entity={entity} component={component} />}
 
             {source && !def.multiple && (
                 <div className="field">
@@ -958,13 +959,13 @@ function clipLength(clip: ClipDef) {
 
 // A behavior, an effect or a surface: what the scripts of the project (or the engine) define. Nothing to
 // edit here: it shows the params, where it is used, and puts it to use.
-function ScriptInspector({ kind, name }: { kind: "behavior" | "effect" | "surface" | "sky" | "clip" | "animator"; name: string }) {
+function ScriptInspector({ kind, name }: { kind: "behavior" | "effect" | "surface" | "sky" | "clip" | "animator" | "generator"; name: string }) {
     const store = useSceneStore();
     const { registry } = store;
     const clip = kind === "clip" ? registry.getClip(name) : undefined;
     const animator = kind === "animator" ? registry.getAnimator(name) : undefined;
     const def = kind === "behavior" ? registry.getBehavior(name) : kind === "effect" ? registry.getEffect(name) : kind === "sky" ? registry.getSky(name)
-        : kind === "clip" ? { label: clip?.label, params: undefined } : kind === "animator" ? animator : registry.getSurface(name);
+        : kind === "clip" ? { label: clip?.label, params: undefined } : kind === "animator" ? animator : kind === "generator" ? registry.getGenerator(name) : registry.getSurface(name);
     const builtin = (kind === "effect" && builtinEffects.some((d) => d === def)) || (kind === "surface" && builtinSurfaces.some((d) => d === def));
     const params = Object.entries(def?.params ?? {});
 
@@ -978,6 +979,9 @@ function ScriptInspector({ kind, name }: { kind: "behavior" | "effect" | "surfac
         visit(store.entities);
     } else if (kind === "clip" || kind === "animator") {
         users.push(...store.usersOf(kind, name).map((entity) => entity.name));
+    } else if (kind === "generator") {
+        for (const terrain of registry.terrainNames()) if (registry.getTerrain(terrain)?.generator?.shape === name) users.push(`terrain ${terrain}`);
+        for (const biome of registry.biomeNames()) if (registry.getBiome(biome)?.shape === name) users.push(`biome ${biome}`);
     } else if (kind === "sky") {
         const { environment } = store;
         if (environment.sky && !environment.skyImage && environment.skyShader === name) users.push(store.sceneName);
@@ -1015,7 +1019,7 @@ function ScriptInspector({ kind, name }: { kind: "behavior" | "effect" | "surfac
                     <button className="btn primary" disabled={!!store.editingPrefab} onClick={() => setSceneSky(name)}>
                         <Icon name="plus" /> Use as the sky of the scene
                     </button>
-                ) : (
+                ) : kind === "generator" ? null : (
                     <button className="btn primary" onClick={() => addToLook(kind === "effect" ? "effects" : "surfaces", name)}>
                         <Icon name="plus" /> Add to the look of the scene
                     </button>
@@ -1027,6 +1031,7 @@ function ScriptInspector({ kind, name }: { kind: "behavior" | "effect" | "surfac
                 {kind === "surface" && "A surface: changes how every object is drawn. "}
                 {kind === "clip" && "An animation clip: keys over time for the place, turn, size and active flag of an object and of what is under it. An Animation component plays it. "}
                 {kind === "animator" && "An animator: the states of an object, each with its clip, and what leads from one to another. An Animator component runs it. "}
+                {kind === "generator" && "A shape of land made by code: a terrain (Generate, Shape) or a biome names it and sets its params there; the ground changes when it is generated. "}
                 {kind === "sky" && "A sky made by code: a scene names it in its settings (Sky Shader) and sets its params there. "}
                 {builtin
                     ? <>Built into the engine as <b>{name}</b>.</>
@@ -1075,7 +1080,7 @@ function ScriptInspector({ kind, name }: { kind: "behavior" | "effect" | "surfac
                 {params.length === 0 && <div className="muted">No params.</div>}
             </Section>}
 
-            <Section title={kind === "behavior" || kind === "clip" || kind === "animator" ? "On objects of this scene" : kind === "sky" ? "The sky of the open scene" : "Used by looks"}>
+            <Section title={kind === "behavior" || kind === "clip" || kind === "animator" ? "On objects of this scene" : kind === "sky" ? "The sky of the open scene" : kind === "generator" ? "Used by" : "Used by looks"}>
                 <div className="muted">{users.length > 0 ? users.join(", ") : "Nothing uses it."}</div>
             </Section>
         </>
@@ -1184,7 +1189,7 @@ function AssetInspector({ asset }: { asset: AssetRef }) {
             </>
         );
     }
-    if (asset.kind === "behavior" || asset.kind === "effect" || asset.kind === "surface" || asset.kind === "sky" || asset.kind === "clip" || asset.kind === "animator") {
+    if (asset.kind === "behavior" || asset.kind === "effect" || asset.kind === "surface" || asset.kind === "sky" || asset.kind === "clip" || asset.kind === "animator" || asset.kind === "generator") {
         return <ScriptInspector kind={asset.kind} name={asset.name} />;
     }
 

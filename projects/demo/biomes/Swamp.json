@@ -28,5 +28,15 @@
       "cover": 0.3,
       "minHeight": -1.2
     }
-  ]
+  ],
+  "air": true,
+  "fogColor": "#7f8f6a",
+  "fogNear": 4,
+  "fogFar": 70,
+  "ambientColor": "#dfe8c8",
+  "ambientIntensity": 0.4,
+  "sky": true,
+  "skyTop": "#5f6b55",
+  "skyHorizon": "#8c9876",
+  "skyGround": "#4a4a38"
 }

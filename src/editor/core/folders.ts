@@ -4,7 +4,7 @@
 //   { "materials": { "Walls": ["Bricks", "Stone"] }, "scenes": { "Levels": [] } }
 
 // "models": the model files of assets/, by their names with the extension, and the models made by code
-export const FOLDER_SECTIONS = ["scenes", "materials", "prefabs", "looks", "textures", "sounds", "models"] as const;
+export const FOLDER_SECTIONS = ["scenes", "materials", "prefabs", "looks", "terrains", "biomes", "textures", "sounds", "models"] as const;
 
 export type FolderSection = (typeof FOLDER_SECTIONS)[number];
 

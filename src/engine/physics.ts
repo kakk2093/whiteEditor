@@ -1,8 +1,11 @@
 import * as CANNON from "cannon-es";
 import * as THREE from "three";
 import type { Registry } from "./Registry";
+import { scatterColliders } from "./scatter";
 import { DEFAULT_LAYER, layerOf } from "./settings";
 import { terrainHeight, terrainSize } from "./terrain";
+import { flowAt, submergedAt } from "./water";
+import { groundEntity } from "./world";
 import type { TerrainData, TerrainMarker } from "./terrain";
 
 // Real physics, by the cannon-es library: things fall, roll, push each other and bounce. All of the library
@@ -12,6 +15,10 @@ import type { TerrainData, TerrainMarker } from "./terrain";
 // moves it. Every other solid collider is something the bodies run into, standing still or moved by a
 // behavior (self.move): a floor, a wall, the player. Triggers are not a part of it. The ground of a Terrain
 // component is such a thing as well, in the shape of its heights.
+//
+// The props of a terrain (see scatter.ts) stand in the way of the bodies too, by the solid Collider of the
+// root of their prefab. There are thousands of them, and the library tests every body against every other:
+// so a prop has a body only while something the physics moves is near it.
 
 // The fields of the Collider and Body components, defaults filled in (see components.ts)
 interface ColliderFields {
@@ -32,6 +39,7 @@ interface BodyFields {
     damping: number;
     lockRotation: boolean;
     gravity: boolean;
+    buoyancy: number;
 }
 
 // What a behavior gets from self.body(): the physical body of an entity
@@ -56,10 +64,41 @@ interface Tracked {
     // Where the physics has put the object (dynamic) or where it was seen last (the rest), in the world
     position: THREE.Vector3;
     quaternion: THREE.Quaternion;
+    // How much of the body is under water now, 0 to 1 (a body with buoyancy)
+    sunk: number;
+    // Where the water it is in carries it, meters per second (a river)
+    flow: THREE.Vector3;
+    // The forces of its own the body gets before every small step of the physics
+    forces: (() => void)[];
 }
+
+// How fast water takes the speed of what is in it, a part of it per second
+const WATER_DRAG = 2.5;
 
 // The steps the physics makes, however long a frame is
 const STEP = 1 / 60;
+
+// The props of a terrain are kept by squares of this many meters
+const PROP_SQUARE = 8;
+
+// A prop of a terrain as the physics needs it: the collider of one copy of a prefab
+interface Prop {
+    fields: ColliderFields;
+    // From the middle of the terrain
+    position: THREE.Vector3;
+    quaternion: THREE.Quaternion;
+    scale: THREE.Vector3;
+}
+
+// The props of one ground: all of them by the squares they reach into, and those that have a body now
+interface Props {
+    // What they were taken from: another list means they are taken again
+    scatter: unknown;
+    squares: Map<number, Prop[]>;
+    live: Map<Prop, CANNON.Body>;
+}
+
+const square = (x: number, z: number) => (Math.floor(x / PROP_SQUARE) + 32768) * 65536 + Math.floor(z / PROP_SQUARE) + 32768;
 
 const position = new THREE.Vector3();
 const quaternion = new THREE.Quaternion();
@@ -175,12 +214,19 @@ export class Physics {
     // By the entity object; a terrain by its mesh, so that an entity may have a Collider next to it
     private tracked = new Map<THREE.Object3D, Tracked>();
 
+    // The props of the grounds, by the mesh of the terrain
+    private props = new Map<THREE.Object3D, Props>();
+
     constructor(registry: Registry) {
         this.registry = registry;
         this.world = new CANNON.World({ gravity: new CANNON.Vec3(0, -registry.settings.gravity, 0) });
         // What has come to rest stays at rest until something moving touches it: a stack does not creep
         this.world.allowSleep = true;
         installBallOnTerrain(this.world);
+        // The library clears the forces after every small step, and tells only the world that one begins
+        this.world.addEventListener("preStep", () => {
+            for (const entry of this.tracked.values()) for (const force of entry.forces) force();
+        });
     }
 
     // Number of bodies the physics moves, as of the last step
@@ -253,24 +299,23 @@ export class Physics {
         });
         // The collider may stand aside from the middle of the entity
         const offset = new CANNON.Vec3(collider.position.x * Math.abs(scale.x), collider.position.y * Math.abs(scale.y), collider.position.z * Math.abs(scale.z));
-        if (c.shape === "sphere") {
-            body.addShape(new CANNON.Sphere(c.radius * Math.max(scale.x, scale.y, scale.z)), offset);
-        } else if (c.shape === "capsule") {
-            // A cylinder with a ball at each end
-            const radius = c.radius * Math.max(scale.x, scale.z);
-            const half = Math.max(0, (c.height * scale.y) / 2 - radius);
-            if (half > 0) body.addShape(new CANNON.Cylinder(radius, radius, half * 2, 12), offset);
-            body.addShape(new CANNON.Sphere(radius), new CANNON.Vec3(offset.x, offset.y + half, offset.z));
-            if (half > 0) body.addShape(new CANNON.Sphere(radius), new CANNON.Vec3(offset.x, offset.y - half, offset.z));
-        } else {
-            body.addShape(new CANNON.Box(new CANNON.Vec3((c.sizeX * scale.x) / 2, (c.sizeY * scale.y) / 2, (c.sizeZ * scale.z) / 2)), offset);
-        }
+        this.addShapes(body, c, scale, offset);
+        const entry: Tracked = { body, object, collider, marker, shape, position: new THREE.Vector3(), quaternion: new THREE.Quaternion(), sunk: 0, flow: new THREE.Vector3(), forces: [] };
         if (b && !b.gravity) {
             // Its own pull upwards, as strong as the gravity of the world
-            body.addEventListener("preStep", () => body.applyForce(new CANNON.Vec3(0, -this.world.gravity.y * body.mass, 0)));
+            entry.forces.push(() => body.applyForce(new CANNON.Vec3(0, -this.world.gravity.y * body.mass, 0)));
         }
-
-        const entry: Tracked = { body, object, collider, marker, shape, position: new THREE.Vector3(), quaternion: new THREE.Quaternion() };
+        if (b && b.buoyancy > 0) {
+            // The water lifts what is in it, and slows it down: to a stop, or to the speed the water runs with
+            entry.forces.push(() => {
+                if (entry.sunk <= 0) return;
+                body.applyForce(new CANNON.Vec3(0, -this.world.gravity.y * body.mass * b.buoyancy * entry.sunk, 0));
+                const keep = Math.max(0, 1 - WATER_DRAG * entry.sunk * STEP);
+                const { flow } = entry;
+                body.velocity.set(flow.x + (body.velocity.x - flow.x) * keep, body.velocity.y * keep, flow.z + (body.velocity.z - flow.z) * keep);
+                body.angularVelocity.scale(keep, body.angularVelocity);
+            });
+        }
         object.getWorldPosition(entry.position);
         object.getWorldQuaternion(entry.quaternion);
         body.position.set(entry.position.x, entry.position.y, entry.position.z);
@@ -279,10 +324,104 @@ export class Physics {
         return entry;
     }
 
+    // The shape of a collider, as big as `size` makes it, `offset` away from the middle of the body
+    private addShapes(body: CANNON.Body, c: ColliderFields, size: THREE.Vector3, offset: CANNON.Vec3) {
+        if (c.shape === "sphere") {
+            body.addShape(new CANNON.Sphere(c.radius * Math.max(size.x, size.y, size.z)), offset);
+        } else if (c.shape === "capsule") {
+            // A cylinder with a ball at each end
+            const radius = c.radius * Math.max(size.x, size.z);
+            const half = Math.max(0, (c.height * size.y) / 2 - radius);
+            if (half > 0) body.addShape(new CANNON.Cylinder(radius, radius, half * 2, 12), offset);
+            body.addShape(new CANNON.Sphere(radius), new CANNON.Vec3(offset.x, offset.y + half, offset.z));
+            if (half > 0) body.addShape(new CANNON.Sphere(radius), new CANNON.Vec3(offset.x, offset.y - half, offset.z));
+        } else {
+            body.addShape(new CANNON.Box(new CANNON.Vec3((c.sizeX * size.x) / 2, (c.sizeY * size.y) / 2, (c.sizeZ * size.z) / 2)), offset);
+        }
+    }
+
+    // The props of a ground, by the squares they reach into
+    private propsOf(mesh: THREE.Object3D): Props {
+        const { data } = mesh.userData.terrain as TerrainMarker;
+        const known = this.props.get(mesh);
+        if (known && known.scatter === data.scatter) return known;
+        if (known) for (const body of known.live.values()) this.world.removeBody(body);
+        const props: Props = { scatter: data.scatter, squares: new Map(), live: new Map() };
+        for (const { fields, matrix } of data.scatter?.length ? scatterColliders(this.registry, data) : []) {
+            const prop: Prop = { fields: fields as unknown as ColliderFields, position: new THREE.Vector3(), quaternion: new THREE.Quaternion(), scale: new THREE.Vector3() };
+            matrix.decompose(prop.position, prop.quaternion, prop.scale);
+            // As far as the collider can reach from its middle, whatever its shape
+            const c = prop.fields;
+            const reach = Math.hypot(Math.max(c.sizeX, c.radius * 2) * prop.scale.x, Math.max(c.sizeY, c.height, c.radius * 2) * prop.scale.y, Math.max(c.sizeZ, c.radius * 2) * prop.scale.z) / 2;
+            for (let x = prop.position.x - reach; x < prop.position.x + reach + PROP_SQUARE; x += PROP_SQUARE) {
+                for (let z = prop.position.z - reach; z < prop.position.z + reach + PROP_SQUARE; z += PROP_SQUARE) {
+                    const key = square(Math.min(x, prop.position.x + reach), Math.min(z, prop.position.z + reach));
+                    const list = props.squares.get(key);
+                    if (!list) props.squares.set(key, [prop]);
+                    else if (!list.includes(prop)) list.push(prop);
+                }
+            }
+        }
+        this.props.set(mesh, props);
+        return props;
+    }
+
+    // The props near what the physics moves get bodies, those that nothing is near any more lose theirs
+    private wakeProps(dt: number) {
+        for (const [mesh, ground] of this.tracked) {
+            if (!mesh.userData.terrain) continue;
+            const props = this.propsOf(mesh);
+            if (props.squares.size === 0) continue;
+            const near = new Set<Prop>();
+            for (const entry of this.tracked.values()) {
+                if (!entry.marker) continue;
+                const { body } = entry;
+                // Where the body is and where it can get in this frame, from the middle of the terrain
+                const reach = body.boundingRadius + body.velocity.length() * dt + 1;
+                const x = body.position.x - ground.position.x;
+                const z = body.position.z - ground.position.z;
+                for (let sx = Math.floor((x - reach) / PROP_SQUARE); sx <= Math.floor((x + reach) / PROP_SQUARE); sx++) {
+                    for (let sz = Math.floor((z - reach) / PROP_SQUARE); sz <= Math.floor((z + reach) / PROP_SQUARE); sz++) {
+                        for (const prop of props.squares.get(square(sx * PROP_SQUARE, sz * PROP_SQUARE)) ?? []) near.add(prop);
+                    }
+                }
+            }
+            for (const [prop, body] of props.live) {
+                if (near.has(prop)) continue;
+                this.world.removeBody(body);
+                props.live.delete(prop);
+            }
+            for (const prop of near) {
+                if (props.live.has(prop)) continue;
+                const { group, mask } = this.filter(layerOf(prop.fields.layer));
+                const body = new CANNON.Body({
+                    mass: 0,
+                    type: CANNON.Body.STATIC,
+                    material: new CANNON.Material({ friction: 1, restitution: 1 }),
+                    collisionFilterGroup: group,
+                    collisionFilterMask: mask,
+                });
+                this.addShapes(body, prop.fields, prop.scale, new CANNON.Vec3());
+                body.position.set(ground.position.x + prop.position.x, ground.position.y + prop.position.y, ground.position.z + prop.position.z);
+                body.quaternion.set(prop.quaternion.x, prop.quaternion.y, prop.quaternion.z, prop.quaternion.w);
+                this.world.addBody(body);
+                props.live.set(prop, body);
+            }
+        }
+    }
+
+    // How many props have a body now: only those near what the physics moves
+    get liveProps() {
+        let count = 0;
+        for (const props of this.props.values()) count += props.live.size;
+        return count;
+    }
+
     // The ground of a Terrain component: a field of heights that stands still
     private createGround(mesh: THREE.Object3D): Tracked {
         const { data, layer } = mesh.userData.terrain as TerrainMarker;
-        const object = mesh.parent!;
+        // The entity (a piece of a World lies one group deeper); the ground is where its mesh is
+        const object = groundEntity(mesh);
         const { group, mask } = this.filter(layerOf(layer));
         const body = new CANNON.Body({
             mass: 0,
@@ -311,8 +450,8 @@ export class Physics {
             new CANNON.Vec3(-width / 2, 0, depth / 2),
             new CANNON.Quaternion().setFromEuler(-Math.PI / 2, 0, 0),
         );
-        const entry: Tracked = { body, object, collider: mesh, marker: null, shape: "", position: new THREE.Vector3(), quaternion: new THREE.Quaternion() };
-        object.getWorldPosition(entry.position);
+        const entry: Tracked = { body, object, collider: mesh, marker: null, shape: "", position: new THREE.Vector3(), quaternion: new THREE.Quaternion(), sunk: 0, flow: new THREE.Vector3(), forces: [] };
+        mesh.getWorldPosition(entry.position);
         // Never turned, whatever the entity says: the collisions of the behaviors see it the same way
         body.position.set(entry.position.x, entry.position.y, entry.position.z);
         this.world.addBody(body);
@@ -363,6 +502,9 @@ export class Physics {
             if (present.has(object)) continue;
             this.world.removeBody(entry.body);
             this.tracked.delete(object);
+            // A ground that is gone takes its props with it
+            for (const body of this.props.get(object)?.live.values() ?? []) this.world.removeBody(body);
+            this.props.delete(object);
         }
         // Nothing for the physics to move: the scene is as it was without it
         if (dynamic === 0 || dt <= 0) return [];
@@ -370,10 +512,25 @@ export class Physics {
 
         for (const entry of this.tracked.values()) {
             const { body, object } = entry;
-            object.getWorldPosition(position);
-            object.getWorldQuaternion(quaternion);
+            // A ground is where its mesh is: a piece of a World stands aside from its entity
+            const placed = entry.collider.userData.terrain ? entry.collider : object;
+            placed.getWorldPosition(position);
+            placed.getWorldQuaternion(quaternion);
             const moved = position.distanceToSquared(entry.position) > 1e-10 || Math.abs(quaternion.dot(entry.quaternion)) < 1 - 1e-9;
             if (entry.marker) {
+                // How much of it is in the water: by how deep its lowest point is
+                if ((entry.marker.userData.body as BodyFields).buoyancy > 0) {
+                    // As tall as it stands now: a raft lies flat, a pole may stand on its end
+                    body.updateAABB();
+                    const tall = body.aabb.upperBound.y - body.aabb.lowerBound.y;
+                    const deep = submergedAt(root, position.set(body.position.x, body.aabb.lowerBound.y, body.position.z), active);
+                    entry.sunk = tall > 0 ? Math.min(1, deep / tall) : 0;
+                    if (entry.sunk > 0) flowAt(root, position, entry.flow, active);
+                    else entry.flow.set(0, 0, 0);
+                    // What floats is never at rest for the physics: the water under it may be gone
+                    if (entry.sunk > 0) body.wakeUp();
+                    object.getWorldPosition(position);
+                }
                 // A behavior has put the body elsewhere: it goes on from there
                 if (moved) {
                     body.position.set(position.x, position.y, position.z);
@@ -397,6 +554,7 @@ export class Physics {
             }
         }
 
+        this.wakeProps(dt);
         this.world.step(STEP, dt, 5);
 
         for (const entry of this.tracked.values()) {

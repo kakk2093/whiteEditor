@@ -33,5 +33,11 @@
       "cover": 0.3,
       "maxSlope": 1
     }
-  ]
+  ],
+  "air": true,
+  "fogColor": "#9fb89a",
+  "fogNear": 12,
+  "fogFar": 130,
+  "ambientColor": "#e8ffe0",
+  "ambientIntensity": 0.42
 }

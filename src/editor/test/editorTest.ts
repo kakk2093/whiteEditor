@@ -1,7 +1,7 @@
 import * as THREE from "three";
-import { animatorOf, animationOf, brushTerrain, cloneTerrain, componentDefs, parsePrefab, terrainSize } from "../../engine";
-import type { EntityData, PrefabData, SceneData, TerrainData } from "../../engine";
-import { applyOverrides, closePrefab, createPrefab, addTerrainToScene, createBiome, createTerrainAsset, deleteGround, duplicateGround, generateTerrainAsset, openProject, renameGround, updateBiome, resizeTerrainAsset, save, setTerrainGenerator, setTerrainPalette, strokeTerrain, updateMaterial } from "../core/actions";
+import { addRiverPoint, insertRiverPoint, animatorOf, animationOf, brushTerrain, cloneTerrain, componentDefs, Game, parsePrefab, parseScene, Registry, terrainSize, updateWorlds, validateWorld } from "../../engine";
+import type { EntityData, PrefabData, RiverPoint, SceneData, TerrainData } from "../../engine";
+import { applyOverrides, closePrefab, createPiece, createWorldPiece, generateWorld, createPrefab, addTerrainToScene, createBiome, createTerrainAsset, deleteGround, editRivers, duplicateGround, generateTerrainAsset, openProject, renameGround, updateBiome, resizeTerrainAsset, save, setTerrainGenerator, setTerrainPalette, strokeTerrain, updateMaterial } from "../core/actions";
 import { editorLog } from "../core/log";
 import { deleteAsset, listAssets, readAsset, writeAsset } from "../core/project";
 import type { AssetSection } from "../core/project";
@@ -503,6 +503,34 @@ async function run() {
         ok("Generate makes the land of the biome again", data().heights[32][32] < before2 - 20);
         generateTerrainAsset("Terrain", { x: 0, z: 0 }, true);
         equal("Fill: the whole ground is the biome named now", data().biomeMap?.every((row) => row.every((k) => k === 0)), true);
+        // A river: two clicks of its brush
+        settle();
+        editRivers("Terrain", (rivers, ground) => void addRiverPoint({ ...ground, rivers }, 0, -20, 0));
+        settle();
+        editRivers("Terrain", (rivers, ground) => void addRiverPoint({ ...ground, rivers }, 0, 20, 0));
+        const level = data().rivers?.[0].points[0][2] ?? 0;
+        ok(`a river: its bed is cut into the ground (water at ${level}, bed at ${data().heights[32][12]})`, data().rivers?.[0].points.length === 2 && Math.abs(data().heights[32][12] - (level - 1.2)) < 0.1);
+        ok("its water is drawn", store.terrainTarget!.mesh.children.some((child) => child.userData.rivers && child.children.length === 1));
+        ok("and nothing stands in it", (data().scatter ?? []).every((layer) => layer.items.every(([x, z]) => !(Math.abs(x) < 18 && Math.abs(z) < 2))));
+        settle();
+        editRivers("Terrain", (rivers) => void (rivers[0] = { ...rivers[0], width: 10 }));
+        equal("a wider one", data().rivers?.[0].width, 10);
+        // Ctrl + click on the ground, then the new point dragged by its mark (as the brush does it)
+        settle();
+        editRivers("Terrain", (rivers, ground) => void insertRiverPoint({ ...ground, rivers }, 0, 0, 3));
+        equal("a point put into the line", data().rivers?.[0].points.map(([x, z]) => [x, z]), [[-20, 0], [0, 3], [20, 0]]);
+        settle();
+        const dragged = data().rivers!.map((river) => ({ ...river, points: river.points.map((point, n) => (n === 1 ? [0, 8, point[2]] as RiverPoint : point)) }));
+        editRivers("Terrain", (rivers) => void rivers.splice(0, rivers.length, ...dragged));
+        ok(`a point moved: the bed is cut where it is now (${data().heights[40][32]} under water at ${level})`, data().rivers?.[0].points[1][1] === 8 && data().heights[40][32] < level - 1);
+        ok("its water is drawn there", store.terrainTarget!.mesh.children.some((child) => child.userData.rivers && child.children.length === 1));
+        store.undo();
+        equal("undo puts the point back", data().rivers?.[0].points[1].slice(0, 2), [0, 3]);
+        store.undo();
+        store.undo();
+        store.undo();
+        store.undo();
+        equal("undo takes the river away", data().rivers, undefined);
         store.undo();
         store.undo();
         store.undo();
@@ -546,6 +574,100 @@ async function run() {
         ok("and the other way", store.terrainEdit && !store.colliderEdit);
         store.setTerrainEdit(false);
         store.setColliderEdit(false);
+        store.setBiomeView(true);
+        store.setBrush({ tool: "biome" });
+        equal("the map of the biomes is asked for, the Biome brush is in hand", [store.biomeView, store.brush.tool], [true, "biome"]);
+        store.setBiomeView(false);
+        store.setBrush({ tool: "raise" });
+        equal("the Console has no errors", editorLog.entries.filter((entry) => entry.level === "error").map((entry) => entry.text), []);
+    });
+
+    await test("a world", async () => {
+        // Far enough to see every piece wherever the camera of the viewport is
+        const land = store.addEntity("Land", [{ type: "world", distance: 100000 }]);
+        settle();
+        store.select(land.id);
+        await createWorldPiece(land.id, 32);
+        const piece = (name: string) => store.registry.getTerrain(name)!;
+        equal("the first piece of a world, and the world gets a name", [store.findEntity(land.id)?.components[0].world, terrainSize(piece("World_0_0"))], ["World", [32, 32]]);
+        await until("in its file", async () => (await listAssets(PROJECT, "terrains")).includes("World_0_0"));
+        updateWorlds(store.root, null);
+        equal("it is shown, and it is what the brush works", store.terrainTarget?.name, "World_0_0");
+        // A hill on its edge towards +X
+        settle();
+        const hill = cloneTerrain(piece("World_0_0"));
+        brushTerrain(hill, "raise", 16, 0, 6, 3);
+        strokeTerrain("World_0_0", piece("World_0_0"), hill);
+        await createPiece(land.id, 1, 0);
+        equal("a new piece beside it goes on from its edge", piece("World_1_0").heights.map((row) => row[0]), hill.heights.map((row) => row[32]));
+        equal("each of its rows going on level from there", piece("World_1_0").heights[16][31], hill.heights[16][32]);
+        updateWorlds(store.root, null);
+        equal("both are shown, the new one is picked", [store.worldMarker(land.id)?.shown.size, store.terrainTarget?.name], [2, "World_1_0"]);
+        equal("a good world", validateWorld(store.registry, "World"), []);
+        // Each with its own seed: their edges would not meet by themselves
+        settle();
+        setTerrainGenerator("World_0_0", { seed: 3, height: 10 });
+        setTerrainGenerator("World_1_0", { seed: 4, height: 10 });
+        settle();
+        generateWorld(land.id);
+        const edges = () => [piece("World_0_0").heights.map((row) => row[32]), piece("World_1_0").heights.map((row) => row[0])];
+        ok(`Generate World makes the pieces anew (${piece("World_0_0").heights[16][16]})`, piece("World_0_0").heights[16][16] !== hill.heights[16][16]);
+        equal("and their edges meet", edges()[0], edges()[1]);
+        equal("still a good world", validateWorld(store.registry, "World"), []);
+        store.undo();
+        equal("undo puts both back at once", [piece("World_0_0").heights, piece("World_1_0").heights.map((row) => row[0])], [hill.heights, hill.heights.map((row) => row[32])]);
+        // One piece: its edges meet the neighbor, which changes only there
+        const before = piece("World_0_0").heights.map((row) => [...row]);
+        generateWorld(land.id, ["World_1_0"]);
+        equal("Generate of one piece makes it meet its neighbor", edges()[0], edges()[1]);
+        ok("which keeps the rest of its ground", piece("World_0_0").heights.every((row, j) => row.every((height, i) => i === 32 || height === before[j][i])));
+        store.undo();
+        // The scene is built again after an undo: the viewport shows the pieces in its next frame
+        updateWorlds(store.root, null);
+        store.setPieceTarget("World_0_0");
+        equal("the piece the Inspector shows is picked", store.terrainTarget?.name, "World_0_0");
+
+        // A built game loads the pieces when the camera comes near them, and lets them go when it leaves
+        const asked: string[] = [];
+        const lazy = new Registry();
+        for (const name of ["World_0_0", "World_1_0"]) {
+            const data = piece(name);
+            lazy.setTerrainLater(name, 32, async () => {
+                asked.push(name);
+                return data;
+            });
+        }
+        const game = new Game(lazy, parseScene({ version: 3, entities: [
+            { name: "Land", components: [{ type: "world", world: "World", distance: 5 }] },
+            { name: "Eye", position: [0, 20, 0], components: [{ type: "camera" }] },
+            { name: "Faller", position: [0, 30, 0], components: [{ type: "collider" }, { type: "body" }] },
+        ] }));
+        game.sound.enabled = false;
+        const shownPieces = () => {
+            const names: string[] = [];
+            game.root.traverse((object) => void (object.userData.terrainName && names.push(object.userData.terrainName as string)));
+            return names;
+        };
+        try {
+            game.start();
+            game.update(1 / 60);
+            equal("only the piece near the camera is asked for", asked, ["World_0_0"]);
+            equal("and until it is there the game waits", game.root.getObjectByName("Faller")!.position.y, 30);
+            await until("it comes", async () => {
+                game.update(1 / 60);
+                return lazy.getTerrain("World_0_0") !== undefined && shownPieces().includes("World_0_0");
+            });
+            game.update(1 / 60);
+            ok("then the game goes on", game.root.getObjectByName("Faller")!.position.y < 30);
+            game.root.getObjectByName("Eye")!.position.x = 32;
+            await until("the camera goes to the other piece: it is loaded, the first one let go", async () => {
+                game.update(1 / 60);
+                return lazy.getTerrain("World_1_0") !== undefined && lazy.getTerrain("World_0_0") === undefined;
+            });
+            equal("both were asked for once each", asked, ["World_0_0", "World_1_0"]);
+        } finally {
+            game.dispose();
+        }
         equal("the Console has no errors", editorLog.entries.filter((entry) => entry.level === "error").map((entry) => entry.text), []);
     });
 

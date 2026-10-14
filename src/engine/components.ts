@@ -9,10 +9,14 @@ import type { ComponentData, EntityData, Params } from "./types";
 import { UI_ANCHORS } from "./ui";
 import { createModelFile } from "./gltf";
 import type { ModelFileFields } from "./gltf";
-import { createTerrain, flatTerrain, isPainted } from "./terrain";
-import type { TerrainFields } from "./terrain";
+import { coarseTerrain, createTerrain, flatTerrain, isPainted, terrainSkirt } from "./terrain";
+import type { TerrainData, TerrainFields } from "./terrain";
 import { createScatter } from "./scatter";
+import { createRivers } from "./river";
+import { createBiomeAir } from "./biomeAir";
 import { createWater } from "./water";
+import { createWorld, worldFields, worldNames } from "./world";
+import type { WorldFields } from "./world";
 import type { WaterFields } from "./water";
 
 // What a component can take from the project's scripts/: a code model, a behavior
@@ -211,13 +215,15 @@ export const componentDefs: Record<string, ComponentDef> = {
             // A collision layer of the project (project.json)
             layer: { type: "asset", kind: "layer", default: "" },
         },
-        create: (f, registry) => {
-            const data = registry.getTerrain(f.terrain as string) ?? DEFAULT_TERRAIN;
-            const mesh = createTerrain(f as unknown as TerrainFields, data, registry.getGroundMaterial(f.material as string, isPainted(data)));
-            // The props that stand on it
-            if (data.scatter?.length) mesh.add(createScatter(registry, data));
-            return mesh;
-        },
+        create: (f, registry) => createTerrainObject(f as unknown as TerrainFields, registry),
+    },
+    // Ground of any size (see world.ts): the pieces of a world, terrains named <world>_<i>_<j>, each no bigger
+    // than 500 x 500 m; only those near the camera are shown. Every piece is as a Terrain component shows it.
+    world: {
+        label: "World",
+        fields: worldFields,
+        create: (f, registry) => createWorld(f as unknown as WorldFields, registry, (fields, step) => (step > 1 ? createCoarseTerrain(fields, registry, step) : createTerrainObject(fields, registry)), disposeObject),
+        choices: (field, _component, registry) => (field === "world" ? worldNames(registry.terrainNames()) : null),
     },
     // A level surface of water (see water.ts): a lake, a marsh, a sea. The entity stands at the surface. It
     // stops nothing; while the camera is under it, the scene is seen as under water.
@@ -238,6 +244,11 @@ export const componentDefs: Record<string, ComponentDef> = {
             visibility: { type: "number", default: 14, min: 0.5, step: 1 },
             underLight: { type: "number", default: 0.7, min: 0, step: 0.1 },
             look: { type: "asset", kind: "look", default: "" },
+            // Waves: meters from trough to crest (0 is a level surface), meters from crest to crest, and how
+            // fast they run (1 is as fast as real water of that length). They only show.
+            waves: { type: "number", default: 0, min: 0, step: 0.05 },
+            waveLength: { type: "number", default: 8, min: 0.25, step: 0.5 },
+            waveSpeed: { type: "number", default: 1, min: 0, step: 0.1 },
         },
         create: (f) => createWater(f as unknown as WaterFields),
     },
@@ -355,6 +366,10 @@ export const componentDefs: Record<string, ComponentDef> = {
             lockRotation: { type: "boolean", default: false },
             // Off: it floats, and only moves when something pushes it
             gravity: { type: "boolean", default: true },
+            // In water (a Water component, a river): how many times its weight the water lifts it with when
+            // it is wholly under. 0 sinks, 1 hangs where it is, more comes up and floats, the deeper in the
+            // water the nearer to 1
+            buoyancy: { type: "number", default: 0, min: 0, step: 0.1 },
         },
         create: (f) => marker("body", f),
     },
@@ -627,6 +642,37 @@ export function disposeObject(obj: THREE.Object3D) {
             if (!m.userData.shared) m.dispose();
         });
     });
+}
+
+// The mesh of a ground as the Terrain component shows it: the heights, the props that stand on it, the water of
+// its rivers and the air of its biomes. A piece of a World is made by it too.
+function createTerrainObject(f: TerrainFields, registry: Registry) {
+    const data = registry.getTerrain(f.terrain) ?? DEFAULT_TERRAIN;
+    const mesh = createTerrain(f, data, registry.getGroundMaterial(f.material, isPainted(data)));
+    if (data.scatter?.length) mesh.add(createScatter(registry, data));
+    if (data.rivers?.length) mesh.add(createRivers(data));
+    mesh.add(createBiomeAir(registry, mesh));
+    return mesh;
+}
+
+// A far piece of a World: the ground with a height every `step` heights, a skirt that hides the gap to a finer
+// neighbor, the water of the rivers and the air of the biomes; no props. For the collisions and the physics it is
+// the whole ground (userData.terrain has all the heights); a brush does not work it (userData.coarse).
+function createCoarseTerrain(f: TerrainFields, registry: Registry, step: number) {
+    const data = registry.getTerrain(f.terrain) ?? DEFAULT_TERRAIN;
+    const coarse = coarseTerrain(data, step);
+    if (!coarse) return createTerrainObject(f, registry);
+    const material = registry.getGroundMaterial(f.material, isPainted(data));
+    const mesh = createTerrain(f, coarse, material);
+    (mesh.userData.terrain as { data: TerrainData }).data = data;
+    mesh.userData.coarse = step;
+    const skirt = new THREE.Mesh(terrainSkirt(coarse, data.cell * step * 2), material);
+    skirt.receiveShadow = f.receiveShadow;
+    skirt.raycast = () => {};
+    mesh.add(skirt);
+    if (data.rivers?.length) mesh.add(createRivers(data));
+    mesh.add(createBiomeAir(registry, mesh));
+    return mesh;
 }
 
 // Shown instead of a model or prefab that does not exist, so the scene still loads

@@ -149,21 +149,36 @@ export function applyEnvironment(scene: THREE.Scene, data: Partial<EnvironmentDa
     ambient.intensity = env.ambientIntensity;
 }
 
+// The three colors of a sky
+export const SKY_COLORS = ["skyTop", "skyHorizon", "skyGround"] as const;
+
 // What a Zone component changes of the environment while the camera is inside it. Of the sky it can only
-// say that it is not seen from inside (its "sky" field).
+// say that it is not seen from inside (its "sky" field); a zone made by code (the air of a biome) may also
+// give the sky other colors.
 export const ZONE_KEYS = ["background", "ambientColor", "ambientIntensity", "fog", "fogColor", "fogNear", "fogFar", "look"] as const;
 
 // The fields of a Zone component, defaults filled in (see components.ts)
-export type ZoneFields = Pick<EnvironmentData, (typeof ZONE_KEYS)[number]> & { sizeX: number; sizeY: number; sizeZ: number; blend: number; sky?: boolean };
+export type ZoneFields = Pick<EnvironmentData, (typeof ZONE_KEYS)[number]> & Partial<Pick<EnvironmentData, (typeof SKY_COLORS)[number]>> & { sizeX: number; sizeY: number; sizeZ: number; blend: number; sky?: boolean };
 
 const local = new THREE.Vector3();
 const inverse = new THREE.Matrix4();
 
-// The zone a point of the world is in: the fields of the first active Zone component whose box holds it
+// The zone a point of the world is in: the fields of the first active Zone component whose box holds it.
+// A zone that is not a box (the water of a river, the air of a biome) gives its fields for a point itself:
+// userData.zoneOf(point), null where it is not. One marked userData.zoneWeak counts only where no other
+// zone is.
 export function zoneAt(root: THREE.Object3D, point: THREE.Vector3): ZoneFields | null {
     let found: ZoneFields | null = null;
+    let weak: ZoneFields | null = null;
     const visit = (object: THREE.Object3D) => {
         if (found || !object.visible) return;
+        const of = object.userData.zoneOf as ((point: THREE.Vector3) => ZoneFields | null) | undefined;
+        if (of) {
+            const fields = of(point);
+            if (object.userData.zoneWeak) weak ??= fields;
+            else found = fields;
+            return;
+        }
         const zone = object.userData.zone as ZoneFields | undefined;
         if (zone) {
             // The box turns and grows with its entity
@@ -174,7 +189,7 @@ export function zoneAt(root: THREE.Object3D, point: THREE.Vector3): ZoneFields |
         object.children.forEach(visit);
     };
     visit(root);
-    return found;
+    return found ?? weak;
 }
 
 // The environment of the scene as a zone changes it; the look of the zone only if it names one
@@ -182,6 +197,7 @@ export function withZone(base: EnvironmentData, zone: ZoneFields | null): Enviro
     if (!zone) return base;
     const env = { ...base };
     if (zone.sky === false) env.sky = false;
+    for (const key of SKY_COLORS) env[key] = zone[key] ?? env[key];
     for (const key of ZONE_KEYS) {
         if (key === "look" && !zone.look) continue;
         (env as Record<string, unknown>)[key] = zone[key];

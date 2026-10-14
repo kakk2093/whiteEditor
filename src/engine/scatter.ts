@@ -3,7 +3,7 @@ import { componentDefs } from "./components";
 import { createEntityObject, createPrefabInstance } from "./loadScene";
 import { paramDefaults } from "./Registry";
 import type { Registry } from "./Registry";
-import { terrainHeight } from "./terrain";
+import { terrainHeight, terrainSize } from "./terrain";
 import type { ScatterItem, TerrainData } from "./terrain";
 import type { Params } from "./types";
 
@@ -25,13 +25,23 @@ interface Part {
     receiveShadow: boolean;
 }
 
-// What a scatter group keeps for a prefab: its parts, and the instanced meshes that draw the copies
+// What a scatter group keeps for a prefab: its parts, and for every square of the ground that has copies of it the
+// instanced meshes that draw them there
 interface Drawn {
     parts: Part[];
+    cells: Map<string, Cell>;
+}
+
+interface Cell {
     meshes: THREE.InstancedMesh[];
     // How many copies the meshes have room for
     capacity: number;
 }
+
+// Meters along a side of a square of props: each is drawn by meshes of its own, so that what is out of sight (or
+// further than a World shows props, see cullScatter) is not drawn. Counted from the corner of the ground: a ground
+// no bigger than this has one square.
+export const SCATTER_CELL = 64;
 
 const position = new THREE.Vector3();
 const quaternion = new THREE.Quaternion();
@@ -71,19 +81,27 @@ function partsOf(registry: Registry, prefab: string, late: () => void): Part[] |
     return parts;
 }
 
+function removeCell(group: THREE.Group, cell: Cell) {
+    for (const mesh of cell.meshes) {
+        group.remove(mesh);
+        mesh.dispose();
+    }
+}
+
 // Draws the props of `data` in `group` (made by createScatter): called again whenever they, or the ground
-// under them, have changed. The meshes are kept while they have room for the copies.
+// under them, have changed. The meshes of a square are kept while they have room for its copies.
 export function fillScatter(group: THREE.Group, registry: Registry, data: TerrainData) {
     const drawn = group.userData.drawn as Map<string, Drawn>;
     const layers = new Map((data.scatter ?? []).map((layer) => [layer.prefab, layer]));
     for (const [prefab, entry] of drawn) {
         if (layers.has(prefab)) continue;
-        for (const mesh of entry.meshes) {
-            group.remove(mesh);
-            mesh.dispose();
-        }
+        for (const cell of entry.cells.values()) removeCell(group, cell);
         drawn.delete(prefab);
     }
+    const [width, depth] = terrainSize(data);
+    const across = Math.max(1, Math.ceil(width / SCATTER_CELL));
+    const along = Math.max(1, Math.ceil(depth / SCATTER_CELL));
+    const cellOf = (x: number, z: number) => `${Math.min(across - 1, Math.max(0, Math.floor((x + width / 2) / SCATTER_CELL)))},${Math.min(along - 1, Math.max(0, Math.floor((z + depth / 2) / SCATTER_CELL)))}`;
     const matrix = new THREE.Matrix4();
     const placed = new THREE.Matrix4();
     for (const [prefab, layer] of layers) {
@@ -92,10 +110,7 @@ export function fillScatter(group: THREE.Group, registry: Registry, data: Terrai
             const parts = partsOf(registry, prefab, () => {
                 // Taken again from the beginning, if this group is still the one that is shown
                 const now = group.userData.drawn as Map<string, Drawn>;
-                for (const mesh of now.get(prefab)?.meshes ?? []) {
-                    group.remove(mesh);
-                    mesh.dispose();
-                }
+                for (const cell of now.get(prefab)?.cells.values() ?? []) removeCell(group, cell);
                 now.delete(prefab);
                 if (group.parent) fillScatter(group, registry, (group.userData.data as TerrainData | undefined) ?? data);
             });
@@ -103,40 +118,73 @@ export function fillScatter(group: THREE.Group, registry: Registry, data: Terrai
                 console.warn(`Scatter: unknown prefab "${prefab}"`);
                 continue;
             }
-            entry = { parts, meshes: [], capacity: 0 };
+            entry = { parts, cells: new Map() };
             drawn.set(prefab, entry);
         }
-        if (layer.items.length > entry.capacity || entry.meshes.length !== entry.parts.length) {
-            for (const mesh of entry.meshes) {
-                group.remove(mesh);
-                mesh.dispose();
-            }
-            // Room to grow: a brush adds a few copies at every touch
-            entry.capacity = Math.max(16, Math.ceil(layer.items.length * 1.5));
-            entry.meshes = entry.parts.map((part) => {
-                const mesh = new THREE.InstancedMesh(part.geometry, part.material, entry.capacity);
-                mesh.castShadow = part.castShadow;
-                mesh.receiveShadow = part.receiveShadow;
-                // The copies are all over the ground: three.js counts where from their places
-                mesh.frustumCulled = true;
-                group.add(mesh);
-                return mesh;
-            });
-        }
-        let count = 0;
+        // The copies of every square
+        const squares = new Map<string, typeof layer.items>();
         for (const item of layer.items) {
-            if (!scatterMatrix(data, item, matrix)) continue;
-            entry.parts.forEach((part, n) => entry.meshes[n].setMatrixAt(count, placed.multiplyMatrices(matrix, part.matrix)));
-            count++;
+            const key = cellOf(item[0], item[1]);
+            const list = squares.get(key);
+            if (list) list.push(item);
+            else squares.set(key, [item]);
         }
-        for (const mesh of entry.meshes) {
-            mesh.count = count;
-            mesh.instanceMatrix.needsUpdate = true;
-            mesh.boundingSphere = null;
-            mesh.boundingBox = null;
+        for (const [key, cell] of entry.cells) {
+            if (squares.has(key)) continue;
+            removeCell(group, cell);
+            entry.cells.delete(key);
+        }
+        for (const [key, items] of squares) {
+            let cell = entry.cells.get(key);
+            if (!cell || items.length > cell.capacity || cell.meshes.length !== entry.parts.length) {
+                if (cell) removeCell(group, cell);
+                // Room to grow: a brush adds a few copies at every touch
+                const capacity = Math.max(16, Math.ceil(items.length * 1.5));
+                const [ci, cj] = key.split(",").map(Number);
+                cell = {
+                    capacity,
+                    meshes: entry.parts.map((part) => {
+                        const mesh = new THREE.InstancedMesh(part.geometry, part.material, capacity);
+                        mesh.castShadow = part.castShadow;
+                        mesh.receiveShadow = part.receiveShadow;
+                        // three.js counts where the copies are from their places, and leaves out what is out of sight
+                        mesh.frustumCulled = true;
+                        // The middle of the square, from the middle of the ground (see cullScatter)
+                        mesh.userData.cell = { x: (ci + 0.5) * SCATTER_CELL - width / 2, z: (cj + 0.5) * SCATTER_CELL - depth / 2 };
+                        group.add(mesh);
+                        return mesh;
+                    }),
+                };
+                entry.cells.set(key, cell);
+            }
+            let count = 0;
+            for (const item of items) {
+                if (!scatterMatrix(data, item, matrix)) continue;
+                cell.meshes.forEach((mesh, n) => mesh.setMatrixAt(count, placed.multiplyMatrices(matrix, entry!.parts[n].matrix)));
+                count++;
+            }
+            for (const mesh of cell.meshes) {
+                mesh.count = count;
+                mesh.instanceMatrix.needsUpdate = true;
+                mesh.boundingSphere = null;
+                mesh.boundingBox = null;
+            }
         }
     }
     group.userData.data = data;
+}
+
+// Shows the squares of props of a terrain mesh within `distance` meters of `point` (along the ground, from the
+// middle of the terrain) and hides the others; Infinity shows them all
+export function cullScatter(mesh: THREE.Object3D, point: { x: number; z: number }, distance: number) {
+    const group = mesh.children.find((child) => child.userData.scatter);
+    if (!group) return;
+    const half = SCATTER_CELL / 2;
+    for (const child of group.children) {
+        const cell = child.userData.cell as { x: number; z: number } | undefined;
+        if (!cell) continue;
+        child.visible = distance === Infinity || Math.hypot(Math.max(0, Math.abs(point.x - cell.x) - half), Math.max(0, Math.abs(point.z - cell.z) - half)) <= distance;
+    }
 }
 
 // The object that shows the props of a terrain; it goes under the mesh of the terrain

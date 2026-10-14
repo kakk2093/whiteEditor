@@ -1,4 +1,5 @@
 import { componentDefs, componentKey, UI_PARTS } from "./components";
+import { validateWorld } from "./world";
 import { environmentFields } from "./environment";
 import { lookFields } from "./look";
 import type { LookData } from "./look";
@@ -264,10 +265,14 @@ function checkEntity(entity: EntityData, path: string, registry: Registry, ids: 
         if (!collider) problems.push(`${where} [body]: needs a shape: add a Collider, { "type": "collider" }`);
         else if (collider.solid === false) problems.push(`${where} [body]: its Collider must be solid; a trigger is not a part of the physics`);
     }
-    if (keys.has("terrain")) {
+    for (const ground of ["terrain", "world"].filter((key) => keys.has(key))) {
         // The collisions take the heights as they are in the file: only the place of the entity counts
-        if (entity.rotation.some((n) => n !== 0)) problems.push(`${where} [terrain]: a terrain cannot be turned: rotation must be [0, 0, 0]`);
-        if (entity.scale.some((n) => n !== 1)) problems.push(`${where} [terrain]: a terrain cannot be scaled: scale must be [1, 1, 1] (its size is "cell" of the file in terrains/)`);
+        if (entity.rotation.some((n) => n !== 0)) problems.push(`${where} [${ground}]: a ${ground} cannot be turned: rotation must be [0, 0, 0]`);
+        if (entity.scale.some((n) => n !== 1)) problems.push(`${where} [${ground}]: a ${ground} cannot be scaled: scale must be [1, 1, 1] (its size is "cell" of the file in terrains/)`);
+    }
+    if (keys.has("world")) {
+        const world = entity.components.find((component) => component.type === "world")!;
+        for (const problem of validateWorld(registry, (world.world as string | undefined) ?? "")) problems.push(`${where} [world]: ${problem}`);
     }
     const inside = canvas || keys.has("canvas");
     if (keys.has("ui") && !inside) {

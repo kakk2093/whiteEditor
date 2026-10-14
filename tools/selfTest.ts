@@ -6,13 +6,16 @@ import {
   applyToPrefab, assignAddedIds, diffOverride, expandInstance, expandPristine, findInExpanded, innerPaths, ROOT_PATH,
 } from '../src/engine/prefab'
 import { Registry } from '../src/engine/Registry'
-import { brushRegion, brushTerrain, cloneTerrain, fillTerrainGeometry, flatTerrain, terrainRange, isPainted, rayTerrain, resizeTerrain, terrainGeometry, terrainHeight, terrainSize, validateTerrain } from '../src/engine/terrain'
+import { brushRegion, brushTerrain, cloneTerrain, coarseTerrain, fillTerrainGeometry, flatTerrain, terrainRange, isPainted, rayTerrain, resizeTerrain, terrainGeometry, terrainHeight, terrainSize, validateTerrain } from '../src/engine/terrain'
 import type { TerrainData } from '../src/engine/terrain'
-import { biomeShares, defaultGenerator, generateByMap, generatedHeight, generateTerrain, generatorOf, noise2D, validateBiome } from '../src/engine/generate'
+import { biomeShares, defaultGenerator, defineGenerator, validateGenerator, generateByMap, generatedHeight, generateTerrain, generatorOf, markBiome, noise2D, validateBiome } from '../src/engine/generate'
 import type { BiomeData } from '../src/engine/generate'
-import { createScatter, eraseScatter, plantScatter, scatterColliders, scatterCount, updateScatter } from '../src/engine/scatter'
-import { zoneAt } from '../src/engine/environment'
-import { submergedAt } from '../src/engine/water'
+import { createScatter, cullScatter, eraseScatter, plantScatter, scatterColliders, scatterCount, updateScatter } from '../src/engine/scatter'
+import { addRiverPoint, applyRivers, insertRiverPoint, riverPath, riverRegion } from '../src/engine/river'
+import { biomeAir } from '../src/engine/biomeAir'
+import { defaultEnvironment, withZone, zoneAt } from '../src/engine/environment'
+import { flowAt, submergedAt } from '../src/engine/water'
+import { coarseStep, parsePiece, validateWorld, worldNames } from '../src/engine/world'
 import { parsePrefab, parseScene } from '../src/engine/types'
 import type { EntityData, EntityOverride } from '../src/engine/types'
 import { validatePrefab, validateScene, validateScripts } from '../src/engine/validate'
@@ -823,6 +826,12 @@ function terrainTests(
     const holder = new THREE.Group().add(group)
     updateScatter(holder, forest, raised)
     equal('they go up with the ground', where(meshes[1], 1), [-5, 10, 3])
+    // A big ground: its props are drawn square by square, and the far squares can be hidden
+    const wide: TerrainData = { ...flatTerrain(200, 1), scatter: [{ prefab: 'Tree', items: [[-90, 0, 0, 1], [-85, 5, 0, 1], [90, 0, 0, 1]] }] }
+    const squares = createScatter(forest, wide)
+    equal('the copies of a big ground, square by square', squares.children.map((mesh) => (mesh as THREE.InstancedMesh).count), [2, 2, 1, 1])
+    cullScatter(new THREE.Group().add(squares), { x: -90, z: 0 }, 20)
+    equal('a far square is hidden', squares.children.map((mesh) => mesh.visible), [true, true, false, false])
     const resized = resizeTerrain(drawn, 8, 8, 1)
     equal('a smaller ground keeps the props that still stand on it', resized.scatter, undefined)
     equal('and a bigger one all that stood on it', resizeTerrain(drawn, 60, 60, 1).scatter?.[0].items.length, 2)
@@ -972,6 +981,23 @@ function terrainTests(
 
     const wider = resizeTerrain(ground, 120, 96, 1)
     equal('a bigger ground keeps its map; what is new is nobody\'s', [wider.biomes, wider.biomeMap?.[48][36], wider.biomeMap?.[48][0], wider.biomeMap?.length], [['Plateau', 'Marsh'], 0, -1, 97])
+
+    // The Biome brush: only the map, the ground is made by it afterwards
+    const marked = flatTerrain(64, 1)
+    equal('nothing to take off a ground without a map', [markBiome(marked, '', 0, 0, 10), marked.biomeMap], [false, undefined])
+    ok('a biome is marked', markBiome(marked, 'Plateau', -16, 0, 10))
+    equal('where the brush was, and the ground has not moved', [marked.biomes, marked.biomeMap?.[32][16], marked.biomeMap?.[32][27], marked.heights[32][16]], [['Plateau'], 0, -1, 0])
+    ok('the same touch again changes nothing', !markBiome(marked, 'Plateau', -16, 0, 10))
+    markBiome(marked, 'Marsh', 16, 0, 10)
+    ok('made by the marks', generateByMap(marked, settings, { x: 0, z: 0 }, biomeOf))
+    ok(`a plateau and a marsh (${marked.heights[32][16].toFixed(1)} and ${marked.heights[32][48].toFixed(1)} m)`, marked.heights[32][16] > 20 && marked.heights[32][48] < 0)
+    const top = marked.heights[32][16]
+    ok('a part of the plateau is made nobody\'s',markBiome(marked, '', -16, 0, 4))
+    brushTerrain(marked, 'flatten', -16, 0, 3, 1, { level: 50 })
+    generateByMap(marked, settings, { x: 0, z: 0 }, biomeOf)
+    ok(`and the generator leaves it alone from then on (${marked.heights[32][16].toFixed(1)} m, was ${top.toFixed(1)})`, marked.heights[32][16] > 49)
+    markBiome(marked, '', 0, 0, 100)
+    equal('with no biome left the ground has no map', [marked.biomes, marked.biomeMap], [undefined, undefined])
   })
 
   test('water', () => {
@@ -999,6 +1025,232 @@ function terrainTests(
     } finally {
       game.dispose()
     }
+  })
+
+  test('a shape of land made by code', () => {
+    // Steps: the usual hills, rounded to whole steps, on a pedestal the params give
+    const terraces = defineGenerator({
+      name: 'terraces',
+      params: { step: { type: 'number', default: 2 }, lift: { type: 'number', default: 0 } },
+      height: ({ hills, params, noise, x, z }) => Math.round(hills / params.step) * params.step + params.lift + noise(x, z) * 0,
+    })
+    const shapes = new Registry().registerExports({ terraces })
+    equal('the scripts of a project give it', [shapes.getGenerator('terraces')?.name, shapes.assetNames('generator')], ['terraces', ['terraces']])
+    const shapeOf = (name: string) => shapes.getGenerator(name)
+    const settings = { ...defaultGenerator, seed: 9, height: 16, shape: 'terraces' }
+    const stepped = flatTerrain(48, 1)
+    generateTerrain(stepped, settings, { x: 0, z: 0 }, undefined, undefined, shapeOf)
+    const levels = new Set(stepped.heights.flat())
+    ok(`the ground is made by it: only whole steps (${[...levels].sort((a, b) => a - b).join(', ')})`, levels.size > 2 && [...levels].every((height) => Math.abs(height % 2) < 1e-9))
+    const lifted = flatTerrain(48, 1)
+    generateTerrain(lifted, { ...settings, shapeParams: { step: 2, lift: 100 } }, { x: 0, z: 0 }, undefined, undefined, shapeOf)
+    equal('with its params', lifted.heights[10][10], stepped.heights[10][10] + 100)
+    const plain = flatTerrain(48, 1)
+    generateTerrain(plain, settings, { x: 0, z: 0 })
+    ok('a shape the project does not have is the usual hills', new Set(plain.heights.flat()).size > 100)
+    // A biome names it as well
+    const TERRACED: BiomeData = { base: 40, height: 16, shape: 'terraces', shapeParams: { step: 4 } }
+    const land = flatTerrain(48, 1)
+    generateTerrain(land, { ...defaultGenerator, seed: 9, biome: 'Terraced' }, { x: 0, z: 0 }, undefined, TERRACED, shapeOf)
+    ok(`the land of a biome with a shape (${land.heights[5][5]})`, land.heights.flat().every((height) => Math.abs((height - 40) % 4) < 1e-9))
+    generateByMap(land, { ...defaultGenerator, seed: 9 }, { x: 0, z: 0 }, () => TERRACED, shapeOf)
+    ok('and made by the map', land.heights.flat().every((height) => Math.abs((height - 40) % 4) < 1e-6))
+    equal('a good file', [validateGenerator({ shape: 'terraces', shapeParams: { step: 3 } }, { generators: ['terraces'] }), validateBiome(TERRACED, { generators: ['terraces'] })], [[], []])
+    ok('a shape the project does not have', validateGenerator({ shape: 'moon' }, { generators: ['terraces'] })[0]?.includes('generator "moon" does not exist'))
+    ok('params that are not an object', validateBiome({ shapeParams: 3 })[0]?.includes('shapeParams'))
+  })
+
+  test('the border of two biomes', () => {
+    const WEST: BiomeData = { base: 0, height: 0, detail: 0, ground: '#111111', lowBelow: -1000, rockSlope: 100 }
+    const EAST: BiomeData = { base: 20, height: 0, detail: 0, ground: '#eeeeee', lowBelow: -1000, rockSlope: 100 }
+    const biomeOf = (name: string) => (name === 'West' ? WEST : EAST)
+    const make = (blend: number) => {
+      const ground = flatTerrain(96, 1)
+      ground.biomes = ['West', 'East']
+      ground.biomeMap = ground.heights.map((row) => row.map((_, i) => (i < 48 ? 0 : 1)))
+      generateByMap(ground, { ...defaultGenerator, seed: 3, blend }, { x: 0, z: 0 }, biomeOf)
+      return ground
+    }
+    const wide = make(40)
+    const narrow = make(4)
+    ok(`a wide blend: ten meters from the line the land is still on its way (${wide.heights[48][38].toFixed(1)} and ${wide.heights[48][58].toFixed(1)})`, wide.heights[48][38] > 1 && wide.heights[48][58] < 19)
+    equal('a narrow one: it is there already', [narrow.heights[48][38], narrow.heights[48][58]], [0, 20])
+    // The paint does not change along a straight line
+    const line = (ground: TerrainData) => ground.colors!.map((row) => row.findIndex((color) => color === ground.palette!.indexOf('#eeeeee')))
+    const edge = line(wide)
+    ok(`the paint of the two runs into each other (the line is between ${Math.min(...edge)} and ${Math.max(...edge)})`, Math.max(...edge) - Math.min(...edge) >= 3 && Math.min(...edge) > 36 && Math.max(...edge) < 60)
+    equal('without a blend the line is the line of the map', new Set(line(make(0))).size, 1)
+    equal('made again it is the same', line(make(40)), edge)
+  })
+
+  test('the air of a biome', () => {
+    const HAZE: BiomeData = { air: true, fogColor: '#445544', fogNear: 2, fogFar: 30, ambientIntensity: 0.3 }
+    equal('a biome without air has none', [biomeAir({}), biomeAir(undefined)], [null, null])
+    equal('one with air', [biomeAir(HAZE)?.fogColor, biomeAir(HAZE)?.fogFar, biomeAir(HAZE)?.ambientColor, biomeAir(HAZE)?.fog], ['#445544', 30, '#ffffff', true])
+    equal('a good file', validateBiome({ ...HAZE, look: 'Soft' }, { looks: ['Soft'] }), [])
+    ok('a look the project does not have', validateBiome({ ...HAZE, look: 'Soft' }, { looks: [] })[0]?.includes('look "Soft" does not exist'))
+    // The west half of a ground is a swamp with haze, the east half a meadow without; a lake in the swamp
+    const land = flatTerrain(64, 1)
+    land.biomes = ['Swamp', 'Meadow']
+    land.biomeMap = land.heights.map((row) => row.map((_, i) => (i < 32 ? 0 : 1)))
+    const airy = new Registry().setTerrain('Land', land).setBiome('Swamp', HAZE).setBiome('Meadow', {})
+    const LAKE = { name: 'Lake', position: [80, 13, 0], components: [{ type: 'water', sizeX: 10, sizeZ: 10, depth: 5, underColor: '#102030' }] }
+    const game = new Game(airy, parseScene({ version: 3, entities: [{ name: 'Land', position: [100, 10, 0], components: [{ type: 'terrain', terrain: 'Land' }] }, LAKE] }))
+    game.sound.enabled = false
+    try {
+      game.start()
+      game.update(1 / 60)
+      const at = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z)
+      equal('over the swamp the scene has its haze', [zoneAt(game.root, at(85, 12, 20))?.fogColor, zoneAt(game.root, at(85, 12, 20))?.fogFar], ['#445544', 30])
+      equal('over the meadow, off the ground and high up it has not', [zoneAt(game.root, at(115, 12, 20)), zoneAt(game.root, at(0, 12, 0)), zoneAt(game.root, at(85, 60, 20))], [null, null, null])
+      equal('water in the swamp comes first', zoneAt(game.root, at(80, 12, 0))?.fogColor, '#102030')
+    } finally {
+      game.dispose()
+    }
+
+    // A land with a sky of its own
+    const DUSK: BiomeData = { ...HAZE, sky: true, skyTop: '#203040', skyHorizon: '#a08060' }
+    equal('a biome without a sky of its own leaves the sky alone', biomeAir(HAZE)?.skyTop, undefined)
+    equal('one with its own colors of the sky', [biomeAir(DUSK)?.skyTop, biomeAir(DUSK)?.skyHorizon, biomeAir(DUSK)?.skyGround], ['#203040', '#a08060', '#6b6156'])
+    const scene = { ...defaultEnvironment, sky: true, skyShader: 'sun' }
+    const under = withZone(scene, biomeAir(DUSK))
+    equal('over it the sky of the scene has them, and stays the same sky', [under.skyTop, under.skyHorizon, under.sky, under.skyShader], ['#203040', '#a08060', true, 'sun'])
+    equal('a good file with a sky', validateBiome(DUSK), [])
+    ok('a sky color that is no color', validateBiome({ ...DUSK, skyTop: 'blue' }).some((problem) => problem.includes('skyTop')))
+  })
+
+  test('a river', () => {
+    // A slope 96 m long that goes down 12 m from west to east, with a hill in the way; trees all over it
+    const land = flatTerrain(96, 1)
+    land.heights = land.heights.map((row) => row.map((_, i) => Math.round((12 - i / 8) * 100) / 100))
+    brushTerrain(land, 'raise', 0, 0, 12, 8)
+    land.palette = ['#6f9a4a']
+    land.colors = land.heights.map((row) => row.map(() => 0))
+    land.scatter = [{ prefab: 'Tree', items: Array.from({ length: 96 }, (_, n) => [n - 47.5, 0.3, 0, 1] as [number, number, number, number]) }]
+    equal('a ground without rivers is left alone', [applyRivers(land), riverRegion(land)], [null, null])
+    ok('the spring', addRiverPoint(land, 0, -40, 0))
+    addRiverPoint(land, 0, 0, 2)
+    addRiverPoint(land, 0, 40, 0)
+    ok('a point off the ground is not one', !addRiverPoint(land, 0, 400, 0))
+    const river = land.rivers![0]
+    equal('the points of a river: the water a little under the ground', [land.rivers!.length, river.points.length, river.points[0]], [1, 3, [-40, 0, 10.7]])
+    ok(`water does not run uphill: over the hill it is level with the point before (${river.points[1][2]})`, river.points[1][2] === 10.7 && river.points[2][2] < 2)
+    river.width = 6
+    river.depth = 1.5
+    const path = riverPath(river, 1)
+    ok(`its middle line, a place every meter or so (${path.length})`, path.length > 80 && path.length < 90 && path.every((sample, n) => n === 0 || sample.y <= path[n - 1].y))
+    equal('it goes through its points', [path[0], path[path.length - 1]].map((sample) => [sample.x, sample.z, sample.y]), [river.points[0], river.points[2]])
+    const top = land.heights[48][48]
+    const reach = riverRegion(land)
+    ok('the part of the ground it reaches', reach && reach.fromJ === 0 && reach.toJ === 96 && reach.fromI === 0)
+    const cut = applyRivers(land)
+    ok('the bed is cut', cut && cut.fromJ < 44 && cut.toJ > 52)
+    near('as deep as the river is, under its water', land.heights[48][8], 10.7 - 1.5, 0.05)
+    ok(`through the hill too: a gorge (${top.toFixed(1)} m before, ${land.heights[50][48].toFixed(1)} now)`, top > 12 && Math.abs(land.heights[50][48] - (10.7 - 1.5)) < 0.3)
+    ok(`whose sides are no cliff (${land.heights[60][48].toFixed(1)} m ten meters away)`, land.heights[60][48] < 10.7 + 0.3 + 10)
+    ok('the banks are over the water', land.heights[44][8] > 10.7 && land.heights[52][8] > 10.7)
+    ok('the bed is painted', land.palette.includes('#8a7a5c') && land.colors[48][8] === land.palette.indexOf('#8a7a5c') && land.colors[38][8] === 0)
+    ok(`nothing grows in the water (${land.scatter?.[0].items.length ?? 0} trees of 96 left)`, (land.scatter?.[0].items.length ?? 0) < 20)
+    const once = cloneTerrain(land)
+    equal('once more changes nothing', [applyRivers(land), land.heights, land.colors], [null, once.heights, once.colors])
+    equal('a good file with a river', validateTerrain(land, { prefabs: ['Tree'] }), [])
+    ok('a river without points', validateTerrain({ ...flatTerrain(2, 1), rivers: [{ points: [[0, 0]] }] })[0]?.includes('rivers[0].points'))
+    ok('a field a river does not have', validateTerrain({ ...flatTerrain(2, 1), rivers: [{ points: [[0, 0, 0], [1, 0, 0]], speed: 2 }] })[0]?.includes('unknown field "speed"'))
+    ok('a flow that is less than nothing', validateTerrain({ ...flatTerrain(2, 1), rivers: [{ points: [[0, 0, 0], [1, 0, 0]], flow: -1 }] })[0]?.includes('flow'))
+    const bent = cloneTerrain(land)
+    equal('a point put into the line of a river: between the two it runs through, its water as high as the river has it', [insertRiverPoint(bent, 0, -20, 6), bent.rivers![0].points.length, bent.rivers![0].points[1]], [1, 4, [-20, 6, 10.7]])
+    equal('...past the middle it goes after the middle point', [insertRiverPoint(bent, 0, 30, 1), bent.rivers![0].points.map(([x]) => x)], [3, [-40, -20, 0, 30, 40]])
+    equal('a river without a line has nowhere to put it', [insertRiverPoint(bent, 1, 0, 0), insertRiverPoint({ ...bent, rivers: [{ points: [[0, 0, 0]] }] }, 0, 0, 0)], [-1, -1])
+    equal('a copy has its own rivers', [once.rivers, once.rivers![0].points !== river.points], [land.rivers, true])
+    equal('a smaller ground keeps the river that still runs over it', resizeTerrain(land, 48, 48, 1).rivers?.length, 1)
+
+    // The generator makes the land again, and the river keeps its bed
+    const made = cloneTerrain(land)
+    generateTerrain(made, { ...defaultGenerator, seed: 5, height: 20 }, { x: 0, z: 0 })
+    near('a generated ground keeps the bed', made.heights[48][8], 10.7 - 1.5, 0.05)
+    const mapped = cloneTerrain(land)
+    const HILLS: BiomeData = { base: 14, height: 3, props: [{ prefab: 'Tree', spacing: 3, maxSlope: 10 }] }
+    markBiome(mapped, 'Hills', 0, 0, 200)
+    generateByMap(mapped, { ...defaultGenerator, seed: 5 }, { x: 0, z: 0 }, () => HILLS)
+    near('so does a ground made by its biomes', mapped.heights[48][8], 10.7 - 1.5, 0.05)
+    ok(`whose trees keep out of the water (${mapped.scatter?.[0].items.length})`, (mapped.scatter?.[0].items.length ?? 0) > 100 && mapped.scatter![0].items.every(([x, z]) => !(Math.abs(x + 40) < 2 && Math.abs(z) < 2)))
+
+    // In a scene: the water is drawn, a point in it is under water
+    delete land.scatter
+    const rivers = new Registry().setTerrain('Land', land)
+    // A swimmer and a cork in it, a little way down from the spring
+    const SWIMMER = { name: 'Swimmer', position: [70, 15.2, 0.4], components: [capsule] }
+    const CORK = { name: 'Cork', position: [72, 16, 0.4], components: [{ type: 'collider', shape: 'sphere', radius: 0.3 }, { type: 'body', bounce: 0, buoyancy: 2 }] }
+    const game = new Game(rivers, parseScene({ version: 3, entities: [{ name: 'Land', position: [100, 5, 0], components: [{ type: 'terrain', terrain: 'Land' }] }, SWIMMER, CORK] }))
+    game.sound.enabled = false
+    try {
+      game.start()
+      game.update(1 / 60)
+      const water: THREE.Object3D[] = []
+      game.root.traverse((object) => { if (object.userData.river) water.push(object) })
+      equal('the water of the river is drawn', water.length, 1)
+      const at = (x: number, y: number, z: number) => new THREE.Vector3(100 + x, 5 + y, z)
+      near('how deep a point is in it', submergedAt(game.root, at(-40, 10, 0)), 0.7, 0.01)
+      equal('over it, beside it and under its bed there is none', [submergedAt(game.root, at(-40, 11, 0)), submergedAt(game.root, at(-40, 10, 8)), submergedAt(game.root, at(-40, 5, 0))], [0, 0, 0])
+      equal('under its surface the scene is under water', [zoneAt(game.root, at(-40, 10, 0))?.fog, zoneAt(game.root, at(-40, 11, 0)), zoneAt(game.root, at(-40, 10, 8))], [true, null, null])
+
+      // Its water runs
+      const flow = new THREE.Vector3()
+      ok(`its water runs down the river, a meter a second (${rounded(flow)})`, flowAt(game.root, at(-40, 10, 0), flow) && Math.abs(flow.length() - 1) < 0.01 && flow.x > 0.9)
+      equal('over it and beside it nothing carries', [flowAt(game.root, at(-40, 11, 0), flow), flowAt(game.root, at(-40, 10, 8), flow), flow.length()], [false, false, 0])
+      const surface = water[0] as THREE.Mesh
+      const streaks = (surface.material as THREE.MeshStandardMaterial).map
+      ;(surface.onBeforeRender as unknown as () => void)()
+      ok('running water shows streaks that go down it', streaks && streaks.offset.y !== 0)
+      const swimmer = game.root.getObjectByName('Swimmer')!
+      const cork = game.root.getObjectByName('Cork')!
+      const from = [swimmer.position.x, cork.position.x]
+      for (let i = 0; i < 120; i++) {
+        if (!game.runtime.swim(swimmer, 1 / 60, 0.5)) game.runtime.fall(swimmer, 1 / 60)
+        game.update(1 / 60)
+      }
+      near('what swims in it is carried down, a meter a second', swimmer.position.x - from[0], 2, 0.15)
+      ok(`and so is what floats (${(cork.position.x - from[1]).toFixed(2)} m in 2 s)`, cork.position.x - from[1] > 1.2 && cork.position.x - from[1] < 2.2)
+      const still = cloneTerrain(land)
+      still.rivers![0].flow = 0
+      rivers.setTerrain('Land', still)
+      const calm = new Game(rivers, parseScene({ version: 3, entities: [{ name: 'Land', position: [100, 5, 0], components: [{ type: 'terrain', terrain: 'Land' }] }] }))
+      calm.update(1 / 60)
+      ok('water that stands still carries nothing and has no streaks', !flowAt(calm.root, at(-40, 10, 0), flow) && calm.root.getObjectByName('Land')!.getObjectsByProperty('type', 'Mesh').every((mesh) => !mesh.userData.river || !((mesh as THREE.Mesh).material as THREE.MeshStandardMaterial).map))
+      calm.dispose()
+    } finally {
+      game.dispose()
+    }
+  })
+
+  test('afloat', () => {
+    // The lake of the test before, with waves: a swimmer, a cork and a stone in it
+    const LAKE = { name: 'Lake', position: [-10, 2, 0], components: [{ type: 'water', sizeX: 20, sizeZ: 10, depth: 6, waves: 0.4, waveLength: 4 }] }
+    const ball = (name: string, z: number, buoyancy: number) => ({ name, position: [-8, 3, z], components: [{ type: 'collider', shape: 'sphere' }, { type: 'body', bounce: 0, buoyancy }] })
+    play([TERRAIN, LAKE, { ...PLAYER, position: [-12, 3, -2] }, { ...PLAYER, name: 'Wader', position: [-12, 3, 2] }, ball('Cork', 2, 2), ball('Stone', -2, 0), { name: 'Balloon', position: [6, 9, 4], components: [{ type: 'collider', shape: 'sphere' }, { type: 'body', gravity: false }] }], (game, object) => {
+      const swimmer = object('Player')
+      const wader = object('Wader')
+      let afloat = false
+      for (let i = 0; i < 300; i++) {
+        afloat = game.runtime.swim(swimmer, 1 / 60, 0.5)
+        if (!afloat) game.runtime.fall(swimmer, 1 / 60)
+        // Asks to be 3 m under: the lake is only 2 m deep there, so it walks the bottom
+        if (!game.runtime.swim(wader, 1 / 60, 3)) game.runtime.fall(wader, 1 / 60)
+        game.update(1 / 60)
+      }
+      ok('what swims is afloat', afloat)
+      near('half a meter under the surface, as it asked', swimmer.position.y, 1.5, 0.03)
+      near('what asks for more water than there is stands on the bottom', wader.position.y, 0.5, 0.01)
+      near('a body that floats lies on the surface, half in the water', object('Cork').position.y, 2, 0.15)
+      near('one that does not is on the bottom', object('Stone').position.y, 0.5, 0.05)
+      near('a body without gravity stays where it is', object('Balloon').position.y, 9, 0.01)
+      const surface = object('Lake').children[0].children[0] as THREE.Mesh
+      const heights = () => [...(surface.geometry.getAttribute('position').array as Float32Array)].filter((_, n) => n % 3 === 1)
+      ok(`a surface with waves is cut into pieces (${heights().length} vertices)`, heights().length > 100)
+      ;(surface.onBeforeRender as unknown as () => void)()
+      const waves = heights()
+      ok(`and its waves are as high as asked (from ${Math.min(...waves).toFixed(2)} to ${Math.max(...waves).toFixed(2)})`, Math.max(...waves) > 0.1 && Math.max(...waves) <= 0.2001 && Math.min(...waves) >= -0.2001)
+    })
   })
 
   test('walking on a terrain', () => {
@@ -1038,6 +1290,77 @@ function terrainTests(
     })
   })
 
+  test('a world', () => {
+    // Pieces of 32 m: level ones around the middle, a ramp to the east (0 m at its west edge, 4 m at its east
+    // one), a lone piece far away
+    const level = flatTerrain(32, 1)
+    const ramp = flatTerrain(32, 1)
+    ramp.heights = ramp.heights.map((row) => row.map((_, i) => i / 8))
+    const world = new Registry()
+      .setTerrain('Land_0_0', level).setTerrain('Land_1_0', ramp).setTerrain('Land_-1_0', cloneTerrain(level))
+      .setTerrain('Land_0_1', cloneTerrain(level)).setTerrain('Land_5_0', cloneTerrain(level)).setTerrain('Hills', cloneTerrain(level))
+    equal('the pieces of a world, by their names', [parsePiece('Land_-1_0'), parsePiece('Hills'), worldNames(world.terrainNames())], [{ world: 'Land', i: -1, j: 0, name: 'Land_-1_0' }, null, ['Land']])
+    equal('a good world', validateWorld(world, 'Land'), [])
+    const LAND = { name: 'Land', components: [{ type: 'world', world: 'Land', distance: 20 }] }
+    const EYE = { name: 'Eye', position: [0, 10, 0], components: [{ type: 'camera' }] }
+    const BALL = { name: 'Ball', position: [-32, 3, 0], components: [{ type: 'collider', shape: 'sphere' }, { type: 'body', bounce: 0 }] }
+    const game = new Game(world, parseScene({ version: 3, entities: [LAND, EYE, { ...PLAYER, position: [40, 5, 0] }, BALL] }))
+    game.sound.enabled = false
+    const shown = () => {
+      const names: string[] = []
+      game.root.traverse((object) => { if (object.userData.terrain) names.push(object.userData.terrainName) })
+      return names.sort()
+    }
+    try {
+      equal('only the pieces near the camera are there', shown(), ['Land_-1_0', 'Land_0_0', 'Land_0_1', 'Land_1_0'])
+      game.start()
+      const player = game.root.getObjectByName('Player')!
+      for (let i = 0; i < 90; i++) {
+        game.runtime.fall(player, 1 / 60)
+        game.update(1 / 60)
+      }
+      near('what walks stands on a piece, where the piece is', player.position.y, 3.5, 0.02)
+      near('a body of the physics lies on another', game.root.getObjectByName('Ball')!.position.y, 0.5, 0.05)
+      near('a ray finds the ground of a piece', game.runtime.raycast([47, 50, 0], [0, -1, 0])?.point.y ?? NaN, 3.875, 0.01)
+      equal('and the entity is what it hits', game.runtime.raycast([47, 50, 0], [0, -1, 0])?.object.name, 'Land')
+      game.root.getObjectByName('Eye')!.position.x = 160
+      game.update(1 / 60)
+      equal('the camera goes away: the far pieces go, those it comes to are made', shown(), ['Land_5_0'])
+      game.root.getObjectByName('Eye')!.position.x = 160 - 16 - 20 - 5
+      game.update(1 / 60)
+      equal('a piece that is shown stays a little further', shown(), ['Land_5_0'])
+    } finally {
+      game.dispose()
+    }
+
+    // Far pieces are coarse: a height every few meters, no props, and still the whole ground for the collisions
+    equal('a coarse grid: every eighth height', [coarseStep(ramp), coarseTerrain(ramp, 8)?.heights.length, coarseTerrain(ramp, 8)?.heights[0][4], coarseTerrain(ramp, 3)], [8, 5, 4, null])
+    const far = new Game(world, parseScene({ version: 3, entities: [{ ...LAND, components: [{ type: 'world', world: 'Land', distance: 20, detail: 1 }] }, EYE] }))
+    try {
+      const pieces = new Map<string, THREE.Object3D>()
+      far.root.traverse((object) => { if (object.userData.terrain) pieces.set(object.userData.terrainName, object) })
+      equal('the piece the camera is on is whole, the others coarse', [...pieces].map(([name, mesh]) => [name, mesh.userData.coarse ?? 1]).sort(), [['Land_-1_0', 8], ['Land_0_0', 1], ['Land_0_1', 8], ['Land_1_0', 8]])
+      near('a ray finds the whole ground of a coarse piece', far.runtime.raycast([47, 50, 0], [0, -1, 0])?.point.y ?? NaN, 3.875, 0.01)
+      ok('which has a skirt', pieces.get('Land_1_0')!.children.some((child) => (child as THREE.Mesh).isMesh))
+      far.root.getObjectByName('Eye')!.position.x = 40
+      far.update(1 / 60)
+      const now = new Map<string, unknown>()
+      far.root.traverse((object) => { if (object.userData.terrain) now.set(object.userData.terrainName, object.userData.coarse ?? 1) })
+      equal('the camera goes on: the piece it comes to is made whole', [now.get('Land_1_0'), now.get('Land_0_0')], [1, 8])
+    } finally {
+      far.dispose()
+    }
+
+    // What the check finds
+    const bad = new Registry().setTerrain('Land_0_0', level).setTerrain('Land_1_0', flatTerrain(16, 1)).setTerrain('Land_0_1', { ...flatTerrain(32, 1), heights: flatTerrain(32, 1).heights.map((row) => row.map(() => 1)) })
+    const problems = validateWorld(bad, 'Land')
+    ok(`pieces of different sizes (${problems.join('; ')})`, problems.some((problem) => problem.includes('Land_1_0') && problem.includes('one size')))
+    ok('an edge that does not meet its neighbor', problems.some((problem) => problem.includes('Land_0_0') && problem.includes('Land_0_1') && problem.includes('seam')))
+    ok('a piece bigger than 500 m', validateWorld(new Registry().setTerrain('Big_0_0', flatTerrain(512, 1)), 'Big')[0]?.includes('at most 500'))
+    ok('a world without pieces', validateWorld(new Registry(), 'Gone')[0]?.includes('Gone_0_0'))
+    ok('the check of a scene finds them', validateScene(parseScene({ version: 3, entities: [{ name: 'W', rotation: [0, 10, 0], components: [{ type: 'world', world: 'Gone' }] }] }), new Registry()).some((problem) => problem.includes('cannot be turned')))
+  })
+
   test('rays and triggers on a terrain', () => {
     play([TERRAIN, { name: 'Coin', position: [5, 2.6, 0], components: [{ type: 'collider', shape: 'sphere', radius: 0.3, solid: false }] }], (game, object) => {
       const hit = game.runtime.raycast([5, 30, 0.4], [0, -1, 0])
@@ -1071,6 +1394,40 @@ function terrainTests(
       for (let i = 0; i < 120; i++) game.update(1 / 60)
       near('a terrain that is moved', object('Crate').position.y, 3.5, 0.03)
     })
+  })
+
+  test('the physics and the props of a terrain', () => {
+    // A level field 200 m wide with a post every 4 meters: 2601 props, each with a collider
+    const field = flatTerrain(200, 1)
+    const items: [number, number, number, number][] = []
+    for (let x = -100; x <= 100; x += 4) for (let z = -100; z <= 100; z += 4) items.push([x, z, 0, 1])
+    field.scatter = [{ prefab: 'Post', items }]
+    const posts = new Registry().setTerrain('Field', field)
+    posts.setPrefab('Post', parsePrefab({ version: 3, root: { name: 'Post', components: [{ type: 'mesh' }, { type: 'collider', sizeX: 1, sizeY: 3, sizeZ: 1, centerY: 1.5 }] } }).root)
+    const scene = (entities: unknown[]) => parseScene({ version: 3, entities: [{ name: 'Field', position: [10, 0, 0], components: [{ type: 'terrain', terrain: 'Field' }] }, ...entities] })
+    const roll = (entities: unknown[], frames: number, run: (game: Game, object: (name: string) => THREE.Object3D) => void) => {
+      const game = new Game(posts, scene(entities))
+      game.sound.enabled = false
+      try {
+        game.start()
+        game.update(1 / 60)
+        // Every body is shoved eastwards
+        game.root.traverse((object) => game.runtime.physics.handle(object)?.setVelocity(6, 0, 0))
+        for (let i = 0; i < frames; i++) game.update(1 / 60)
+        run(game, (name) => game.root.getObjectByName(name)!)
+      } finally {
+        game.dispose()
+      }
+    }
+    const ball = (name: string, x: number, z: number) => ({ name, position: [x, 0.5, z], components: [{ type: 'collider', shape: 'sphere' }, { type: 'body', bounce: 0, friction: 0, damping: 0 }] })
+    // The post of the field at x = 0 is at 10 in the world: one ball rolls straight at it, another between two rows
+    roll([ball('Hit', 6, 0), ball('Miss', 6, 2)], 120, (game, object) => {
+      ok(`a ball that rolls at a prop is stopped by it (x = ${object('Hit').position.x.toFixed(2)})`, object('Hit').position.x < 9.1)
+      ok(`one that rolls between the props goes on (x = ${object('Miss').position.x.toFixed(2)})`, object('Miss').position.x > 14)
+      const live = game.runtime.physics.liveProps
+      ok(`only the props near the bodies have bodies (${live} of ${items.length})`, live > 0 && live < 40)
+    })
+    roll([], 2, (game) => equal('with nothing to move no prop has one', game.runtime.physics.liveProps, 0))
   })
 }
 

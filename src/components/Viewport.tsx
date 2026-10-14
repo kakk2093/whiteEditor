@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
-import { anchorPoint, applyEnvironment, aspectRatio, createRenderer, withZone, zoneAt, RenderPipeline, resolveLook, setCameraAspect, UI_HANDLE, UI_HANDLES, UiLayer, uiOf, updateModelFiles, updateParticles } from "../engine";
+import { anchorPoint, applyEnvironment, aspectRatio, createRenderer, withZone, zoneAt, RenderPipeline, resolveLook, setCameraAspect, UI_HANDLE, UI_HANDLES, UiLayer, uiOf, updateModelFiles, updateParticles, updateWorlds } from "../engine";
 import type { Input } from "../engine";
 import { dropAsset, getDraggedAsset } from "../editor/core/dnd";
 import { ColliderHandles } from "./colliderHandles";
@@ -725,6 +725,9 @@ export default function Viewport() {
                 // A zone the camera of the game has entered may bring its own look
                 if (sceneStore.gameLook !== shownLook) applyLook();
             } else if (ctx.camera) {
+                // The pieces of a world near the editor camera are shown, the far ones are taken away
+                // ...and the Inspector learns of it: the piece it shows may have come or gone
+                if (updateWorlds(sceneStore.root, ctx.camera.position).changed) sceneStore.changed();
                 // While the scene is edited the editor camera is what walks into the zones
                 sceneStore.root.updateMatrixWorld();
                 const zone = zoneAt(sceneStore.root, ctx.camera.position);

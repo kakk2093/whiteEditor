@@ -1,5 +1,7 @@
 import * as THREE from "three";
 import { validateGenerator } from "./generate";
+import { fitRivers, validateRivers } from "./river";
+import type { RiverData } from "./river";
 
 // The ground of a world: a grid of heights, drawn as a mesh and walked on as it is drawn.
 //
@@ -19,13 +21,15 @@ export interface TerrainData {
     // As many rows of as many numbers as `heights` has
     colors?: number[][];
     // The settings the ground is generated with (see generate.ts); what is not named has its usual value
-    generator?: Record<string, number | boolean | string>;
+    generator?: Record<string, number | boolean | string | Record<string, unknown>>;
     // The props that stand on the ground (see scatter.ts): for every prefab, its copies
     scatter?: ScatterLayer[];
     // Which biome lies where (see generate.ts): the names of the biomes of this ground, and for every height
     // the number of its biome in that list; -1 is ground no biome has made, which the generator leaves alone
     biomes?: string[];
     biomeMap?: number[][];
+    // The rivers that run over the ground (see river.ts): their beds are cut into the heights
+    rivers?: RiverData[];
 }
 
 // A copy of a prefab on the ground: x and z in meters from the middle of the terrain, how far it is turned
@@ -82,6 +86,7 @@ export function cloneTerrain(data: TerrainData): TerrainData {
         ...(data.scatter ? { scatter: data.scatter.map((layer) => ({ prefab: layer.prefab, items: [...layer.items] })) } : {}),
         ...(data.biomes ? { biomes: [...data.biomes] } : {}),
         ...(data.biomeMap ? { biomeMap: data.biomeMap.map((row) => [...row]) } : {}),
+        ...(data.rivers ? { rivers: data.rivers.map((river) => ({ ...river, points: river.points.map((point) => [...point] as [number, number, number]) })) } : {}),
     };
 }
 
@@ -123,7 +128,19 @@ export function resizeTerrain(data: TerrainData, columns: number, rows: number, 
         ...(data.biomes && data.biomeMap ? { biomes: [...data.biomes], biomeMap } : {}),
     };
     const scatter = fitScatter(data.scatter, resized);
-    return scatter?.length ? { ...resized, scatter } : resized;
+    const rivers = fitRivers(data.rivers, resized);
+    return { ...resized, ...(scatter?.length ? { scatter } : {}), ...(rivers ? { rivers } : {}) };
+}
+
+// The place of a color in the palette of a terrain; a color it does not have yet is added at its end
+// (a palette that is full gives its first one)
+export function terrainColor(data: TerrainData, color: string) {
+    data.palette ??= [];
+    const found = data.palette.findIndex((each) => each.toLowerCase() === color.toLowerCase());
+    if (found >= 0) return found;
+    if (data.palette.length >= MAX_TERRAIN_COLORS) return 0;
+    data.palette.push(color);
+    return data.palette.length - 1;
 }
 
 // A flat piece: what a Terrain component shows while it names no asset, and what a new asset starts as
@@ -263,11 +280,12 @@ export function rayTerrain(data: TerrainData, origin: THREE.Vector3, direction: 
 // Problems of a terrain asset (terrains/<name>.json as it is on disk)
 // `known`: the names of the prefabs and of the biomes of the project, if they are known: its props and its
 // generator may name only those
-export function validateTerrain(data: unknown, known: { prefabs?: string[]; biomes?: string[] } = {}): string[] {
+export function validateTerrain(data: unknown, known: { prefabs?: string[]; biomes?: string[]; generators?: string[] } = {}): string[] {
     if (typeof data !== "object" || data === null || Array.isArray(data)) return ["must be an object: { \"cell\": 1, \"heights\": [[0, 0], [0, 0]] }"];
     const problems: string[] = [];
-    const { cell, heights, palette, colors, generator, scatter, biomes, biomeMap, ...rest } = data as Record<string, unknown>;
-    for (const key of Object.keys(rest)) problems.push(`unknown field "${key}" (known: cell, heights, palette, colors, generator, scatter, biomes, biomeMap)`);
+    const { cell, heights, palette, colors, generator, scatter, biomes, biomeMap, rivers, ...rest } = data as Record<string, unknown>;
+    for (const key of Object.keys(rest)) problems.push(`unknown field "${key}" (known: cell, heights, palette, colors, generator, scatter, biomes, biomeMap, rivers)`);
+    if (rivers !== undefined) problems.push(...validateRivers(rivers));
     if (scatter !== undefined) problems.push(...validateScatter(scatter, known.prefabs));
     if (generator !== undefined) problems.push(...validateGenerator(generator, known));
     if (typeof cell !== "number" || !(cell > 0)) problems.push("cell: must be a number of meters above zero");
@@ -344,7 +362,7 @@ export function validateTerrain(data: unknown, known: { prefabs?: string[]; biom
 export function parseTerrain(json: unknown): TerrainData {
     const problems = validateTerrain(json);
     if (problems.length > 0) throw new Error(problems[0]);
-    const { cell, heights, palette, colors, generator, scatter, biomes, biomeMap } = json as TerrainData;
+    const { cell, heights, palette, colors, generator, scatter, biomes, biomeMap, rivers } = json as TerrainData;
     return {
         cell,
         heights,
@@ -353,6 +371,7 @@ export function parseTerrain(json: unknown): TerrainData {
         ...(generator ? { generator } : {}),
         ...(scatter ? { scatter } : {}),
         ...(biomes && biomeMap ? { biomes, biomeMap } : {}),
+        ...(rivers?.length ? { rivers } : {}),
     };
 }
 
@@ -539,6 +558,62 @@ export function terrainGeometry(data: TerrainData, flat: boolean, textureSize: n
     geometry.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(uvs), 2));
     uvs = [];
     fillTerrainGeometry(geometry, data, flat);
+    return geometry;
+}
+
+// The ground with a height every `step` heights: what a far piece of a world is drawn with (see world.ts).
+// null if the grid cannot be cut so (its number of cells along a side is not a multiple of `step`).
+export function coarseTerrain(data: TerrainData, step: number): TerrainData | null {
+    const rows = data.heights.length;
+    const columns = data.heights[0].length;
+    if (step <= 1 || (rows - 1) % step !== 0 || (columns - 1) % step !== 0) return null;
+    const pick = <T>(grid: T[][]) => grid.filter((_, j) => j % step === 0).map((row) => row.filter((_, i) => i % step === 0));
+    return {
+        cell: data.cell * step,
+        heights: pick(data.heights),
+        ...(isPainted(data) ? { palette: data.palette, colors: pick(data.colors!) } : {}),
+    };
+}
+
+// A strip that hangs `depth` meters down from the edges of a ground: where a coarse piece meets a fine one,
+// their edges are not the same line, and the strip fills the gap between them
+export function terrainSkirt(data: TerrainData, depth: number): THREE.BufferGeometry {
+    const rows = data.heights.length;
+    const columns = data.heights[0].length;
+    const [width, length] = terrainSize(data);
+    const painted = isPainted(data);
+    const palette = painted ? data.palette!.map((color) => new THREE.Color(color)) : [];
+    const white = new THREE.Color(1, 1, 1);
+    const positions: number[] = [];
+    const colors: number[] = [];
+    const normals: number[] = [];
+    // The four edges, each as a row of grid places, with the way out of the ground there
+    const edges: [[number, number][], [number, number]][] = [
+        [Array.from({ length: columns }, (_, i) => [i, 0]), [0, -1]],
+        [Array.from({ length: columns }, (_, i) => [i, rows - 1]), [0, 1]],
+        [Array.from({ length: rows }, (_, j) => [0, j]), [-1, 0]],
+        [Array.from({ length: rows }, (_, j) => [columns - 1, j]), [1, 0]],
+    ];
+    for (const [places, [nx, nz]] of edges) {
+        for (let n = 0; n < places.length - 1; n++) {
+            const corners = [places[n], places[n + 1]].map(([i, j]) => ({ x: i * data.cell - width / 2, z: j * data.cell - length / 2, y: data.heights[j][i], color: painted ? palette[data.colors![j][i]] ?? white : white }));
+            const [a, b] = corners;
+            // Two triangles, seen from both sides (the material draws one side)
+            const quad = [[a, a.y], [b, b.y], [b, b.y - depth], [a, a.y], [b, b.y - depth], [a, a.y - depth]] as const;
+            for (const order of [quad, [...quad].reverse()]) {
+                for (const [corner, y] of order) {
+                    positions.push(corner.x, y, corner.z);
+                    colors.push(corner.color.r, corner.color.g, corner.color.b);
+                    normals.push(nx, 0, nz);
+                }
+            }
+        }
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+    geometry.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
+    geometry.setAttribute("uv", new THREE.Float32BufferAttribute(new Array((positions.length / 3) * 2).fill(0), 2));
     return geometry;
 }
 

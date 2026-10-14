@@ -1,0 +1,43 @@
+{
+  "base": 7,
+  "height": 26,
+  "size": 85,
+  "detail": 0.2,
+  "shape": "terraces",
+  "shapeParams": {
+    "step": 5,
+    "slope": 0.3
+  },
+  "ground": "#c98a4b",
+  "rock": "#9a5b34",
+  "rockSlope": 0.7,
+  "lowBelow": -1000,
+  "air": true,
+  "fogColor": "#e6c9a0",
+  "fogNear": 30,
+  "fogFar": 260,
+  "ambientColor": "#fff0d8",
+  "ambientIntensity": 0.6,
+  "props": [
+    {
+      "prefab": "Rock",
+      "spacing": 11,
+      "cover": 0.45,
+      "maxSlope": 0.5,
+      "sizeMin": 0.7,
+      "sizeMax": 1.8
+    },
+    {
+      "prefab": "DeadTree",
+      "spacing": 22,
+      "cover": 0.35,
+      "maxSlope": 0.3
+    },
+    {
+      "prefab": "Bush",
+      "spacing": 13,
+      "cover": 0.3,
+      "maxSlope": 0.3
+    }
+  ]
+}

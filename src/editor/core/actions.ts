@@ -1,12 +1,14 @@
+import * as THREE from "three";
 import {
-    applyToPrefab, cloneTerrain, DEFAULT_PALETTE, defaultBiome, flatTerrain, generateByMap, validateBiome, generateTerrain, generatorOf, FONT_FILE, isPainted, MODEL_FILE, parsePrefab, parseScene, parseTerrain, resizeTerrain, validateTerrain, renameLayerIn, resolveLook, SHARED_PROJECT, SOUND_FILE, validateLook, validateMaterial, validatePrefab, validateScene, validateScripts
+    applyRivers, applyToPrefab, cloneTerrain, fillTerrainGeometry, riverRegion, updateRivers, updateScatter, DEFAULT_PALETTE, defaultBiome, flatTerrain, generateByMap, validateBiome, generateTerrain, generatorOf, FONT_FILE, isPainted, MODEL_FILE, parsePrefab, parseScene, parseTerrain, resizeTerrain, validateTerrain, renameLayerIn, resolveLook, SHARED_PROJECT, SOUND_FILE, validateLook, validateMaterial, validatePrefab, validateScene, validateScripts,
+    continuedPiece, MAX_PIECE, meetEdges, PIECE_SIDES, pieceName, pieceOffset, pieceSize, worldNames, worldPieces
 } from "../../engine";
-import type { BiomeData, LookData, TerrainData, MaterialData, ProjectSettings, SceneData } from "../../engine";
+import type { BiomeData, LookData, RiverData, RiverPoint, TerrainData, TerrainMarker, MaterialData, ProjectSettings, SceneData } from "../../engine";
 import { renameInEntities, renameInScene } from "./references";
 import { changeFolder, moveToFolder, parseFolders, removeFolderTree, renameFolderTree, renameInFolders } from "./folders";
 import type { Folders, FolderSection } from "./folders";
 import type { AssetSection } from "./project";
-import { sceneStore } from "./SceneStore";
+import { getComponent, sceneStore } from "./SceneStore";
 import {
     buildGame as build,
     createProject,
@@ -259,7 +261,7 @@ export async function validateProject() {
     };
     for (const problem of validateScripts(registry)) problems.push(`scripts: ${problem}`);
     await each("materials", (_, data) => validateMaterial(data, registry));
-    await each("terrains", (_, data) => validateTerrain(data, { prefabs: registry.prefabNames(), biomes: registry.biomeNames() }));
+    await each("terrains", (_, data) => validateTerrain(data, { prefabs: registry.prefabNames(), biomes: registry.biomeNames(), generators: registry.assetNames("generator") }));
     await each("biomes", (_, data) => validateBiome(data, { prefabs: registry.prefabNames() }));
     await each("looks", (name, data) => validateLook(name, data as LookData, registry));
     await each("prefabs", (name, data) => validatePrefab(name, parsePrefab(data), registry));
@@ -1046,6 +1048,41 @@ export function strokeTerrain(name: string, before: TerrainData, data: TerrainDa
     writeTerrainSoon(name, data);
 }
 
+// Changes the rivers of a terrain and cuts their beds into its ground: one step of undo. `change` works on
+// a list of rivers that is its own (and gets the ground as it is, to read heights from). The meshes of the
+// scene are written in place, as a brush writes them. A bed that a river has left stays in the ground.
+export function editRivers(name: string, change: (rivers: RiverData[], data: TerrainData) => void) {
+    const { registry } = sceneStore;
+    const before = registry.getTerrain(name);
+    if (!before) return;
+    // The rows of the ground are shared with what it was until the rivers reach them
+    const data: TerrainData = {
+        ...before,
+        heights: [...before.heights],
+        ...(before.colors ? { colors: [...before.colors] } : {}),
+        ...(before.palette ? { palette: [...before.palette] } : {}),
+        rivers: (before.rivers ?? []).map((river) => ({ ...river, points: river.points.map((point) => [...point] as RiverPoint) })),
+    };
+    change(data.rivers!, data);
+    data.rivers = data.rivers!.filter((river) => river.points.length > 0);
+    if (data.rivers.length === 0) delete data.rivers;
+    const reach = riverRegion(data);
+    for (let j = reach?.fromJ ?? 0; reach && j <= reach.toJ; j++) {
+        data.heights[j] = [...data.heights[j]];
+        if (data.colors) data.colors[j] = [...data.colors[j]];
+    }
+    const region = applyRivers(data);
+    for (const mesh of sceneStore.terrainMeshes(name)) {
+        const marker = mesh.userData.terrain as TerrainMarker;
+        marker.data = data;
+        if (region) fillTerrainGeometry(mesh.geometry, data, marker.flat, region);
+        updateScatter(mesh, registry, data);
+        updateRivers(mesh, data);
+    }
+    strokeTerrain(name, before, data);
+    sceneStore.changed();
+}
+
 // Another ground under the same name (resized, another palette): the meshes are built again
 export function updateTerrain(name: string, data: TerrainData, merge = true) {
     const { registry } = sceneStore;
@@ -1182,7 +1219,10 @@ async function renameGroundNow(kind: "terrain" | "biome", from: string, to: stri
         }
         sceneStore.setRegistry(registry);
         sceneStore.selectAsset({ kind, name: to });
-        sceneStore.update({ status: `Renamed ${section}/${from} to ${to}${files > 0 ? `; ${files} file(s) that use it updated` : ""}` });
+        const status = `Renamed ${section}/${from} to ${to}${files > 0 ? `; ${files} file(s) that use it updated` : ""}`;
+        // It stays in its folder of the Project panel, if it is in one
+        if (Object.values(sceneStore.folders[section] ?? {}).some((names) => names.includes(from))) await saveFolders(renameInFolders(sceneStore.folders, section, from, to), status);
+        else sceneStore.update({ status });
     } catch (e) {
         report(e);
     }
@@ -1225,7 +1265,7 @@ export function updateBiome(name: string, data: BiomeData) {
 
 // Changes the settings the terrain is generated with (they are kept in its file). The ground itself stays
 // as it is until it is generated again.
-export function setTerrainGenerator(name: string, change: Record<string, number | boolean | string>) {
+export function setTerrainGenerator(name: string, change: Record<string, number | boolean | string | Record<string, unknown>>) {
     const { registry } = sceneStore;
     const before = registry.getTerrain(name);
     if (!before) return;
@@ -1243,22 +1283,177 @@ export function setTerrainGenerator(name: string, change: Record<string, number 
 // A ground that remembers where its biomes lie is made by that map: every part by its own biome, and what
 // no biome has made stays. `fill`: all of it becomes the biome the terrain names now, whatever lay there.
 export function generateTerrainAsset(name: string, at: { x: number; z: number } = { x: 0, z: 0 }, fill = false) {
+    const data = generatedGround(name, at, fill);
+    if (!data) return;
+    updateTerrain(name, data, false);
+    sceneStore.update({ status: `Generated terrains/${name}.json (seed ${generatorOf(data).seed})` });
+}
+
+// The ground of a terrain made anew by its settings (see generateTerrainAsset); null if there is no such terrain
+function generatedGround(name: string, at: { x: number; z: number }, fill = false) {
     const { registry } = sceneStore;
     const before = registry.getTerrain(name);
-    if (!before) return;
+    if (!before) return null;
     const data = cloneTerrain(before);
     const settings = generatorOf(data);
     if (fill) {
         delete data.biomes;
         delete data.biomeMap;
     }
-    if (!generateByMap(data, settings, at, (biome) => registry.getBiome(biome))) generateTerrain(data, settings, at, undefined, registry.getBiome(settings.biome));
+    const shapes = (shape: string) => registry.getGenerator(shape);
+    if (!generateByMap(data, settings, at, (biome) => registry.getBiome(biome), shapes)) generateTerrain(data, settings, at, undefined, registry.getBiome(settings.biome), shapes);
     // Centimeters are enough, and keep the file readable
     for (const row of data.heights) {
         for (let i = 0; i < row.length; i++) row[i] = Math.round(row[i] * 100) / 100;
     }
-    updateTerrain(name, data, false);
-    sceneStore.update({ status: `Generated terrains/${name}.json (seed ${generatorOf(data).seed})` });
+    return data;
+}
+
+// Puts several terrains back as they were (or forward again) at once: the files, the registry, the scene
+function setTerrains(list: { name: string; data: TerrainData }[]) {
+    const { project, registry } = sceneStore;
+    for (const { name, data } of list) {
+        clearTimeout(pendingWrites.get(`terrains/${name}`));
+        pendingWrites.delete(`terrains/${name}`);
+        writeAsset(project, "terrains", name, data).catch(report);
+        registry.setTerrain(name, data);
+    }
+    sceneStore.setRegistry(registry);
+}
+
+// A change of several pieces of a world at once (a brush stroke over their border, Generate of a world): one
+// step of undo. The meshes of the scene show the new grounds already, or are made anew (`rebuild`).
+export function changePieces(changes: { name: string; before: TerrainData; after: TerrainData }[], what: string, rebuild = false) {
+    if (changes.length === 0) return;
+    if (changes.length === 1 && !rebuild) {
+        strokeTerrain(changes[0].name, changes[0].before, changes[0].after);
+        return;
+    }
+    const { registry } = sceneStore;
+    for (const { name, after } of changes) {
+        registry.setTerrain(name, after);
+        writeTerrainSoon(name, after);
+    }
+    if (rebuild || sceneStore.playing) sceneStore.setRegistry(registry);
+    sceneStore.recordAction(
+        what,
+        () => setTerrains(changes.map(({ name, before }) => ({ name, data: before }))),
+        () => setTerrains(changes.map(({ name, after }) => ({ name, data: after }))),
+    );
+}
+
+// The pieces of the world of a World component, with where the middle of each is in the world
+function piecesOf(entityId: string) {
+    const entity = sceneStore.findEntity(entityId);
+    const world = entity && ((getComponent(entity, "world")?.world as string | undefined) ?? "");
+    const object = sceneStore.objectOf(entityId);
+    if (!entity || !world || !object) return null;
+    const pieces = worldPieces(sceneStore.registry.terrainNames(), world);
+    const size = pieceSize(sceneStore.registry, pieces);
+    const origin = object.getWorldPosition(new THREE.Vector3());
+    return { world, size, pieces: pieces.map((piece) => ({ ...piece, at: pieceOffset(piece.i, piece.j, size).add(origin) })) };
+}
+
+// The first piece of the world of a World component: level ground `size` meters across, a height every meter,
+// painted with the first color of the usual palette. The component gets a name for its world if it had none.
+export async function createWorldPiece(entityId: string, size = 250) {
+    const entity = sceneStore.findEntity(entityId);
+    const component = entity && getComponent(entity, "world");
+    if (!entity || !component || blockedByPlay()) return;
+    const { project, registry } = sceneStore;
+    const names = registry.terrainNames();
+    const world = (component.world as string | undefined) || freeName("World", worldNames(names));
+    const name = pieceName(world, 0, 0);
+    if (registry.getTerrain(name)) return;
+    try {
+        const flat = flatTerrain(Math.min(MAX_PIECE, size), 1);
+        const data: TerrainData = { ...flat, palette: [...DEFAULT_PALETTE], colors: flat.heights.map((row) => row.map(() => 0)) };
+        await writeAsset(project, "terrains", name, data);
+        registry.setTerrain(name, data);
+        sceneStore.recordAsset("terrains", name, null, data, false);
+        if (component.world !== world) sceneStore.setComponentField(entityId, "world", "world", world);
+        sceneStore.setPieceTarget(name);
+        sceneStore.changed();
+        sceneStore.update({ status: `Created terrains/${name}.json` });
+    } catch (e) {
+        report(e);
+    }
+}
+
+// One more piece of a world, beside the pieces that are there (i, j: its place in the grid). Its heights go on
+// from the edges of its neighbors; the palette and the settings of Generate are those of a neighbor.
+export async function createPiece(entityId: string, i: number, j: number) {
+    const found = piecesOf(entityId);
+    if (!found || blockedByPlay()) return;
+    const { project, registry } = sceneStore;
+    const name = pieceName(found.world, i, j);
+    if (registry.getTerrain(name)) return;
+    const neighbors = new Map<string, TerrainData>();
+    for (const [di, dj] of PIECE_SIDES) {
+        const next = registry.getTerrain(pieceName(found.world, i + di, j + dj));
+        if (next) neighbors.set(`${di},${dj}`, next);
+    }
+    const like = neighbors.values().next().value ?? registry.getTerrain(found.pieces[0]?.name ?? "");
+    if (!like) return;
+    try {
+        const data = continuedPiece(like, neighbors);
+        await writeAsset(project, "terrains", name, data);
+        registry.setTerrain(name, data);
+        sceneStore.recordAsset("terrains", name, null, data, false);
+        sceneStore.setPieceTarget(name);
+        sceneStore.changed();
+        sceneStore.update({ status: `Created terrains/${name}.json` });
+    } catch (e) {
+        report(e);
+    }
+}
+
+// Makes the pieces of a world anew, each by its own settings (as Generate does for one terrain): all of them,
+// or only those named in `only` (`fill` as in generateTerrainAsset). Then the edges of the pieces made meet
+// their neighbors (a neighbor that was not made anew changes only at that edge). One step of undo.
+export function generateWorld(entityId: string, only?: string[], fill = false) {
+    const found = piecesOf(entityId);
+    if (!found || blockedByPlay()) return;
+    const { registry } = sceneStore;
+    const made = new Map<string, TerrainData>();
+    for (const piece of found.pieces) {
+        if (only && !only.includes(piece.name)) continue;
+        const data = generatedGround(piece.name, piece.at, fill);
+        if (data) made.set(piece.name, data);
+    }
+    // A neighbor that was not made anew gets a copy whose rows are copied when the edge writes them
+    const fresh = new Set(made.values());
+    const copied = new Map<string, TerrainData>();
+    const owned = new Map<TerrainData, Set<number>>();
+    const own = (data: TerrainData, j: number) => {
+        if (fresh.has(data)) return data.heights[j];
+        const rows = owned.get(data) ?? new Set<number>();
+        owned.set(data, rows);
+        if (!rows.has(j)) {
+            rows.add(j);
+            data.heights[j] = [...data.heights[j]];
+        }
+        return data.heights[j];
+    };
+    const ground = (name: string) => {
+        const mine = made.get(name) ?? copied.get(name);
+        if (mine) return mine;
+        const original = registry.getTerrain(name)!;
+        const copy = { ...original, heights: [...original.heights] };
+        copied.set(name, copy);
+        return copy;
+    };
+    for (const piece of found.pieces) {
+        if (!made.has(piece.name)) continue;
+        for (const [di, dj] of PIECE_SIDES) {
+            const next = pieceName(found.world, piece.i + di, piece.j + dj);
+            if (registry.getTerrain(next)) meetEdges(made.get(piece.name)!, ground(next), di, dj, own);
+        }
+    }
+    const touched = [...copied].filter(([, data]) => owned.get(data)?.size);
+    const changes = [...made, ...touched].map(([name, after]) => ({ name, before: registry.getTerrain(name)!, after }));
+    changePieces(changes, `Generate ${only ? only.join(", ") : found.world}`, true);
+    sceneStore.update({ status: `Generated ${made.size} piece(s) of the world ${found.world}` });
 }
 
 // Changes the palette of a terrain: a color of it, one more at its end, or its last one removed (what was

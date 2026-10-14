@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { defineBehavior } from "white-engine";
 
 // A character seen through its own eyes: the mouse looks around, W A S D walk where it looks, Space jumps.
+// With `swim` it stays afloat in deep water.
 // The object needs a solid Collider; its camera is a child object, named in `head`, that nods up and down
 // while the object itself turns left and right.
 export const firstPerson = defineBehavior({
@@ -17,6 +18,9 @@ export const firstPerson = defineBehavior({
         step: { type: "number", default: 0.4, min: 0, step: 0.05 },
         // Degrees per pixel the mouse moves
         sensitivity: { type: "number", default: 0.15, min: 0.01, step: 0.01 },
+        // In water deeper than this (meters over the middle of the object) it swims instead of walking the
+        // bottom; 0 never swims
+        swim: { type: "number", default: 0, min: 0, step: 0.05 },
     },
     start: (self) => {
         self.input.lockPointer();
@@ -36,14 +40,16 @@ export const firstPerson = defineBehavior({
         const ahead = input.axis("KeyS", "KeyW") + stick.y;
         const length = Math.hypot(side, ahead);
         if (length > 0) {
-            const pace = ((input.key("ShiftLeft") ? params.run : params.speed) * dt) / Math.max(1, length);
+            // Wading and swimming are slower than walking
+            const wet = self.submerged() > 0 ? 0.6 : 1;
+            const pace = ((input.key("ShiftLeft") ? params.run : params.speed) * wet * dt) / Math.max(1, length);
             // Ahead is where the object looks: its own -Z, turned by its angle around the vertical
             const sin = Math.sin(object.rotation.y);
             const cos = Math.cos(object.rotation.y);
             self.move((side * cos - ahead * sin) * pace, 0, (-side * sin - ahead * cos) * pace, params.step);
         }
         if (params.jump > 0 && (input.keyPressed("Space") || input.keyPressed("Pad0")) && self.grounded()) self.jump(params.jump);
-        self.fall(dt);
+        if (!(params.swim > 0 && self.swim(dt, params.swim))) self.fall(dt);
     },
     destroy: (self) => self.input.unlockPointer(),
 });

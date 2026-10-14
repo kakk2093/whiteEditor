@@ -1,5 +1,8 @@
-import type { ParamDef } from "./Registry";
-import { brushRegion, DEFAULT_PALETTE, forgetTerrainRange, isPainted, MAX_TERRAIN_COLORS, terrainSize } from "./terrain";
+import { paramDefaults } from "./Registry";
+import type { ParamDef, ParamType } from "./Registry";
+import type { Params } from "./types";
+import { applyRivers } from "./river";
+import { brushRegion, DEFAULT_PALETTE, forgetTerrainRange, isPainted, terrainColor, terrainSize } from "./terrain";
 import type { ScatterItem, TerrainData, TerrainRegion } from "./terrain";
 
 // Making the ground of a terrain by rule instead of by hand: hills out of noise, painted the way they lie,
@@ -16,12 +19,58 @@ import type { ScatterItem, TerrainData, TerrainRegion } from "./terrain";
 // be made again as a whole: every part by its own biome, the land of one going over into the land of the
 // next. Ground that no biome has made (shaped by hand, or by the plain hills) is left as it is.
 
+// A shape of land made by code: a function that gives the height of every place of the world. A terrain (in
+// its `generator`) or a biome names one in its "shape" field and sets its params in "shapeParams"; without
+// one the land is the usual hills. Defined with defineGenerator() in a file of scripts/.
+export interface GeneratorDef {
+    kind: "generator";
+    name: string;
+    label?: string;
+    params?: Record<string, ParamDef>;
+    // Meters above the `base` of the land. It has to give the same height for the same place every time:
+    // the land is made piece by piece, and neighbor terrains have to meet.
+    height: (at: GeneratorPlace) => number;
+}
+
+export interface GeneratorPlace<V = Params> {
+    // The place in the world, meters
+    x: number;
+    z: number;
+    seed: number;
+    params: V;
+    // What the usual hills of the terrain or the biome give here (by its height, size and detail), meters
+    hills: number;
+    // Smooth noise from 0 to 1 that depends on the seed (and on `shift`: another number, another noise)
+    noise: (x: number, z: number, octaves?: number, shift?: number) => number;
+}
+
+// export const terraces = defineGenerator({ name: "terraces", params: { step: { type: "number", default: 3 } },
+//     height: ({ hills, params }) => Math.round(hills / params.step) * params.step })
+export function defineGenerator<P extends Record<string, ParamDef> = Record<string, never>>(def: {
+    name: string;
+    label?: string;
+    params?: P;
+    height: (at: GeneratorPlace<{ [K in keyof P]: ParamType<P[K]> }>) => number;
+}): GeneratorDef {
+    return { kind: "generator", ...def } as GeneratorDef;
+}
+
+export function isGeneratorDef(value: unknown): value is GeneratorDef {
+    return typeof value === "object" && value !== null && (value as GeneratorDef).kind === "generator";
+}
+
+// Gives the shape of a name, if the project has it
+export type Shapes = (name: string) => GeneratorDef | undefined;
+
 // The fields of `generator` in a terrain file; the Inspector and the checks are made from them
 export const generatorFields = {
     // Another number, another land
     seed: { type: "number", default: 1, min: 0, max: 999999, step: 1 },
     // The kind of land (biomes/<name>.json): its shape, paint and props; none is plain hills by the fields below
     biome: { type: "asset", kind: "biome", default: "" },
+    // The shape of the land made by code (defineGenerator in scripts/); none is the usual hills. Its params
+    // are in "shapeParams"
+    shape: { type: "asset", kind: "generator", default: "", when: { biome: [""] } },
     // Meters from the hollows to the tops of the hills, about
     height: { type: "number", default: 12, min: 0, step: 1, when: { biome: [""] } },
     // Meters across a hill
@@ -35,11 +84,16 @@ export const generatorFields = {
     // Sand below this height and snow above this one, meters from the entity
     sandBelow: { type: "number", default: -3, step: 0.5, when: { biome: [""], paint: [true] } },
     snowAbove: { type: "number", default: 100, step: 0.5, when: { biome: [""], paint: [true] } },
+    // Meters over which the land of one biome goes over into the land of its neighbor, on a ground that has
+    // a map of biomes
+    blend: { type: "number", default: 24, min: 0, step: 2 },
 } satisfies Record<string, ParamDef>;
 
 export interface GeneratorSettings {
     seed: number;
     biome: string;
+    shape: string;
+    shapeParams?: Params;
     height: number;
     size: number;
     detail: number;
@@ -47,6 +101,7 @@ export interface GeneratorSettings {
     rock: number;
     sandBelow: number;
     snowAbove: number;
+    blend: number;
 }
 
 export const defaultGenerator = Object.fromEntries(Object.entries(generatorFields).map(([key, def]) => [key, def.default])) as unknown as GeneratorSettings;
@@ -60,6 +115,9 @@ export function generatorOf(data: TerrainData): GeneratorSettings {
 export const biomeFields = {
     // How high the land lies as a whole, meters: a swamp below zero, a plateau above
     base: { type: "number", default: 0, step: 1 },
+    // The shape of the land made by code (defineGenerator in scripts/); none is the usual hills. Its params
+    // are in "shapeParams"
+    shape: { type: "asset", kind: "generator", default: "" },
     // Meters from the hollows to the tops of the hills, about
     height: { type: "number", default: 12, min: 0, step: 1 },
     // Meters across a hill
@@ -77,6 +135,21 @@ export const biomeFields = {
     // ...and above this one (snow)
     high: { type: "color", default: "#eef2f5" },
     highAbove: { type: "number", default: 100, step: 0.5 },
+    // The land has an air of its own (see biomeAir.ts): while the camera is over it, the scene has this fog
+    // and this light, and the look named here (none keeps the look of the scene)
+    air: { type: "boolean", default: false },
+    fogColor: { type: "color", default: "#b8c4cc", when: { air: [true] } },
+    fogNear: { type: "number", default: 10, min: 0, step: 1, when: { air: [true] } },
+    fogFar: { type: "number", default: 120, min: 0, step: 5, when: { air: [true] } },
+    ambientColor: { type: "color", default: "#ffffff", when: { air: [true] } },
+    ambientIntensity: { type: "number", default: 0.6, min: 0, step: 0.05, when: { air: [true] } },
+    look: { type: "asset", kind: "look", default: "", when: { air: [true] } },
+    // ...and its own colors of the sky, in a scene that has a sky: from straight up down to the horizon and
+    // below it. The sky of the scene keeps its kind (its three colors, or the code that draws it with them)
+    sky: { type: "boolean", default: false, when: { air: [true] } },
+    skyTop: { type: "color", default: "#7f93a8", when: { air: [true], sky: [true] } },
+    skyHorizon: { type: "color", default: "#b8c4cc", when: { air: [true], sky: [true] } },
+    skyGround: { type: "color", default: "#6b6156", when: { air: [true], sky: [true] } },
 } satisfies Record<string, ParamDef>;
 
 // The fields of one kind of props of a biome
@@ -110,6 +183,8 @@ export interface BiomeProp {
 // A biome asset as it is in its file: any field may be missing
 export interface BiomeData {
     base?: number;
+    shape?: string;
+    shapeParams?: Params;
     height?: number;
     size?: number;
     detail?: number;
@@ -120,12 +195,23 @@ export interface BiomeData {
     lowBelow?: number;
     high?: string;
     highAbove?: number;
+    air?: boolean;
+    fogColor?: string;
+    fogNear?: number;
+    fogFar?: number;
+    ambientColor?: string;
+    ambientIntensity?: number;
+    look?: string;
+    sky?: boolean;
+    skyTop?: string;
+    skyHorizon?: string;
+    skyGround?: string;
     props?: Partial<BiomeProp>[];
 }
 
 const defaultsOf = (defs: Record<string, ParamDef>) => Object.fromEntries(Object.entries(defs).map(([key, def]) => [key, def.default]));
 
-export const defaultBiome = defaultsOf(biomeFields) as unknown as Required<Omit<BiomeData, "props">>;
+export const defaultBiome = defaultsOf(biomeFields) as unknown as Required<Omit<BiomeData, "props" | "shapeParams">>;
 
 export const defaultBiomeProp = defaultsOf(biomePropFields) as unknown as BiomeProp;
 
@@ -176,6 +262,18 @@ interface Relief {
     size: number;
     detail: number;
     base?: number;
+    // The height a shape made by code gives over the base, for the hills the fields above give there
+    shaped?: (x: number, z: number, hills: number) => number;
+}
+
+// The shape of a land: of a biome, or of the settings of a terrain without one
+function reliefOf(seed: number, from: { height: number; size: number; detail: number; base?: number; shape?: string; shapeParams?: Params }, shapes?: Shapes): Relief {
+    const def = from.shape ? shapes?.(from.shape) : undefined;
+    const relief: Relief = { seed, height: from.height, size: from.size, detail: from.detail, base: from.base ?? 0 };
+    if (!def) return relief;
+    const params = { ...paramDefaults(def.params ?? {}), ...from.shapeParams };
+    const noise = (x: number, z: number, octaves = 4, shift = 0) => noise2D(x, z, seed + 200 + shift, octaves);
+    return { ...relief, shaped: (x, z, hills) => def.height({ x, z, seed, params, hills, noise }) };
 }
 
 // The height the settings give at a place of the world, meters
@@ -183,18 +281,8 @@ export function generatedHeight(settings: Relief, x: number, z: number) {
     // The noise keeps to the middle of its range: stretched so that the hills are about as high as asked
     const hills = (noise2D(x / settings.size, z / settings.size, settings.seed, 4) - 0.5) * 1.7 * settings.height;
     const bumps = settings.detail > 0 ? (noise2D(x / (settings.size / 8) + 100, z / (settings.size / 8) + 100, settings.seed + 50, 2) - 0.5) * 2 * settings.detail : 0;
+    if (settings.shaped) return (settings.base ?? 0) + settings.shaped(x, z, hills + bumps);
     return (settings.base ?? 0) + hills + bumps;
-}
-
-// The place of a color in the palette of a terrain; a color it does not have yet is added at its end
-// (a palette that is full gives its first one)
-function colorOf(data: TerrainData, color: string) {
-    data.palette ??= [];
-    const found = data.palette.findIndex((each) => each.toLowerCase() === color.toLowerCase());
-    if (found >= 0) return found;
-    if (data.palette.length >= MAX_TERRAIN_COLORS) return 0;
-    data.palette.push(color);
-    return data.palette.length - 1;
 }
 
 // The props a biome gives a piece of land: for every kind, a place in every square of a grid of the world
@@ -249,6 +337,7 @@ export function generateTerrain(
     offset: { x: number; z: number },
     area?: { x: number; z: number; radius: number; amount: number },
     biome?: BiomeData,
+    shapes?: Shapes,
 ): TerrainRegion | null {
     const rows = data.heights.length;
     const columns = data.heights[0].length;
@@ -256,7 +345,7 @@ export function generateTerrain(
     const region: TerrainRegion | null = area ? brushRegion(data, area.x, area.z, area.radius) : { fromI: 0, toI: columns - 1, fromJ: 0, toJ: rows - 1 };
     if (!region) return null;
     const land = biome ? { ...defaultBiome, ...biome } : null;
-    const relief: Relief = land ? { seed: settings.seed, height: land.height, size: land.size, detail: land.detail, base: land.base } : settings;
+    const relief = reliefOf(settings.seed, land ?? settings, shapes);
     const paint = land ? true : settings.paint;
     if (paint && !isPainted(data)) {
         data.palette = data.palette?.length ? data.palette : [...DEFAULT_PALETTE];
@@ -275,7 +364,7 @@ export function generateTerrain(
         data.biomeMap ??= data.heights.map((row) => row.map(() => -1));
     }
     const colors = land
-        ? { ground: colorOf(data, land.ground), rock: colorOf(data, land.rock), low: colorOf(data, land.low), high: colorOf(data, land.high) }
+        ? { ground: terrainColor(data, land.ground), rock: terrainColor(data, land.rock), low: terrainColor(data, land.low), high: terrainColor(data, land.high) }
         : { ground: kind(GRASS), rock: kind(ROCK), low: kind(SAND), high: kind(SNOW) };
     const limits = land ? { rock: land.rockSlope, low: land.lowBelow, high: land.highAbove } : { rock: settings.rock, low: settings.sandBelow, high: settings.snowAbove };
 
@@ -338,11 +427,11 @@ export function generateTerrain(
         if (scatter.length > 0) data.scatter = scatter;
         else delete data.scatter;
     }
+    // The rivers keep their beds whatever is made around them
+    applyRivers(data, region);
     return region;
 }
 
-// Meters over which the land of one biome goes over into the land of its neighbor
-const BIOME_BLEND = 24;
 
 // The average over a square of `reach` heights each way of a number every height has (the part of the
 // square that is off the ground counts as nothing)
@@ -371,12 +460,12 @@ function blurred(rows: number, columns: number, reach: number, value: (i: number
 }
 
 // Makes the whole ground of `data` again by the map of its biomes, in place: every part by the biome that
-// was laid there, with the land of neighbor biomes blended across `BIOME_BLEND` meters; painted and planted
+// was laid there, with the land of neighbor biomes blended across `settings.blend` meters; painted and planted
 // by the biome of each place. Ground that has no biome keeps its heights, its paint and its props; the land
 // of a biome next to it comes down (or up) to it over the same distance. `biomeOf` gives the biome of a
 // name, if the project has it. Making the same ground twice gives the same ground.
 // Returns false, with nothing done, if the ground has no map.
-export function generateByMap(data: TerrainData, settings: GeneratorSettings, offset: { x: number; z: number }, biomeOf: (name: string) => BiomeData | undefined) {
+export function generateByMap(data: TerrainData, settings: GeneratorSettings, offset: { x: number; z: number }, biomeOf: (name: string) => BiomeData | undefined, shapes?: Shapes) {
     const map = data.biomeMap;
     const names = data.biomes;
     if (!map || !names) return false;
@@ -386,9 +475,23 @@ export function generateByMap(data: TerrainData, settings: GeneratorSettings, of
     const [width, depth] = terrainSize(data);
     const given = names.map((name) => biomeOf(name));
     const lands = given.map((biome) => (biome ? { ...defaultBiome, ...biome } : null));
-    const reliefs = lands.map((land): Relief | null => (land ? { seed: settings.seed, height: land.height, size: land.size, detail: land.detail, base: land.base } : null));
+    const reliefs = lands.map((land): Relief | null => (land ? reliefOf(settings.seed, land, shapes) : null));
     const used = new Set(map.flat());
-    const reach = Math.max(1, Math.round(BIOME_BLEND / 2 / cell));
+    const reach = Math.max(1, Math.round(settings.blend / 2 / cell));
+    // The paint and the props do not change along the line of the map: near it a place takes the biome of
+    // a place a few meters aside, by noise, so the two lands run into each other in tongues and patches.
+    // Ground that is free stays free, and nothing of a biome gets onto it.
+    const ragged = Math.min(6, settings.blend / 5);
+    const mixed = (i: number, j: number) => {
+        const own = map[j][i];
+        if (ragged <= 0 || !lands[own]) return own;
+        const x = offset.x + (i - (columns - 1) / 2) * cell;
+        const z = offset.z + (j - (rows - 1) / 2) * cell;
+        const mi = Math.round(i + ((noise2D(x / 9, z / 9, settings.seed + 71, 2) - 0.5) * 4 * ragged) / cell);
+        const mj = Math.round(j + ((noise2D(x / 9 + 40, z / 9 - 40, settings.seed + 72, 2) - 0.5) * 4 * ragged) / cell);
+        const other = map[Math.min(rows - 1, Math.max(0, mj))][Math.min(columns - 1, Math.max(0, mi))];
+        return lands[other] ? other : own;
+    };
     // How much of every biome there is around every height
     const weights = lands.map((land, k) => (land && used.has(k) ? blurred(rows, columns, reach, (i, j) => (map[j][i] === k ? 1 : 0)) : null));
     // ...and of the ground no biome has made (or whose biome is gone), with the height it has there. That
@@ -456,12 +559,13 @@ export function generateByMap(data: TerrainData, settings: GeneratorSettings, of
         data.palette = data.palette?.length ? data.palette : [...DEFAULT_PALETTE];
         data.colors = data.heights.map((row) => row.map(() => 0));
     }
-    const colors = lands.map((land) => (land ? { ground: colorOf(data, land.ground), rock: colorOf(data, land.rock), low: colorOf(data, land.low), high: colorOf(data, land.high) } : null));
+    const colors = lands.map((land) => (land ? { ground: terrainColor(data, land.ground), rock: terrainColor(data, land.rock), low: terrainColor(data, land.low), high: terrainColor(data, land.high) } : null));
     const heightAt = (i: number, j: number) => data.heights[Math.min(rows - 1, Math.max(0, j))][Math.min(columns - 1, Math.max(0, i))];
     for (let j = 0; j < rows; j++) {
         for (let i = 0; i < columns; i++) {
-            const land = lands[map[j][i]];
-            const color = colors[map[j][i]];
+            const k = mixed(i, j);
+            const land = lands[k];
+            const color = colors[k];
             if (!land || !color || !data.colors) continue;
             const height = data.heights[j][i];
             const steep = Math.hypot(heightAt(i + 1, j) - heightAt(i - 1, j), heightAt(i, j + 1) - heightAt(i, j - 1)) / (2 * cell);
@@ -475,11 +579,12 @@ export function generateByMap(data: TerrainData, settings: GeneratorSettings, of
         const j = Math.min(rows - 1, Math.max(0, Math.round(z / cell + (rows - 1) / 2)));
         return map[j][i];
     };
+    const mixedAt = (x: number, z: number) => mixed(Math.min(columns - 1, Math.max(0, Math.round(x / cell + (columns - 1) / 2))), Math.min(rows - 1, Math.max(0, Math.round(z / cell + (rows - 1) / 2))));
     const kept = (data.scatter ?? []).map((layer) => ({ prefab: layer.prefab, items: layer.items.filter((item) => !lands[landAt(item[0], item[1])]) }));
     const bounds = { minX: -width / 2, maxX: width / 2, minZ: -depth / 2, maxZ: depth / 2 };
     given.forEach((biome, k) => {
         if (!biome || !reliefs[k] || !used.has(k)) return;
-        for (const [prefab, items] of biomeProps(biome, reliefs[k], offset, bounds, (x, z) => landAt(x, z) === k)) {
+        for (const [prefab, items] of biomeProps(biome, reliefs[k], offset, bounds, (x, z) => mixedAt(x, z) === k)) {
             const layer = kept.find((each) => each.prefab === prefab);
             if (layer) layer.items.push(...items);
             else kept.push({ prefab, items });
@@ -488,6 +593,7 @@ export function generateByMap(data: TerrainData, settings: GeneratorSettings, of
     const scatter = kept.filter((layer) => layer.items.length > 0);
     if (scatter.length > 0) data.scatter = scatter;
     else delete data.scatter;
+    applyRivers(data);
     return true;
 }
 
@@ -503,7 +609,41 @@ export function biomeShares(data: TerrainData): Map<string, number> {
     return shares;
 }
 
-function checkFields(defs: Record<string, ParamDef>, values: object, where: string, known: { prefabs?: string[]; biomes?: string[] }, problems: string[], skip: string[] = []) {
+// Writes into the map of the biomes that the ground within `radius` meters of a point (x and z from the
+// middle of the terrain) is the land of `biome`, or, with "", no one's; in place. Only the map changes: the
+// ground itself is made by it when it is generated again (generateByMap), and ground that is no one's is
+// what the generator leaves alone. A map on which no biome is left is taken off the ground.
+// Returns true if anything changed.
+export function markBiome(data: TerrainData, biome: string, x: number, z: number, radius: number) {
+    const region = brushRegion(data, x, z, radius);
+    if (!region || (!biome && !data.biomeMap)) return false;
+    let mark = -1;
+    if (biome) {
+        data.biomes ??= [];
+        if (!data.biomes.includes(biome)) data.biomes.push(biome);
+        mark = data.biomes.indexOf(biome);
+        data.biomeMap ??= data.heights.map((row) => row.map(() => -1));
+    }
+    const map = data.biomeMap!;
+    const u = x / data.cell + (data.heights[0].length - 1) / 2;
+    const v = z / data.cell + (data.heights.length - 1) / 2;
+    const span = radius / data.cell;
+    let changed = false;
+    for (let j = region.fromJ; j <= region.toJ; j++) {
+        for (let i = region.fromI; i <= region.toI; i++) {
+            if (map[j][i] === mark || Math.hypot(i - u, j - v) > span) continue;
+            map[j][i] = mark;
+            changed = true;
+        }
+    }
+    if (changed && !biome && map.every((row) => row.every((k) => k < 0))) {
+        delete data.biomes;
+        delete data.biomeMap;
+    }
+    return changed;
+}
+
+function checkFields(defs: Record<string, ParamDef>, values: object, where: string, known: { prefabs?: string[]; biomes?: string[]; generators?: string[]; looks?: string[] }, problems: string[], skip: string[] = []) {
     for (const [key, value] of Object.entries(values)) {
         if (skip.includes(key)) continue;
         const def = defs[key];
@@ -515,7 +655,7 @@ function checkFields(defs: Record<string, ParamDef>, values: object, where: stri
         } else if (def.type === "color") {
             if (typeof value !== "string" || !/^#[0-9a-f]{6}$/i.test(value)) problems.push(`${at}: must be a color like "#aabbcc"`);
         } else if (def.type === "asset") {
-            const names = def.kind === "biome" ? known.biomes : known.prefabs;
+            const names = def.kind === "biome" ? known.biomes : def.kind === "generator" ? known.generators : def.kind === "look" ? known.looks : known.prefabs;
             if (typeof value !== "string") problems.push(`${at}: must be the name of a ${def.kind}`);
             else if (value && names && !names.includes(value)) problems.push(`${at}: ${def.kind} "${value}" does not exist (known: ${names.join(", ") || "none"})`);
         } else if (typeof value !== "number" || Number.isNaN(value)) {
@@ -527,19 +667,22 @@ function checkFields(defs: Record<string, ParamDef>, values: object, where: stri
 }
 
 // Problems of the `generator` of a terrain file; `known.biomes` are the biomes it may name, if they are known
-export function validateGenerator(generator: unknown, known: { biomes?: string[] } = {}): string[] {
+export function validateGenerator(generator: unknown, known: { biomes?: string[]; generators?: string[] } = {}): string[] {
     if (typeof generator !== "object" || generator === null || Array.isArray(generator)) return ['generator: must be an object, e.g. { "seed": 7, "height": 20 }'];
     const problems: string[] = [];
-    checkFields(generatorFields, generator, "generator.", known, problems);
+    checkFields(generatorFields, generator, "generator.", known, problems, ["shapeParams"]);
+    const { shapeParams } = generator as GeneratorSettings;
+    if (shapeParams !== undefined && (typeof shapeParams !== "object" || shapeParams === null || Array.isArray(shapeParams))) problems.push('generator.shapeParams: must be an object: the params of the shape, e.g. { "step": 3 }');
     return problems;
 }
 
 // Problems of a biome asset (biomes/<name>.json as it is on disk); `known.prefabs` are the prefabs of the project
-export function validateBiome(data: unknown, known: { prefabs?: string[] } = {}): string[] {
+export function validateBiome(data: unknown, known: { prefabs?: string[]; generators?: string[]; looks?: string[] } = {}): string[] {
     if (typeof data !== "object" || data === null || Array.isArray(data)) return ['must be an object, e.g. { "height": 20, "ground": "#6f9a4a" }'];
     const problems: string[] = [];
-    checkFields(biomeFields, data, "", known, problems, ["props"]);
-    const { props } = data as BiomeData;
+    checkFields(biomeFields, data, "", known, problems, ["props", "shapeParams"]);
+    const { props, shapeParams } = data as BiomeData;
+    if (shapeParams !== undefined && (typeof shapeParams !== "object" || shapeParams === null || Array.isArray(shapeParams))) problems.push('shapeParams: must be an object: the params of the shape, e.g. { "step": 3 }');
     if (props !== undefined && !Array.isArray(props)) problems.push('props: must be a list: [{ "prefab": "Pine", "spacing": 4 }]');
     for (const [n, prop] of (Array.isArray(props) ? props : []).entries()) {
         if (typeof prop !== "object" || prop === null) problems.push(`props[${n}]: must be an object: { "prefab": "Pine", "spacing": 4 }`);

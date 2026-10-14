@@ -1537,6 +1537,14 @@ kbd {
     line-height: 1.4;
 }
 
+.terrain-chip {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    margin-right: 4px;
+    border-radius: 2px;
+}
+
 .terrain-heading {
     margin-top: 6px;
     padding-top: 6px;

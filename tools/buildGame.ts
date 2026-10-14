@@ -68,6 +68,38 @@ canvas { display: block; }
 </html>
 `
 
+// The worlds the scenes show (World components, at any depth), by name
+const worldsIn = (scenes: unknown[]) => {
+  const found = new Set<string>()
+  const visit = (entity: { components?: { type?: string; world?: unknown }[]; children?: unknown[] }) => {
+    for (const component of entity.components ?? []) if (component.type === 'world' && typeof component.world === 'string') found.add(component.world)
+    for (const child of entity.children ?? []) visit(child as typeof entity)
+  }
+  for (const scene of scenes) for (const entity of (scene as { entities?: unknown[] }).entities ?? []) visit(entity as Parameters<typeof visit>[0])
+  return found
+}
+
+// A piece of a world is loaded by the game when the camera comes near it: a script of its own next to game.js
+// (a script, not a fetch: the game opens from the disk too), which hands its data over by this name
+const PIECES = 'whiteTerrains'
+
+// Loads a piece the way the built game does: a script tag
+const pieceLoader = `const loadPiece = (name) => new Promise((resolve, reject) => {
+  const script = document.createElement('script')
+  script.src = './terrains/' + encodeURIComponent(name) + '.js'
+  script.onload = () => {
+    const data = window.${PIECES}[name]
+    delete window.${PIECES}[name]
+    script.remove()
+    data ? resolve(parseTerrain(data)) : reject(new Error('terrains/' + name + '.js has no terrain'))
+  }
+  script.onerror = () => {
+    script.remove()
+    reject(new Error('terrains/' + name + '.js could not be loaded'))
+  }
+  document.head.append(script)
+})`
+
 // The project every other one takes looks and scripts from (SHARED_PROJECT of the engine)
 const SHARED = 'shared'
 
@@ -96,10 +128,23 @@ export async function buildGame(root: string, projectDir: string, scene?: string
       .map((f) => path.join(dir, 'scripts', f))
   const scripts = [...(shared ? await scriptsIn(sharedDir) : []), ...(await scriptsIn(projectDir))]
 
-  const section = async (name: string, from = projectDir) => {
+  const section = async (name: string, from = projectDir, skip = new Set<string>()) => {
     const dir = path.join(from, name)
-    const entries = await Promise.all((await jsonNames(dir)).map(async (n) => [n, await readJson(dir, n)] as const))
+    const entries = await Promise.all((await jsonNames(dir)).filter((n) => !skip.has(n)).map(async (n) => [n, await readJson(dir, n)] as const))
     return JSON.stringify(Object.fromEntries(entries))
+  }
+
+  // The pieces of the worlds the scenes show are files of their own, loaded when they are needed; the game
+  // knows them by name and size
+  const sceneDir = path.join(projectDir, 'scenes')
+  const worlds = worldsIn(await Promise.all(scenes.map((name) => readJson(sceneDir, name))))
+  const terrainDir = path.join(projectDir, 'terrains')
+  const pieces = new Map<string, { side: number; data: unknown }>()
+  for (const name of await jsonNames(terrainDir)) {
+    const match = /^(.+)_(-?\d+)_(-?\d+)$/.exec(name)
+    if (!match || !worlds.has(match[1])) continue
+    const data = (await readJson(terrainDir, name)) as { cell: number; heights: number[][] }
+    pieces.set(name, { side: (data.heights[0].length - 1) * data.cell, data })
   }
 
   const code = [
@@ -116,7 +161,12 @@ export async function buildGame(root: string, projectDir: string, scene?: string
     `registry.setSettings(parseSettings(${JSON.stringify(settings)}))`,
     `for (const [name, data] of Object.entries(${await section('materials')})) registry.setMaterial(name, data)`,
     `for (const [name, data] of Object.entries(${await section('prefabs')})) registry.setPrefab(name, parsePrefab(data).root)`,
-    `for (const [name, data] of Object.entries(${await section('terrains')})) registry.setTerrain(name, parseTerrain(data))`,
+    `for (const [name, data] of Object.entries(${await section('terrains', projectDir, new Set(pieces.keys()))})) registry.setTerrain(name, parseTerrain(data))`,
+    `window.${PIECES} = {}`,
+    pieceLoader,
+    `for (const [name, side] of Object.entries(${JSON.stringify(Object.fromEntries([...pieces].map(([name, piece]) => [name, piece.side])))})) registry.setTerrainLater(name, side, () => loadPiece(name))`,
+    // The biomes: the game needs only the air of their lands
+    `for (const [name, data] of Object.entries(${await section('biomes')})) registry.setBiome(name, data)`,
     ...(shared ? [`for (const [name, data] of Object.entries(${await section('looks', sharedDir)})) registry.setSharedLook(name, data)`] : []),
     `for (const [name, data] of Object.entries(${await section('looks')})) registry.setLook(name, data)`,
     `const scenes = {}`,
@@ -152,6 +202,13 @@ export async function buildGame(root: string, projectDir: string, scene?: string
   })
 
   await fs.writeFile(path.join(outDir, 'index.html'), page(project))
+
+  if (pieces.size > 0) {
+    await fs.mkdir(path.join(outDir, 'terrains'), { recursive: true })
+    for (const [name, piece] of pieces) {
+      await fs.writeFile(path.join(outDir, 'terrains', `${name}.js`), `window.${PIECES}[${JSON.stringify(name)}] = ${JSON.stringify(piece.data)}\n`)
+    }
+  }
 
   // Files the scripts load at run time
   const assetsDir = path.join(projectDir, 'assets')

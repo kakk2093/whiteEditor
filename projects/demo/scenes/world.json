@@ -1,0 +1,301 @@
+{
+  "version": 3,
+  "environment": {
+    "background": "#222222",
+    "sky": true,
+    "skyTop": "#2f6fc4",
+    "skyHorizon": "#bfd9ee",
+    "skyGround": "#6b6156",
+    "skyImage": "",
+    "skyShader": "sun",
+    "skyRotation": 40,
+    "skyLight": 0.6,
+    "ambientColor": "#ffffff",
+    "ambientIntensity": 0.5,
+    "fog": true,
+    "fogColor": "#bfd9ee",
+    "fogNear": 30,
+    "fogFar": 90,
+    "look": "PixelArt_1",
+    "skyParams": {}
+  },
+  "entities": [
+    {
+      "id": "6718accb",
+      "name": "Sun",
+      "position": [10, 20, 8],
+      "rotation": [-50, 40, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "light",
+          "intensity": 3,
+          "castShadow": true,
+          "shadowSize": 60
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "9aa6c2ae",
+      "name": "Big World",
+      "position": [-125, 0, -125],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "world",
+          "world": "Big",
+          "distance": 220,
+          "flat": true
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "4611ab8f",
+      "name": "Player",
+      "tag": "player",
+      "position": [0, 2.5889, 0],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "collider",
+          "shape": "capsule",
+          "radius": 0.35,
+          "height": 1.8
+        },
+        {
+          "type": "script",
+          "script": "firstPerson",
+          "params": {
+            "head": "Head",
+            "swim": 0.45
+          }
+        }
+      ],
+      "children": [
+        {
+          "id": "4325be7a",
+          "name": "Head",
+          "position": [0, 0.7, 0],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1],
+          "components": [
+            {
+              "type": "camera",
+              "far": 300
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "6b99df92",
+      "name": "Ball",
+      "position": [14, 1.79, 3],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "sphere",
+          "material": "Gold"
+        },
+        {
+          "type": "collider",
+          "shape": "sphere"
+        },
+        {
+          "type": "body",
+          "bounce": 0.2
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "6d0f49fb",
+      "name": "Ball 2",
+      "position": [-12, 1.85, -9],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "sphere",
+          "material": "Gold"
+        },
+        {
+          "type": "collider",
+          "shape": "sphere"
+        },
+        {
+          "type": "body",
+          "bounce": 0.2
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "2fc9d5dd",
+      "name": "Ball 3",
+      "position": [20, 0.92, 14],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "sphere",
+          "material": "Gold"
+        },
+        {
+          "type": "collider",
+          "shape": "sphere"
+        },
+        {
+          "type": "body",
+          "bounce": 0.2
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "8f1479b9",
+      "name": "Crate",
+      "position": [4, 3, -4],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "mesh",
+          "material": "Bricks"
+        },
+        {
+          "type": "collider"
+        },
+        {
+          "type": "body",
+          "mass": 2
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "794d748e",
+      "name": "Swamp Water",
+      "position": [160, -1.55, 150],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "water",
+          "sizeX": 220,
+          "sizeZ": 240,
+          "depth": 6,
+          "color": "#3d5a45",
+          "opacity": 0.8,
+          "underColor": "#27321f",
+          "visibility": 7,
+          "underLight": 0.5,
+          "waves": 0.06,
+          "waveLength": 5,
+          "waveSpeed": 0.5
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "ba48c418",
+      "name": "Lake",
+      "position": [10, -0.9, 165],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "water",
+          "sizeX": 72,
+          "sizeZ": 72,
+          "depth": 8,
+          "color": "#2a6f8a",
+          "opacity": 0.72,
+          "waves": 0.3,
+          "waveLength": 7,
+          "waveSpeed": 0.8
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "a96e0369",
+      "name": "Raft",
+      "position": [4, 0.6, 161],
+      "rotation": [0, 20, 0],
+      "scale": [3, 0.4, 2],
+      "components": [
+        {
+          "type": "mesh",
+          "material": "DeadWood"
+        },
+        {
+          "type": "collider"
+        },
+        {
+          "type": "body",
+          "mass": 4,
+          "buoyancy": 2.5,
+          "damping": 0.2
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "047b6fe9",
+      "name": "Barrel",
+      "position": [15, 1.1, 168],
+      "rotation": [0, 0, 90],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "cylinder",
+          "material": "Bark"
+        },
+        {
+          "type": "collider",
+          "shape": "sphere"
+        },
+        {
+          "type": "body",
+          "mass": 1,
+          "buoyancy": 2
+        }
+      ],
+      "children": []
+    },
+    {
+      "id": "7abb6cf2",
+      "name": "Stone Ball",
+      "position": [11, 2.1, 156],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "components": [
+        {
+          "type": "mesh",
+          "shape": "sphere",
+          "material": "Rock"
+        },
+        {
+          "type": "collider",
+          "shape": "sphere"
+        },
+        {
+          "type": "body",
+          "mass": 5
+        }
+      ],
+      "children": []
+    }
+  ]
+}

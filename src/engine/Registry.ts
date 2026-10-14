@@ -18,7 +18,8 @@ import type { ProjectSettings } from "./settings";
 import { builtinSurfaces, isSurfaceDef } from "./surface";
 import type { SurfaceDef } from "./surface";
 import type { TerrainData } from "./terrain";
-import type { BiomeData } from "./generate";
+import { isGeneratorDef } from "./generate";
+import type { BiomeData, GeneratorDef } from "./generate";
 import type { EntityData, Params, ParamValue, Vec3 } from "./types";
 import { loadFont } from "./ui";
 import type { UiElement } from "./ui";
@@ -29,7 +30,8 @@ import type { UiElement } from "./ui";
 // "clip" is an animation clip: a defineClip() of scripts/
 // "terrain" is a grid of heights: a file of terrains/
 // "biome" is a kind of land for the generator of the terrains: a file of biomes/
-export type AssetKind = "material" | "look" | "prefab" | "texture" | "layer" | "scene" | "sound" | "font" | "object" | "gltf" | "sky" | "clip" | "terrain" | "biome";
+// "generator" is a shape of land made by code: a defineGenerator() of scripts/
+export type AssetKind = "material" | "look" | "prefab" | "texture" | "layer" | "scene" | "sound" | "font" | "object" | "gltf" | "sky" | "clip" | "terrain" | "biome" | "generator";
 
 export type ParamDef = (
     | { type: "number"; default: number; min?: number; max?: number; step?: number }
@@ -189,6 +191,10 @@ export interface BehaviorSelf<P = Params, S = unknown> {
     // Gravity for an object moved with move(): call it every frame. The object gains speed downwards
     // (`gravity` is meters per second squared, 20 by default) and stops on a solid collider. true while it stands on one.
     fall: (dt: number, gravity?: number) => boolean;
+    // Keeps the object afloat: in water where it is `depth` meters (1) or more under the surface it comes up
+    // to that depth, `rise` meters per second at most (3), instead of falling. true while it is afloat:
+    // if (!self.swim(dt)) self.fall(dt)
+    swim: (dt: number, depth?: number, rise?: number) => boolean;
     // Sets the vertical speed fall() goes on from, meters per second: self.jump(7) throws the object up
     jump: (speed: number) => void;
     // true if the object stands on a solid collider
@@ -196,6 +202,9 @@ export interface BehaviorSelf<P = Params, S = unknown> {
     // How deep this object (or the one given) is under the surface of a Water, meters, by its own place (its
     // middle, or wherever its origin is); 0 if it is in no water. For swimming, slowing down, splashes.
     submerged: (object?: THREE.Object3D) => number;
+    // Where the water carries this object (or the one given), meters per second: the current of the river it
+    // is in; zero out of the water and in water that stands still. swim() goes with it by itself.
+    flow: (object?: THREE.Object3D) => THREE.Vector3;
     // Replaces the running scene with another scene of the project, once this frame is over: everything of
     // this scene is destroyed (the behaviors get their destroy()), the other one starts from its file.
     loadScene: (name: string) => void;
@@ -348,6 +357,11 @@ export class Registry {
     // The terrain assets: grids of heights
     private terrainData = new Map<string, TerrainData>();
 
+    // Terrains known by name that are loaded only when they are needed (the pieces of a world in a built game):
+    // the meters along a side of each, and how to load it. A loaded one stays here too: it can be let go of
+    // again (unloadTerrain) and loaded anew.
+    private terrainLater = new Map<string, { side: number; load: () => Promise<TerrainData>; loading?: Promise<TerrainData> }>();
+
     // The biome assets: what the generator of the terrains makes a land by. Only the editor needs them:
     // a game has the ground that was made.
     private biomeData = new Map<string, BiomeData>();
@@ -472,6 +486,22 @@ export class Registry {
 
     animators() {
         return [...this.animatorDefs.values()];
+    }
+
+    // Shapes of land made by code, from the project scripts
+    private generatorDefs = new Map<string, GeneratorDef>();
+
+    registerGenerator(def: GeneratorDef) {
+        this.generatorDefs.set(def.name, def);
+        return this;
+    }
+
+    getGenerator(name: string) {
+        return this.generatorDefs.get(name);
+    }
+
+    generators() {
+        return [...this.generatorDefs.values()];
     }
 
     // Skies made by code, from the project scripts
@@ -725,6 +755,7 @@ export class Registry {
         if (kind === "clip") return [...this.clipDefs.keys()].sort();
         if (kind === "terrain") return this.terrainNames();
         if (kind === "biome") return this.biomeNames();
+        if (kind === "generator") return [...this.generatorDefs.keys()].sort();
         if (kind === "font") return this.fontNames();
         if (kind === "scene") return this.scenes;
         if (kind === "texture") return this.textureNames();
@@ -736,7 +767,7 @@ export class Registry {
     // Everything the scripts have defined so far is counted as coming from the project "shared": called once
     // its scripts are registered and before those of the project itself
     markShared() {
-        this.sharedDefs = new Set<object>([...this.modelDefs.values(), ...this.behaviorDefs.values(), ...this.effectDefs.values(), ...this.surfaceDefs.values(), ...this.skyDefs.values(), ...this.clipDefs.values(), ...this.animatorDefs.values()]);
+        this.sharedDefs = new Set<object>([...this.modelDefs.values(), ...this.behaviorDefs.values(), ...this.effectDefs.values(), ...this.surfaceDefs.values(), ...this.skyDefs.values(), ...this.clipDefs.values(), ...this.animatorDefs.values(), ...this.generatorDefs.values()]);
         for (const def of [...builtinEffects, ...builtinSurfaces]) this.sharedDefs.delete(def);
     }
 
@@ -754,6 +785,7 @@ export class Registry {
             if (isSkyDef(value)) this.registerSky(value);
             if (isClipDef(value)) this.registerClip(value);
             if (isAnimatorDef(value)) this.registerAnimator(value);
+            if (isGeneratorDef(value)) this.registerGenerator(value);
         }
         return this;
     }
@@ -802,14 +834,59 @@ export class Registry {
 
     removeTerrain(name: string) {
         this.terrainData.delete(name);
+        this.terrainLater.delete(name);
     }
 
+    // The terrain if it is loaded (see setTerrainLater)
     getTerrain(name: string) {
         return this.terrainData.get(name);
     }
 
+    // Every terrain the project has, loaded or not
     terrainNames() {
-        return [...this.terrainData.keys()].sort();
+        return [...new Set([...this.terrainData.keys(), ...this.terrainLater.keys()])].sort();
+    }
+
+    // A terrain that is loaded when it is asked for (loadTerrain): `side` meters along X, `load` gives its data
+    setTerrainLater(name: string, side: number, load: () => Promise<TerrainData>) {
+        this.terrainLater.set(name, { side, load });
+        return this;
+    }
+
+    // The meters along X of a terrain, loaded or not; 0 if there is none
+    terrainSide(name: string) {
+        const data = this.terrainData.get(name);
+        if (data) return (data.heights[0].length - 1) * data.cell;
+        return this.terrainLater.get(name)?.side ?? 0;
+    }
+
+    // The terrain, or the promise of it while it is being loaded (once, however often it is asked for);
+    // undefined if there is no such terrain
+    loadTerrain(name: string): TerrainData | Promise<TerrainData> | undefined {
+        const data = this.terrainData.get(name);
+        if (data) return data;
+        const later = this.terrainLater.get(name);
+        if (!later) return undefined;
+        later.loading ??= later.load().then(
+            (loaded) => {
+                if (this.terrainLater.get(name) === later) this.terrainData.set(name, loaded);
+                later.loading = undefined;
+                return loaded;
+            },
+            (e: unknown) => {
+                later.loading = undefined;
+                console.warn(`Terrain "${name}" could not be loaded: ${e instanceof Error ? e.message : String(e)}`);
+                throw e;
+            },
+        );
+        return later.loading;
+    }
+
+    // Lets go of the data of a terrain that can be loaded again; false (and kept) if it cannot
+    unloadTerrain(name: string) {
+        if (!this.terrainLater.has(name) || !this.terrainData.has(name)) return false;
+        this.terrainData.delete(name);
+        return true;
     }
 
     materialNames() {

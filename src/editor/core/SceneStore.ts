@@ -31,7 +31,7 @@ import {
     UI_PARTS
 } from "../../engine";
 import type {
-    ComponentData, EntityData, EntityOverride, EnvironmentData, ParamValue, Params, PrefabData, SceneData
+    ComponentData, EntityData, EntityOverride, EnvironmentData, ParamValue, Params, PrefabData, SceneData, WorldMarker
 } from "../../engine";
 import { renameInEntities } from "./references";
 
@@ -48,7 +48,7 @@ export interface AssetRef {
     // The last four are not files: what the scripts of the project (and the engine) define
     // "texture" is an image file of assets/, named with its extension; "sound" an audio file of it
     // "terrain" is a ground (terrains/), "biome" a kind of land for its generator (biomes/)
-    kind: "material" | "model" | "scene" | "prefab" | "look" | "texture" | "sound" | "behavior" | "effect" | "surface" | "sky" | "clip" | "animator" | "terrain" | "biome";
+    kind: "material" | "model" | "scene" | "prefab" | "look" | "texture" | "sound" | "behavior" | "effect" | "surface" | "sky" | "clip" | "animator" | "generator" | "terrain" | "biome";
     name: string;
 }
 
@@ -118,10 +118,14 @@ interface Target {
 // The brush of "Edit Terrain". `strength`: meters per second for raise and lower, how fast the others work.
 // "generate" makes the ground under the brush what the generator of the terrain gives there. "plant" strews
 // copies of `prefab` (no nearer to each other than `spacing` meters, from `sizeMin` to `sizeMax` times its
-// size), "erase" takes the props away.
+// size), "erase" takes the props away. "biome" writes into the map of the biomes that the ground under the
+// brush is the land of the biome the terrain names (with Shift, no one's) and leaves the ground as it is.
+// "river": a click on the ground puts one more point of the river number `river` there (a number past the
+// last river of the terrain starts a new one); `point` is the point of that river that is picked: the one
+// that was clicked or made last, -1 for none.
 // `color`: the place in the palette of the terrain that "paint" puts down.
 export interface TerrainBrushSettings {
-    tool: "raise" | "lower" | "smooth" | "flatten" | "paint" | "generate" | "plant" | "erase";
+    tool: "raise" | "lower" | "smooth" | "flatten" | "paint" | "generate" | "biome" | "river" | "plant" | "erase";
     radius: number;
     strength: number;
     color: number;
@@ -129,6 +133,8 @@ export interface TerrainBrushSettings {
     spacing: number;
     sizeMin: number;
     sizeMax: number;
+    river: number;
+    point: number;
 }
 
 // A change of a material or a look, as a step of undo: what the asset was and what it became.
@@ -1593,22 +1599,55 @@ class SceneStore {
     // instead of turning the camera (see terrainBrush.ts)
     terrainEdit = false;
 
-    brush: TerrainBrushSettings = { tool: "raise", radius: 4, strength: 4, color: 0, prefab: "", spacing: 3, sizeMin: 0.8, sizeMax: 1.2 };
+    brush: TerrainBrushSettings = { tool: "raise", radius: 4, strength: 4, color: 0, prefab: "", spacing: 3, sizeMin: 0.8, sizeMax: 1.2, river: 0, point: -1 };
 
     // The terrain of the selected entity: the name of its asset ("" for none) and its mesh; null if the
-    // selected entity has no Terrain component of its own
+    // selected entity has no Terrain component of its own. Of a World it is the piece the brush was over
+    // last (`pieceTarget`), or the first one that is shown.
     get terrainTarget() {
         const entity = this.selected;
-        const component = entity && getComponent(entity, "terrain");
         const object = entity && this.objects.get(entity.id);
-        const mesh = object?.children.find((child) => child.userData.terrain) as THREE.Mesh | undefined;
-        if (!entity || !component || !mesh) return null;
+        if (!entity || !object) return null;
+        const world = this.worldMarker(entity.id);
+        if (world) {
+            // A far piece is drawn coarse: the brush does not work it
+            const whole = [...world.shown.entries()].filter(([, mesh]) => !mesh.userData.coarse).sort(([a], [b]) => a.localeCompare(b));
+            const mesh = (whole.find(([name]) => name === this.pieceTarget) ?? whole[0])?.[1] as THREE.Mesh | undefined;
+            return mesh ? { id: entity.id, name: mesh.userData.terrainName as string, mesh } : null;
+        }
+        const component = getComponent(entity, "terrain");
+        const mesh = object.children.find((child) => child.userData.terrain) as THREE.Mesh | undefined;
+        if (!component || !mesh) return null;
         return { id: entity.id, name: (component.terrain as string | undefined) ?? "", mesh };
+    }
+
+    // The piece of the selected World that the brush works and the Inspector shows
+    pieceTarget = "";
+
+    setPieceTarget(name: string) {
+        if (name === this.pieceTarget) return;
+        this.pieceTarget = name;
+        this.notify();
+    }
+
+    // What the World component of an entity keeps (see world.ts), if it has one
+    worldMarker(id: string): WorldMarker | null {
+        const object = this.objects.get(id);
+        const group = object?.children.find((child) => child.userData.world);
+        return (group?.userData.world as WorldMarker | undefined) ?? null;
     }
 
     setTerrainEdit(on: boolean) {
         this.terrainEdit = on;
         if (on) this.colliderEdit = false;
+        this.notify();
+    }
+
+    // The map of the biomes of the selected terrain is shown in color over its ground (see biomeView.ts)
+    biomeView = false;
+
+    setBiomeView(on: boolean) {
+        this.biomeView = on;
         this.notify();
     }
 
@@ -1621,7 +1660,7 @@ class SceneStore {
     terrainMeshes(name: string) {
         const meshes: THREE.Mesh[] = [];
         this.root.traverse((object) => {
-            if (object.userData.terrain && object.userData.terrainName === name) meshes.push(object as THREE.Mesh);
+            if (object.userData.terrain && object.userData.terrainName === name && !object.userData.coarse) meshes.push(object as THREE.Mesh);
         });
         return meshes;
     }

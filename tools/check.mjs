@@ -159,7 +159,7 @@ try {
     try {
       const biome = readJson('biomes', name)
       registry.setBiome(name, biome)
-      for (const problem of engine.validateBiome(biome, { prefabs: registry.prefabNames() })) problems.push(`biomes/${name}.json: ${problem}`)
+      for (const problem of engine.validateBiome(biome, { prefabs: registry.prefabNames(), generators: registry.assetNames('generator'), looks: registry.lookNames() })) problems.push(`biomes/${name}.json: ${problem}`)
     } catch (e) {
       problems.push(`biomes/${name}.json: ${e.message}`)
     }
@@ -168,7 +168,7 @@ try {
   for (const name of registry.terrainNames()) {
     const terrain = registry.getTerrain(name)
     for (const problem of engine.validateScatter(terrain.scatter ?? [], registry.prefabNames())) problems.push(`terrains/${name}.json: ${problem}`)
-    for (const problem of terrain.generator ? engine.validateGenerator(terrain.generator, { biomes: registry.biomeNames() }) : []) problems.push(`terrains/${name}.json: ${problem}`)
+    for (const problem of terrain.generator ? engine.validateGenerator(terrain.generator, { biomes: registry.biomeNames(), generators: registry.assetNames('generator') }) : []) problems.push(`terrains/${name}.json: ${problem}`)
   }
   for (const [name, prefab] of prefabs) {
     for (const problem of engine.validatePrefab(name, prefab, registry)) problems.push(`prefabs/${name}.json: ${problem}`)

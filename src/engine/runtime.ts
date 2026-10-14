@@ -11,7 +11,8 @@ import { Physics } from "./physics";
 import type { BehaviorDef, BehaviorSelf, Ease, FindQuery, RayHit, RayOptions, Registry, Running, SoundSource, TweenOptions, VectorLike } from "./Registry";
 import { layerOf } from "./settings";
 import { scatterColliders } from "./scatter";
-import { submergedAt } from "./water";
+import { flowAt, submergedAt } from "./water";
+import { groundEntity } from "./world";
 import { rayTerrain, terrainHeight, terrainRange, terrainSize } from "./terrain";
 import type { TerrainData, TerrainMarker } from "./terrain";
 import { SoundPlayer } from "./sound";
@@ -461,9 +462,15 @@ export class Runtime {
                 findAll: (query) => this.findAll(query),
                 find: (query) => this.findAll(query)[0] ?? null,
                 fall: (dt, gravity) => this.fall(obj, dt, gravity),
+                swim: (dt, depth, rise) => this.swim(obj, dt, depth, rise),
                 jump: (speed) => this.speeds.set(obj, speed),
                 grounded: () => this.grounded(obj),
                 submerged: (object = obj) => submergedAt(this.root, object.getWorldPosition(new THREE.Vector3()), (entity) => this.isActive(entity)),
+                flow: (object = obj) => {
+                    const flow = new THREE.Vector3();
+                    flowAt(this.root, object.getWorldPosition(new THREE.Vector3()), flow, (entity) => this.isActive(entity));
+                    return flow;
+                },
                 loadScene: (scene) => this.loadScene(scene),
                 playSound: (sound, options) => this.sound.play(sound, options),
                 playMusic: (sound, options) => this.sound.playMusic(sound, options),
@@ -604,7 +611,7 @@ export class Runtime {
             new THREE.Vector3(origin.x - width / 2, origin.y + low, origin.z - depth / 2),
             new THREE.Vector3(origin.x + width / 2, origin.y + high, origin.z + depth / 2),
         );
-        return { object: mesh.parent!, solid: true, layer: layerOf(layer), dynamic: false, mass: 0, box, terrain: { data, origin } };
+        return { object: groundEntity(mesh), solid: true, layer: layerOf(layer), dynamic: false, mass: 0, box, terrain: { data, origin } };
     }
 
     // Every collider of the active entities
@@ -796,6 +803,24 @@ export class Runtime {
         if (support) this.supports.set(object, { object: support, place: support.getWorldPosition(new THREE.Vector3()) });
         else this.supports.delete(object);
         return standing;
+    }
+
+    // What a behavior calls as self.swim(): keeps the object afloat. In water where it is `depth` meters or
+    // more under the surface it does not fall: it comes up to that depth, `rise` meters per second at most,
+    // and stays there. Returns true while it is afloat; in shallower water and out of it false, and the
+    // behavior lets it fall() as usual. What is afloat in a river goes down it with its water.
+    swim(object: THREE.Object3D, dt: number, depth = 1, rise = 3) {
+        const at = object.getWorldPosition(new THREE.Vector3());
+        const active = (entity: THREE.Object3D) => this.isActive(entity);
+        const under = submergedAt(this.root, at, active);
+        if (under < depth - 0.02) return false;
+        this.speeds.set(object, 0);
+        this.supports.delete(object);
+        const up = Math.min(rise * dt, under - depth);
+        const flow = new THREE.Vector3();
+        const carried = flowAt(this.root, at, flow, active);
+        if (up > 0 || carried) this.move(object, flow.x * dt, Math.max(0, up), flow.z * dt);
+        return true;
     }
 
     // The solid collider right under the object that the physics does not move: a floor, a platform

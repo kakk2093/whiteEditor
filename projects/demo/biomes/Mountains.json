@@ -1,6 +1,6 @@
 {
   "base": 24,
-  "height": 60,
+  "height": 44,
   "size": 95,
   "detail": 1.2,
   "ground": "#6f7468",
@@ -31,5 +31,16 @@
       "cover": 0.5,
       "maxSlope": 0.9
     }
-  ]
+  ],
+  "shape": "ridges",
+  "shapeParams": {
+    "sharp": 34,
+    "width": 130
+  },
+  "air": true,
+  "fogColor": "#cfe0f0",
+  "fogNear": 50,
+  "fogFar": 420,
+  "ambientColor": "#f4f8ff",
+  "ambientIntensity": 0.65
 }

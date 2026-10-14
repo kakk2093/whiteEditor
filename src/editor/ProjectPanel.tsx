@@ -51,6 +51,7 @@ const ICONS: Record<Kind, IconName> = {
     surface: "cube",
     clip: "script",
     animator: "script",
+    generator: "script",
     terrain: "cube",
     biome: "look",
 };
@@ -62,6 +63,8 @@ const FOLDERS: Partial<Record<TabKey, FolderSection>> = {
     material: "materials",
     prefab: "prefabs",
     look: "looks",
+    terrain: "terrains",
+    biome: "biomes",
     texture: "textures",
     sound: "sounds",
     model: "models"
@@ -171,6 +174,7 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
                 ...registry.skies().map((d): Item => ({ kind: "sky", name: d.name, label: d.label ?? d.name, note: `sky${from(d)}` })),
                 ...registry.clips().map((d): Item => ({ kind: "clip", name: d.name, label: d.label ?? d.name, note: `clip${from(d)}` })),
                 ...registry.animators().map((d): Item => ({ kind: "animator", name: d.name, label: d.label ?? d.name, note: `animator${from(d)}` })),
+                ...registry.generators().map((d): Item => ({ kind: "generator", name: d.name, label: d.label ?? d.name, note: `generator${from(d)}` })),
             ];
         }
         return registry.materialNames().map((name) => {
@@ -240,8 +244,8 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
         if (tabKey === "scene") menu.push({ label: "New Scene…", icon: "plus", run: () => setNaming({ what: "scene", into: into ?? undefined }) });
         if (tabKey === "material") menu.push({ label: "New Material", icon: "plus", run: () => createIn(into, createMaterial) });
         if (tabKey === "look") menu.push({ label: "New Look", icon: "plus", run: () => createIn(into, createLook) });
-        if (tabKey === "terrain") menu.push({ label: "New Terrain", icon: "plus", run: () => { createTerrainAsset(); } });
-        if (tabKey === "biome") menu.push({ label: "New Biome", icon: "plus", run: () => { createBiome(); } });
+        if (tabKey === "terrain") menu.push({ label: "New Terrain", icon: "plus", run: () => createIn(into, async () => void (await createTerrainAsset())) });
+        if (tabKey === "biome") menu.push({ label: "New Biome", icon: "plus", run: () => createIn(into, async () => void (await createBiome())) });
         if (section) menu.push({ label: "New Folder…", icon: "folder", run: () => setNaming({ what: "folder", parent: into }) });
         return menu;
     };
@@ -436,7 +440,7 @@ export default function ProjectPanel({ layout, onLayout }: { layout: Layout; onL
                 key={`${kind}:${item.name}`}
                 className={`tile ${selected ? "selected" : ""} ${current ? "current" : ""}`}
                 title={current ? `${item.label} (${kind === "look" || kind === "sky" ? "used by the scene" : "open"})` : item.label}
-                draggable={kind !== "scene" && kind !== "effect" && kind !== "surface" && kind !== "sky" && kind !== "clip" && kind !== "animator" && kind !== "terrain" && kind !== "biome"}
+                draggable={kind !== "scene" && kind !== "effect" && kind !== "surface" && kind !== "sky" && kind !== "clip" && kind !== "animator" && kind !== "generator" && kind !== "terrain" && kind !== "biome"}
                 onDragStart={(e) => setDraggedAsset(e, { kind, name: item.name })}
                 onClick={() => store.selectAsset({ kind, name: item.name })}
                 onDoubleClick={() => activate(item)}

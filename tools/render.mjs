@@ -189,6 +189,7 @@ const entryCode = () => [
   `for (const [name, data] of Object.entries(${JSON.stringify(readSection('materials'))})) registry.setMaterial(name, data)`,
   `for (const [name, data] of Object.entries(${JSON.stringify(readSection('prefabs'))})) registry.setPrefab(name, parsePrefab(data).root)`,
   `for (const [name, data] of Object.entries(${JSON.stringify(readSection('looks'))})) registry.setLook(name, data)`,
+  `for (const [name, data] of Object.entries(${JSON.stringify(readSection('biomes'))})) registry.setBiome(name, data)`,
   `for (const [name, data] of Object.entries(${JSON.stringify(readSection('terrains'))})) { try { registry.setTerrain(name, parseTerrain(data)) } catch (e) { problems.push("terrains/" + name + ".json: " + e.message) } }`,
   // A single picture cannot wait for a late image or font, so they are loaded first
   `await registry.preloadTextures()`,
